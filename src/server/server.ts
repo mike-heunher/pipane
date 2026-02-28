@@ -155,6 +155,99 @@ function sendRpcCommand(command: any): Promise<any> {
 }
 
 // ============================================================================
+// Slash Command → RPC Mapping
+// ============================================================================
+
+/**
+ * Map TUI-only slash commands to RPC equivalents.
+ * Returns an RPC command object, or a direct response for client-only commands.
+ * Returns null if the text is not a known slash command (pass through to RPC prompt).
+ */
+function mapSlashCommand(text: string): { rpc: any } | { response: any } | null {
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("/")) return null;
+
+	const spaceIdx = trimmed.indexOf(" ");
+	const cmd = spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx);
+	const args = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+
+	switch (cmd) {
+		case "help":
+			return {
+				response: {
+					type: "event",
+					event: "system_message",
+					data: {
+						message: [
+							"Available commands:",
+							"  /help              — Show this help",
+							"  /model [search]    — List or search available models",
+							"  /model:provider/id — Switch to a specific model",
+							"  /compact [instr]   — Compact conversation history",
+							"  /new               — Start a new session",
+							"  /name [name]       — Set session name",
+							"  /resume            — List sessions to resume",
+							"  /export [path]     — Export session as HTML",
+							"  /debug             — Show debug info",
+							"",
+							"Extension and skill commands are also available.",
+							"Use /commands to list them.",
+						].join("\n"),
+					},
+				},
+			};
+
+		// /new and /compact are handled client-side (need state refresh)
+
+		case "name":
+			if (args) return { rpc: { type: "set_session_name", name: args } };
+			return { rpc: { type: "get_state" } }; // return current state (includes name)
+
+		case "export":
+			return { rpc: { type: "export_html", outputPath: args || undefined } };
+
+		case "debug":
+			return { rpc: { type: "get_session_stats" } };
+
+		case "resume":
+			// No direct RPC equivalent — client handles session switching
+			return {
+				response: {
+					type: "event",
+					event: "system_message",
+					data: { message: "Use the session picker in the sidebar to switch sessions." },
+				},
+			};
+
+		case "commands":
+			return { rpc: { type: "get_commands" } };
+
+		default:
+			// Check for /model:provider/id shorthand
+			if (cmd.startsWith("model:")) {
+				const modelSpec = cmd.slice(6);
+				const slashIdx = modelSpec.indexOf("/");
+				if (slashIdx !== -1) {
+					return {
+						rpc: {
+							type: "set_model",
+							provider: modelSpec.slice(0, slashIdx),
+							modelId: modelSpec.slice(slashIdx + 1),
+						},
+					};
+				}
+			}
+
+			// /model with optional search — get available models
+			if (cmd === "model") {
+				return { rpc: { type: "get_available_models" } };
+			}
+
+			return null; // Not a known built-in — let RPC prompt handle it
+	}
+}
+
+// ============================================================================
 // WebSocket Handler
 // ============================================================================
 
@@ -202,7 +295,7 @@ wss.on("connection", async (ws) => {
 		const id = command.id;
 
 		try {
-			// For prompt_message, extract text content
+			// For prompt_message, extract text and check for slash commands
 			if (command.type === "prompt_message") {
 				const msg = command.message;
 				const text = typeof msg.content === "string"
@@ -210,6 +303,29 @@ wss.on("connection", async (ws) => {
 					: Array.isArray(msg.content)
 						? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
 						: "";
+
+				// Check if it's a slash command we need to intercept
+				const mapped = mapSlashCommand(text);
+				if (mapped) {
+					if ("response" in mapped) {
+						// Client-only command — emit as assistant message sequence
+						const msg = {
+							role: "assistant",
+							content: [{ type: "text", text: mapped.response.data.message }],
+							timestamp: Date.now(),
+						};
+						ws.send(JSON.stringify({ type: "agent_start" }));
+						ws.send(JSON.stringify({ type: "message_start", message: msg }));
+						ws.send(JSON.stringify({ type: "message_end", message: msg }));
+						ws.send(JSON.stringify({ type: "agent_end", messages: [] }));
+						return;
+					}
+					// Map to RPC command
+					const response = await sendRpcCommand(mapped.rpc);
+					ws.send(JSON.stringify({ ...response, id, command: "prompt_message" }));
+					return;
+				}
+
 				const response = await sendRpcCommand({ type: "prompt", message: text });
 				ws.send(JSON.stringify({ ...response, id, command: "prompt_message" }));
 				return;

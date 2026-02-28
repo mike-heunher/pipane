@@ -264,15 +264,53 @@ export class WsAgentAdapter {
 
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]) {
 		if (typeof input === "string") {
+			// Intercept slash commands that need client-side state updates
+			const handled = await this.handleSlashCommand(input);
+			if (handled) return;
+
 			await this.send({ type: "prompt", message: input, images });
 		} else if (Array.isArray(input)) {
 			// Send first message as prompt
 			for (const msg of input) {
+				// Check for slash commands in text messages
+				const text = this.extractText(msg);
+				if (text && (await this.handleSlashCommand(text))) continue;
 				await this.send({ type: "prompt_message", message: msg });
 			}
 		} else {
+			const text = this.extractText(input);
+			if (text && (await this.handleSlashCommand(text))) return;
 			await this.send({ type: "prompt_message", message: input });
 		}
+	}
+
+	private extractText(msg: AgentMessage): string {
+		if ("content" in msg) {
+			if (typeof msg.content === "string") return msg.content;
+			if (Array.isArray(msg.content)) {
+				return msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+			}
+		}
+		return "";
+	}
+
+	private async handleSlashCommand(text: string): Promise<boolean> {
+		const trimmed = text.trim();
+		if (!trimmed.startsWith("/")) return false;
+
+		if (trimmed === "/new") {
+			await this.newSession();
+			return true;
+		}
+
+		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
+			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
+			await this.send({ type: "compact", customInstructions });
+			await this.refreshState();
+			return true;
+		}
+
+		return false;
 	}
 
 	abort() {
