@@ -368,7 +368,7 @@ export class WsHandler {
 			}));
 			this.lifecycle.attach(sessionPath, proc);
 		} else {
-			proc = this.acquireForSession(sessionPath, ws);
+			proc = await this.acquireForSession(sessionPath, ws);
 		}
 
 		// Apply model/thinking level
@@ -438,7 +438,7 @@ export class WsHandler {
 		const sessionPath = command.sessionPath as string;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 
-		const proc = this.acquireForSession(sessionPath, ws);
+		const proc = await this.acquireForSession(sessionPath, ws);
 
 		// Compact sends its own session_attached — the lifecycle already emitted it
 		const response = await this.pool.sendRpc(proc, {
@@ -480,7 +480,7 @@ export class WsHandler {
 		const entryId = command.entryId as string;
 		if (!entryId) throw new Error("Missing entryId");
 
-		const proc = this.acquireForSession(sessionPath, ws);
+		const proc = await this.acquireForSession(sessionPath, ws);
 		const response = await this.pool.sendRpc(proc, { type: "fork", entryId });
 
 		const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
@@ -573,7 +573,7 @@ export class WsHandler {
 		const sessionPath = command.sessionPath as string;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 
-		const proc = this.acquireForSession(sessionPath, ws);
+		const proc = await this.acquireForSession(sessionPath, ws);
 		const response = await this.pool.sendRpc(proc, { type: "set_session_name", name: command.name });
 		this.releaseProcess(sessionPath);
 		ws.send(JSON.stringify({ ...response, id, command: "set_session_name" }));
@@ -585,7 +585,7 @@ export class WsHandler {
 	 * Acquire a process for an existing session. Resolves the session's cwd
 	 * from its JSONL header and gets a process from the matching pool.
 	 */
-	private acquireForSession(sessionPath: string, ws: WebSocket): RpcProcess {
+	private async acquireForSession(sessionPath: string, ws: WebSocket): Promise<RpcProcess> {
 		// Already attached?
 		const existing = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
 		if (existing) return existing;
@@ -599,10 +599,9 @@ export class WsHandler {
 		// Mark session as streaming in the cache
 		this.messageCache.setStreaming(sessionPath, true);
 
-		// Switch to the target session
-		this.pool.sendRpc(proc, { type: "switch_session", sessionPath }).catch((err) => {
-			console.error(`[ws] Failed to switch session: ${err.message}`);
-		});
+		// Switch to the target session — must await to ensure subsequent RPCs
+		// (prompt, compact, fork, etc.) operate on the correct session.
+		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath });
 
 		console.log(`[ws] pi#${proc.id} attached to ${path.basename(sessionPath)} (cwd: ${cwd})`);
 		return proc;
