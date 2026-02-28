@@ -135,7 +135,15 @@ export class WsAgentAdapter {
 		for (const fn of this._steeringQueueListeners) fn();
 	}
 
-
+	/**
+	 * Optimistically enqueue a steering message for a session.
+	 * The server remains authoritative and can overwrite via steering_queue_update.
+	 */
+	private enqueueSteering(sessionPath: string, message: string) {
+		const queue = this._steeringQueues.get(sessionPath) ?? [];
+		this._steeringQueues.set(sessionPath, [...queue, message]);
+		this.emitSteeringQueueChange();
+	}
 
 	onSessionChange(fn: () => void): () => void {
 		this._sessionListeners.add(fn);
@@ -618,7 +626,8 @@ export class WsAgentAdapter {
 			? this._globalSessionStatus.get(this._sessionPath) === "running"
 			: false;
 		if (targetIsRunning && this._sessionPath) {
-			// Queue is now managed server-side; just send the steer command
+			// Optimistically reflect queued steering in the UI immediately.
+			this.enqueueSteering(this._sessionPath, text);
 			await this.send({
 				type: "steer",
 				sessionPath: this._sessionPath,
@@ -737,7 +746,7 @@ export class WsAgentAdapter {
 		// Only steer if the current session is actually running (not some other session)
 		const isRunning = this._globalSessionStatus.get(this._sessionPath) === "running";
 		if (!isRunning) return;
-		// Queue is managed server-side; just send the steer command
+		this.enqueueSteering(this._sessionPath, text);
 		this.send({ type: "steer", sessionPath: this._sessionPath, message: text }).catch(console.error);
 	}
 
