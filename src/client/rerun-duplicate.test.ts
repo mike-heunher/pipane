@@ -372,7 +372,7 @@ describe("Rerun duplicate rendering bug", () => {
 		expect(countAssistantMessages(adapter)).toBe(2);
 	});
 
-	it("should NOT duplicate when turn_end fires with toolResults already in messages", async () => {
+	it("turn_end with toolResults does NOT duplicate (tool results come from message_end only)", async () => {
 		const { adapter, simulateServerMessage } = setupWithAbortedRun();
 
 		simulateServerMessage({
@@ -414,7 +414,7 @@ describe("Rerun duplicate rendering bug", () => {
 			message: toolResult,
 		});
 
-		// Now turn_end also delivers the same tool result
+		// turn_end arrives with the same tool result — should be ignored
 		simulateServerMessage({
 			type: "turn_end",
 			sessionPath: SESSION_PATH,
@@ -422,18 +422,12 @@ describe("Rerun duplicate rendering bug", () => {
 			toolResults: [{ ...toolResult }],
 		});
 
-		// Check: tool result should NOT be duplicated
+		// Only the tool results delivered via message_end should be present
 		const toolResults = adapter.state.messages.filter(
 			(m: any) => m.role === "tool",
 		);
-		console.log(
-			"[turn_end test] tool results:",
-			toolResults.length,
-			"tool_use_ids:",
-			toolResults.map((m: any) => m.tool_use_id),
-		);
 
-		// Original aborted tool result + new tool result = 2
+		// Original aborted tool result + new tool result = 2 (no duplicate)
 		expect(toolResults.length).toBe(2);
 	});
 

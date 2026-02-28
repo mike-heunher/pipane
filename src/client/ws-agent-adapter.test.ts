@@ -196,15 +196,12 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.steeringQueue).toHaveLength(0);
 		});
 
-		it("does NOT steer when _isReallyStreaming is true but current session is not running", async () => {
+		it("does NOT steer when another session is running but current session is not", async () => {
 			const sessionA = "/tmp/sessions/session-a.jsonl";
 			const sessionB = "/tmp/sessions/session-b.jsonl";
 			const { adapter, sent } = setupWithSession(sessionB);
 
-			// Simulate the old bug scenario:
-			// _isReallyStreaming is true (leftover from session A)
-			// but session B is not running
-			(adapter as any)._isReallyStreaming = true;
+			// Session A is running on the server, but we're viewing session B (idle)
 			(adapter as any)._globalSessionStatus.set(sessionA, "running");
 			// Session B is idle (not in the map)
 
@@ -304,7 +301,7 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Some other session is running
 			(adapter as any)._globalSessionStatus.set("/tmp/sessions/other.jsonl", "running");
-			(adapter as any)._isReallyStreaming = true; // leftover from old session
+			// Session A is still running on the server (adapter tracks this globally)
 
 			await adapter.prompt("new conversation");
 			await new Promise((r) => setTimeout(r, 50));
@@ -557,7 +554,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.messages[1].role).toBe("assistant");
 		});
 
-		it("turn_end appends tool results", () => {
+		it("turn_end does NOT append tool results (they arrive via message_end)", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
 
@@ -573,8 +570,8 @@ describe("WsAgentAdapter prompt routing", () => {
 				],
 			});
 
-			expect(adapter.state.messages).toHaveLength(2);
-			expect(adapter.state.messages[1].role).toBe("tool");
+			// turn_end should NOT add tool results — only message_end does
+			expect(adapter.state.messages).toHaveLength(1);
 		});
 
 		it("sets sessionStatus to attached when switching to a running session", async () => {
@@ -698,7 +695,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			const localModel = { provider: "openai", id: "gpt-5" };
 			adapter.setModel(localModel as any);
 
-			// Server pushes session_messages with the old model
+			// _restoreModelFromServer is false (not a session switch), so
+			// session_messages should NOT overwrite the user's model selection
 			simulateServerMessage({
 				type: "session_messages",
 				sessionPath,
@@ -707,7 +705,7 @@ describe("WsAgentAdapter prompt routing", () => {
 				thinkingLevel: "off",
 			});
 
-			// Local override should be preserved
+			// Local selection preserved
 			expect(adapter.state.model).toEqual(localModel);
 		});
 
@@ -722,8 +720,7 @@ describe("WsAgentAdapter prompt routing", () => {
 				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
 			];
 
-			// switchSession clears _localModelOverride and subscribes.
-			// Simulate the server responding with session_messages.
+			// switchSession sets _restoreModelFromServer=true and subscribes.
 			await adapter.switchSession(sessionPath);
 
 			// Server pushes session_messages (this is what subscribe_session triggers)
@@ -737,6 +734,18 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			expect(adapter.state.model).toEqual({ provider: "anthropic", id: "claude-sonnet-4-20250514" });
 			expect(adapter.state.thinkingLevel).toBe("high");
+
+			// After the first push, _restoreModelFromServer is cleared —
+			// subsequent pushes should NOT overwrite.
+			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+				thinkingLevel: "off",
+			});
+			expect(adapter.state.model).toEqual({ provider: "openai", id: "gpt-5" });
 		});
 	});
 });

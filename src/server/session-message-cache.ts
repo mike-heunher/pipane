@@ -162,21 +162,10 @@ export class SessionMessageCache {
 				break;
 			}
 
-			case "turn_end": {
-				const toolResults = (event as any).toolResults as AgentMessage[] | undefined;
-				if (toolResults) {
-					for (const tr of toolResults) {
-						// Dedup: check if tool result already present
-						const isDuplicate = cached.messages.some(
-							(m: any) => m.role === "tool" && m.tool_use_id && m.tool_use_id === (tr as any).tool_use_id,
-						);
-						if (!isDuplicate) {
-							cached.messages = [...cached.messages, tr];
-						}
-					}
-				}
-				break;
-			}
+			// turn_end: no-op. Tool results are already delivered via individual
+			// message_end events. Appending them again from turn_end was the
+			// source of the dedup bug. The authoritative state comes from the
+			// disk re-read on agent_end.
 
 			case "agent_end":
 				cached.streaming = false;

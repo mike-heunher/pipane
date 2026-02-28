@@ -305,7 +305,7 @@ describe("SessionMessageCache", () => {
 			expect(cache.get(sessionPath)!.streamMessage).toBe(msg2);
 		});
 
-		it("handles turn_end with toolResults (dedup)", () => {
+		it("turn_end is a no-op (tool results come via message_end)", () => {
 			const sessionPath = writeSession(tmpDir, "test.jsonl", {
 				messages: [{ role: "user", content: "hello", timestamp: 1000 }],
 			});
@@ -323,7 +323,7 @@ describe("SessionMessageCache", () => {
 				},
 			} as any);
 
-			// Add tool result via message_end (before turn_end)
+			// Add tool result via message_end
 			const toolResult = {
 				role: "tool",
 				tool_use_id: toolCallId,
@@ -335,7 +335,7 @@ describe("SessionMessageCache", () => {
 				message: toolResult,
 			} as any);
 
-			// turn_end also delivers the same tool result — should NOT duplicate
+			// turn_end arrives — it should NOT add anything
 			cache.applyEvent(sessionPath, {
 				type: "turn_end",
 				message: { role: "assistant", content: [] },
@@ -344,7 +344,7 @@ describe("SessionMessageCache", () => {
 
 			const cached = cache.get(sessionPath)!;
 			const toolMsgs = cached.messages.filter((m: any) => m.role === "tool");
-			expect(toolMsgs).toHaveLength(1);
+			expect(toolMsgs).toHaveLength(1); // Only the one from message_end
 		});
 
 		it("agent_end clears streaming state and re-reads from disk", () => {

@@ -72,11 +72,12 @@ export class WsAgentAdapter {
 	/** Per-session steering queues keyed by session path. */
 	private _steeringQueues = new Map<string, string[]>();
 	private _steeringQueueListeners = new Set<() => void>();
-	/** Whether the agent is actually running a turn (separate from state.isStreaming which we keep false for the editor) */
-	private _isReallyStreaming = false;
-
-	/** True when the user has locally selected a model (blocks server model restore until next session_messages) */
-	private _localModelOverride = false;
+	/**
+	 * When true, the next session_messages push will restore model/thinkingLevel
+	 * from the server. Set on switchSession(); cleared after the first push.
+	 * Outside of session switches, model/thinkingLevel are client-local.
+	 */
+	private _restoreModelFromServer = false;
 
 	/** Cached available models for model matching */
 	private _availableModels: any[] | null = null;
@@ -104,6 +105,7 @@ export class WsAgentAdapter {
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
+
 	get steeringQueue(): readonly string[] {
 		if (!this._sessionPath) return [];
 		return this._steeringQueues.get(this._sessionPath) ?? [];
@@ -242,6 +244,8 @@ export class WsAgentAdapter {
 		}
 
 		if (this._sessionStatus === "detached" && this._state.isStreaming) {
+			// Session is detached (server says turn is done) but we still
+			// think we're streaming — clear the stale state.
 			console.log("[ws-adapter] Tab regained focus: clearing stale streaming state");
 			this._state.isStreaming = false;
 			this._state.streamMessage = null;
@@ -335,15 +339,20 @@ export class WsAgentAdapter {
 			const sp = data.sessionPath as string;
 			if (sp === this._sessionPath) {
 				this._state.messages = data.messages ?? [];
-				// Restore model/thinkingLevel from server if provided
-				// (but only if the user hasn't locally selected a different model)
-				if (data.model && !this._localModelOverride) {
-					this._state.model = this.findModelMatch(data.model) ?? this._state.model;
+				// Only restore model/thinkingLevel when explicitly switching
+				// sessions (switchSession sets _restoreModelFromServer=true).
+				// Otherwise, model/thinkingLevel are client-local state and
+				// session_messages pushes (from detach, file watcher, etc.)
+				// must not clobber the user's selection.
+				if (this._restoreModelFromServer) {
+					if (data.model) {
+						this._state.model = this.findModelMatch(data.model) ?? this._state.model;
+					}
+					if (data.thinkingLevel) {
+						this._state.thinkingLevel = data.thinkingLevel;
+					}
+					this._restoreModelFromServer = false;
 				}
-				if (data.thinkingLevel && !this._localModelOverride) {
-					this._state.thinkingLevel = data.thinkingLevel;
-				}
-				this._localModelOverride = false;
 				this.emitContentChange();
 			}
 			return;
@@ -386,7 +395,6 @@ export class WsAgentAdapter {
 				this._sessionStatus = "attached";
 				// Ensure isStreaming is true so the stop button is visible
 				this._state.isStreaming = true;
-				this._isReallyStreaming = true;
 				this.emitStatusChange();
 			}
 			return;
@@ -433,7 +441,6 @@ export class WsAgentAdapter {
 	private updateState(event: AgentEvent) {
 		switch (event.type) {
 			case "agent_start":
-				this._isReallyStreaming = true;
 				this._state.isStreaming = true;
 				this._state.error = undefined;
 				this._state.streamMessage = null;
@@ -444,11 +451,9 @@ export class WsAgentAdapter {
 				break;
 
 			case "agent_end":
-				this._isReallyStreaming = false;
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
-				// Steering queue clearing is now handled server-side via steering_queue_update events
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
@@ -466,25 +471,15 @@ export class WsAgentAdapter {
 			case "message_end":
 				this._state.streamMessage = null;
 				this._state.messages = [...this._state.messages, event.message];
-				// Steering queue dequeuing is now handled server-side via steering_queue_update events
 				break;
 
 			case "turn_end":
+				// Extract error message if present. Tool results are NOT
+				// appended here — they are already delivered via individual
+				// message_end events. The authoritative state comes from the
+				// session_messages snapshot pushed after agent_end.
 				if (event.message.role === "assistant" && (event.message as any).errorMessage) {
 					this._state.error = (event.message as any).errorMessage;
-				}
-				if (event.toolResults) {
-					for (const tr of event.toolResults) {
-						// turn_end redundantly includes tool results already sent via message_end.
-						// Deduplicate by tool_use_id to avoid double-appending.
-						const trId = (tr as any).tool_use_id;
-						const alreadyPresent = trId && this._state.messages.some(
-							(m: any) => m.role === "tool" && m.tool_use_id === trId,
-						);
-						if (!alreadyPresent) {
-							this._state.messages = [...this._state.messages, tr];
-						}
-					}
 				}
 				break;
 
@@ -588,11 +583,9 @@ export class WsAgentAdapter {
 		if (handled) return;
 
 		// If the *current* session's agent is running, route as a steering message.
-		// We check the global session status map (server-authoritative) rather than
-		// the local _isReallyStreaming flag, because _isReallyStreaming tracks the
-		// adapter's last-viewed session and isn't cleared on switchSession.
-		// This prevents prompts for OTHER conversations from being queued as steers
-		// just because some unrelated conversation happens to be running.
+		// We check the global session status map (server-authoritative) to determine
+		// if the specific session we're viewing is running. This prevents prompts
+		// for other conversations from being queued as steers.
 		const targetIsRunning = this._sessionPath
 			? this._globalSessionStatus.get(this._sessionPath) === "running"
 			: false;
@@ -744,6 +737,7 @@ export class WsAgentAdapter {
 	setSystemPrompt(v: string) { this._state.systemPrompt = v; }
 	setTools(t: AgentTool<any>[]) { this._state.tools = t; }
 
+
 	// ── Fork ───────────────────────────────────────────────────────────────
 
 	/** Get user messages from the current session for the fork selector. */
@@ -849,7 +843,7 @@ export class WsAgentAdapter {
 		const parts = filename.split("_");
 		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 		this._sessionStatus = "detached";
-		this._localModelOverride = false;
+		this._restoreModelFromServer = true;
 
 		// Clear current state — including isStreaming since a detached session is never streaming
 		this._state.messages = [];
@@ -868,7 +862,6 @@ export class WsAgentAdapter {
 		if (this._globalSessionStatus.get(sessionPath) === "running") {
 			this._sessionStatus = "attached";
 			this._state.isStreaming = true;
-			this._isReallyStreaming = true;
 		}
 
 		this.emitSessionChange();
