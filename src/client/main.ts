@@ -28,19 +28,21 @@ let chatPanel: ChatPanel;
 let agent: WsAgentAdapter;
 let sidebarOpen = true;
 let steeringQueue: readonly string[] = [];
+let inputAreaObserver: ResizeObserver | null = null;
+let observedInputArea: Element | null = null;
 
 /**
  * Patch the AgentInterface to allow sending messages during streaming.
  * The upstream component blocks input when isStreaming=true. We override
- * sendMessage to bypass that guard, and force the message-editor to
- * always show the send button (never the stop button).
+ * sendMessage to bypass that guard, and patch the message-editor's
+ * handleKeyDown so Enter sends even while streaming. The native stop
+ * button in the message-editor is left intact.
  */
 function patchAgentInterface() {
 	const ai = chatPanel.agentInterface;
 	if (!ai) return;
 
 	// Override sendMessage to bypass isStreaming guard
-	const originalSendMessage = ai.sendMessage.bind(ai);
 	ai.sendMessage = async (input: string, attachments?: any[]) => {
 		if (!input.trim() && (!attachments || attachments.length === 0)) return;
 		const session = ai.session;
@@ -54,52 +56,129 @@ function patchAgentInterface() {
 			editor.attachments = [];
 		}
 
-		// If streaming, prompt() in our adapter will route as steer
+		// Extract images and document text from attachments
 		if (attachments && attachments.length > 0) {
-			await session.prompt({ role: "user-with-attachments", content: input, attachments, timestamp: Date.now() });
+			const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+			const docTexts: string[] = [];
+
+			for (const att of attachments) {
+				if (att.type === "image") {
+					images.push({ type: "image", data: att.content, mimeType: att.mimeType });
+				} else if (att.extractedText) {
+					docTexts.push(att.extractedText);
+				}
+			}
+
+			// Append document text to the user message
+			const fullInput = docTexts.length > 0
+				? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
+				: input;
+
+			if (images.length > 0) {
+				await session.prompt(fullInput, images);
+			} else {
+				await session.prompt(fullInput);
+			}
 		} else {
 			await session.prompt(input);
 		}
 	};
 
-	// Continuously force message-editor.isStreaming = false so the send button
-	// stays visible (we render our own abort button in the header).
-	startEditorPatcher(ai);
-}
-
-let editorPatcherRunning = false;
-let currentAgentInterface: any = null;
-
-/** Force the message-editor to not be in streaming mode (shows send button). */
-function patchEditorNow() {
-	if (!currentAgentInterface) return;
-	const editor = currentAgentInterface.querySelector("message-editor") as any;
-	if (editor && editor.isStreaming === true) {
-		editor.isStreaming = false;
-	}
+	// Patch the message-editor to allow sending during streaming.
+	// Wait a frame to ensure the editor has rendered.
+	requestAnimationFrame(() => patchMessageEditor(ai));
 }
 
 /**
- * Continuously override the message-editor's isStreaming to false.
- * Also subscribe to agent events so we patch immediately after Lit re-renders.
+ * Patch the message-editor's keyboard handler and add a send button
+ * that's visible alongside the native stop button during streaming.
  */
-function startEditorPatcher(ai: any) {
-	currentAgentInterface = ai;
+function patchMessageEditor(ai: any) {
+	const editor = ai.querySelector("message-editor") as any;
+	if (!editor) return;
 
-	// Subscribe to agent events to patch right after state updates trigger re-renders
-	agent.subscribe(() => {
-		// Microtask runs after Lit's synchronous render in the event handler
-		queueMicrotask(patchEditorNow);
-	});
-
-	if (editorPatcherRunning) return;
-	editorPatcherRunning = true;
-
-	const patch = () => {
-		patchEditorNow();
-		requestAnimationFrame(patch);
+	// Override handleKeyDown to allow Enter to send even while streaming
+	// (original blocks Enter when isStreaming=true)
+	editor.handleKeyDown = (e: KeyboardEvent) => {
+		if (e.key === "Enter" && !e.shiftKey) {
+			e.preventDefault();
+			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
+				editor.onSend?.(editor.value, editor.attachments);
+			}
+		} else if (e.key === "Escape" && editor.isStreaming) {
+			e.preventDefault();
+			editor.onAbort?.();
+		}
 	};
-	requestAnimationFrame(patch);
+
+	// After every Lit render, ensure the send button is present when streaming
+	const injectSendButton = () => {
+		if (!editor.isStreaming) {
+			// Not streaming — remove injected button if present
+			const existing = editor.querySelector(".injected-send-btn");
+			if (existing) existing.remove();
+			return;
+		}
+
+		// Already injected and still in DOM — nothing to do
+		if (editor.querySelector(".injected-send-btn")) return;
+
+		// Find the right-side toolbar div (contains the stop button)
+		const toolbarDivs = editor.querySelectorAll(".flex.gap-2.items-center");
+		const rightToolbar = toolbarDivs[toolbarDivs.length - 1];
+		if (!rightToolbar) return;
+
+		const sendBtn = document.createElement("button");
+		sendBtn.className = "injected-send-btn";
+		sendBtn.title = "Send message (steer)";
+		sendBtn.type = "button";
+		sendBtn.innerHTML = `<div style="transform: rotate(-45deg)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></div>`;
+		sendBtn.addEventListener("click", (ev: Event) => {
+			ev.preventDefault();
+			ev.stopPropagation();
+			if (editor.value.trim() || editor.attachments.length > 0) {
+				editor.onSend?.(editor.value, editor.attachments);
+			}
+		});
+		rightToolbar.appendChild(sendBtn);
+	};
+
+	// Hook into Lit's updated lifecycle to re-inject after every render
+	const origUpdated = editor.updated?.bind(editor);
+	editor.updated = (changedProps: Map<string, any>) => {
+		origUpdated?.(changedProps);
+		injectSendButton();
+	};
+
+	// Force a re-render so Lit picks up our new handleKeyDown
+	editor.requestUpdate();
+	// Initial sync after the forced re-render
+	editor.updateComplete.then(() => injectSendButton());
+}
+
+/** Watch the input area inside AgentInterface and sync its height to a CSS variable */
+function observeInputAreaHeight() {
+	const ai = chatPanel?.agentInterface;
+	if (!ai) return;
+	// The input area is the last .shrink-0 child inside the agent interface
+	const inputArea = ai.querySelector(".shrink-0");
+	if (!inputArea || inputArea === observedInputArea) return;
+
+	// Clean up previous observer
+	if (inputAreaObserver) inputAreaObserver.disconnect();
+
+	observedInputArea = inputArea;
+	inputAreaObserver = new ResizeObserver((entries) => {
+		for (const entry of entries) {
+			const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+			document.documentElement.style.setProperty("--input-area-height", `${height}px`);
+		}
+	});
+	inputAreaObserver.observe(inputArea);
+
+	// Set initial value
+	const rect = inputArea.getBoundingClientRect();
+	document.documentElement.style.setProperty("--input-area-height", `${rect.height}px`);
 }
 
 function renderSteeringQueue() {
@@ -126,16 +205,6 @@ const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
 
-	const isStreaming = agent?.isReallyStreaming;
-
-	const statusBadge = agent
-		? agent.sessionStatus === "attached"
-			? html`<span class="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-600 dark:text-green-400 font-mono">attached</span>`
-			: agent.sessionStatus === "virtual"
-				? html`<span class="text-xs px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 font-mono">new</span>`
-				: html`<span class="text-xs px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-500 font-mono">detached</span>`
-		: "";
-
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
 			<!-- Header -->
@@ -152,19 +221,6 @@ const renderApp = () => {
 						</svg>
 					</button>
 					<span class="text-base font-semibold text-foreground">pi web</span>
-					${statusBadge}
-					${isStreaming ? html`
-						<button
-							class="abort-btn"
-							@click=${() => agent.abort()}
-							title="Stop agent"
-						>
-							<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-							</svg>
-							<span>Stop</span>
-						</button>
-					` : ""}
 				</div>
 				<div class="flex items-center gap-1 px-2">
 					<theme-toggle></theme-toggle>
@@ -200,6 +256,9 @@ const renderApp = () => {
 	`;
 
 	render(appHtml, app);
+
+	// Re-observe after render in case DOM changed
+	requestAnimationFrame(() => observeInputAreaHeight());
 };
 
 async function initApp() {
@@ -258,6 +317,8 @@ async function initApp() {
 	agent.onSessionChange(async () => {
 		await chatPanel.setAgent(agent as any);
 		patchAgentInterface();
+		// Refresh steering queue for the new session (it's per-session now)
+		steeringQueue = agent.steeringQueue;
 		renderApp();
 	});
 

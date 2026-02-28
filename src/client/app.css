@@ -1,26 +1,26 @@
 @import "@mariozechner/pi-web-ui/app.css";
 @import "tailwindcss";
 
-/* ── Abort button in header ─────────────────────────────────────── */
+/* ── Send button injected next to stop in message-editor during streaming ── */
 
-.abort-btn {
+.injected-send-btn {
 	display: inline-flex;
 	align-items: center;
-	gap: 0.3rem;
-	padding: 0.2rem 0.6rem;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
 	border-radius: 0.375rem;
-	border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
-	background: color-mix(in srgb, #ef4444 10%, transparent);
-	color: #ef4444;
-	font-size: 0.75rem;
-	font-weight: 500;
+	border: none;
+	background: transparent;
+	color: var(--foreground, currentColor);
 	cursor: pointer;
-	transition: all 0.15s;
+	transition: background 0.15s, color 0.15s;
+	padding: 0;
 }
 
-.abort-btn:hover {
-	background: color-mix(in srgb, #ef4444 20%, transparent);
-	border-color: #ef4444;
+.injected-send-btn:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--accent-foreground, currentColor);
 }
 
 /* ── Steering queue overlay ─────────────────────────────────────── */
@@ -36,8 +36,8 @@
 	box-sizing: border-box;
 	z-index: 20;
 	pointer-events: none;
-	/* Sits above the message editor (which is ~80px tall) */
-	margin-bottom: 90px;
+	/* Dynamically set via ResizeObserver on the input area */
+	margin-bottom: var(--input-area-height, 90px);
 }
 
 .steering-queue-header {
