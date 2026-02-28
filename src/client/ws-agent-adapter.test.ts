@@ -397,8 +397,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			await adapter.prompt("steer B");
 			await new Promise((r) => setTimeout(r, 50));
 
-			// Clear B's queue
-			adapter.clearSteeringQueue();
+			// Clear B's queue via internal API (clearSteeringQueue was removed)
+			(adapter as any)._steeringQueues.delete(sessionB);
 			expect(adapter.steeringQueue).toHaveLength(0);
 
 			// A's queue should still be intact
@@ -407,7 +407,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.steeringQueue[0]).toBe("steer A");
 		});
 
-		it("hasQueuedMessages reflects only current session", async () => {
+		it("steeringQueue reflects only current session", async () => {
 			const sessionA = "/tmp/sessions/session-a.jsonl";
 			const sessionB = "/tmp/sessions/session-b.jsonl";
 			const { adapter } = setupWithSession(sessionA);
@@ -416,15 +416,15 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			await adapter.prompt("steer");
 			await new Promise((r) => setTimeout(r, 50));
-			expect(adapter.hasQueuedMessages()).toBe(true);
+			expect(adapter.steeringQueue.length > 0).toBe(true);
 
 			// Switch to B — no queued messages there
 			(adapter as any)._sessionPath = sessionB;
-			expect(adapter.hasQueuedMessages()).toBe(false);
+			expect(adapter.steeringQueue.length > 0).toBe(false);
 
 			// Back to A
 			(adapter as any)._sessionPath = sessionA;
-			expect(adapter.hasQueuedMessages()).toBe(true);
+			expect(adapter.steeringQueue.length > 0).toBe(true);
 		});
 
 		it("steering queue returns empty for virtual session (no path)", () => {
@@ -433,7 +433,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			(adapter as any)._sessionStatus = "virtual";
 
 			expect(adapter.steeringQueue).toHaveLength(0);
-			expect(adapter.hasQueuedMessages()).toBe(false);
 		});
 	});
 

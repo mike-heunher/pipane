@@ -36,7 +36,7 @@ export function showCanvas(title: string, markdown: string) {
 /**
  * Close the canvas panel.
  */
-export function closeCanvas() {
+function closeCanvas() {
 	visible = false;
 	renderPanel();
 	onChangeCallback?.();
@@ -62,7 +62,7 @@ export function initCanvas(el: HTMLElement, onChange: () => void) {
  * Extract canvas data from a tool result message (toolName === "canvas").
  * Returns { title, markdown } or null if not a canvas result.
  */
-export function extractCanvasFromToolResult(msg: any): { title: string; markdown: string } | null {
+function extractCanvasFromToolResult(msg: any): { title: string; markdown: string } | null {
 	if (msg.role !== "toolResult" || msg.toolName !== "canvas") return null;
 	const markdown = msg.details?.markdown;
 	if (!markdown) return null;
@@ -87,7 +87,7 @@ export function markCanvasOpened(key: string) {
 /**
  * Check whether a canvas tool call has already been auto-opened.
  */
-export function hasCanvasBeenOpened(key: string): boolean {
+function hasCanvasBeenOpened(key: string): boolean {
 	return openedCanvasKeys.has(key);
 }
 

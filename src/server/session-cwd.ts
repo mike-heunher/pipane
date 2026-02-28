@@ -33,9 +33,3 @@ export function getSessionCwd(sessionPath: string): string | undefined {
 	return undefined;
 }
 
-/**
- * Clear the cache (for testing).
- */
-export function clearSessionCwdCache(): void {
-	cwdCache.clear();
-}

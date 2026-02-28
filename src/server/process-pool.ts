@@ -272,17 +272,4 @@ export class ProcessPool {
 		return response;
 	}
 
-	/**
-	 * Kill all processes (for shutdown).
-	 */
-	shutdown(): void {
-		for (const procs of this.pools.values()) {
-			for (const proc of procs) {
-				try {
-					proc.process.kill("SIGTERM");
-				} catch { /* ignore */ }
-			}
-		}
-		this.pools.clear();
-	}
 }

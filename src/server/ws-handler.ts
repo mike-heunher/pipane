@@ -132,10 +132,6 @@ export class WsHandler {
 		this.messageCache.refreshIfChanged(sessionPath);
 	}
 
-	setPiAvailable(available: boolean): void {
-		this.piAvailable = available;
-	}
-
 	getDebugState() {
 		const processes = this.pool.getAllProcesses().map((p) => ({
 			id: p.id,

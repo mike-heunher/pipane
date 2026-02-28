@@ -197,13 +197,6 @@ export class SessionMessageCache {
 		this.cache.delete(sessionPath);
 	}
 
-	/**
-	 * Get all cached session paths (for debug).
-	 */
-	get cachedPaths(): string[] {
-		return Array.from(this.cache.keys());
-	}
-
 	// ── Internal ────────────────────────────────────────────────────────
 
 	private readFromDisk(sessionPath: string): CachedSession {

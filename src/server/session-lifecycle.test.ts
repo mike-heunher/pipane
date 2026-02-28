@@ -23,8 +23,8 @@ describe("SessionLifecycle", () => {
 			const result = lifecycle.attach("/sessions/a.jsonl", proc);
 
 			expect(result).toBe(proc);
-			expect(lifecycle.getStatus("/sessions/a.jsonl")).toBe("running");
-			expect(lifecycle.isAttached("/sessions/a.jsonl")).toBe(true);
+			expect(lifecycle.getAllStatuses()["/sessions/a.jsonl"]).toBe("running");
+			expect(!!lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(true);
 			expect(lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(proc);
 			expect(lifecycle.attachedCount).toBe(1);
 
@@ -43,8 +43,8 @@ describe("SessionLifecycle", () => {
 			const detached = lifecycle.detach("/sessions/a.jsonl");
 
 			expect(detached).toBe(proc);
-			expect(lifecycle.getStatus("/sessions/a.jsonl")).toBe("done");
-			expect(lifecycle.isAttached("/sessions/a.jsonl")).toBe(false);
+			expect(lifecycle.getAllStatuses()["/sessions/a.jsonl"]).toBe("done");
+			expect(!!lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(false);
 			expect(lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBeUndefined();
 			expect(lifecycle.attachedCount).toBe(0);
 
@@ -89,8 +89,8 @@ describe("SessionLifecycle", () => {
 			const crashed = lifecycle.crash("/sessions/a.jsonl");
 
 			expect(crashed).toBe(proc);
-			expect(lifecycle.getStatus("/sessions/a.jsonl")).toBe("done");
-			expect(lifecycle.isAttached("/sessions/a.jsonl")).toBe(false);
+			expect(lifecycle.getAllStatuses()["/sessions/a.jsonl"]).toBe("done");
+			expect(!!lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(false);
 
 			const detachedEvent = events.find((e) => e.type === "session_detached");
 			expect(detachedEvent).toBeDefined();
@@ -139,7 +139,7 @@ describe("SessionLifecycle", () => {
 			lifecycle.enqueueSteering("/sessions/a.jsonl", "msg1");
 			lifecycle.enqueueSteering("/sessions/a.jsonl", "msg2");
 
-			expect(lifecycle.getSteeringQueue("/sessions/a.jsonl")).toEqual(["msg1", "msg2"]);
+			expect((lifecycle.getAllSteeringQueues()["/sessions/a.jsonl"] ?? [])).toEqual(["msg1", "msg2"]);
 
 			const queueEvents = events.filter((e) => e.type === "steering_queue_update");
 			expect(queueEvents).toHaveLength(2);
@@ -152,7 +152,7 @@ describe("SessionLifecycle", () => {
 
 			const result = lifecycle.dequeueSteering("/sessions/a.jsonl", "msg1");
 			expect(result).toBe(true);
-			expect(lifecycle.getSteeringQueue("/sessions/a.jsonl")).toEqual(["msg2"]);
+			expect((lifecycle.getAllSteeringQueues()["/sessions/a.jsonl"] ?? [])).toEqual(["msg2"]);
 		});
 
 		it("dequeueSteering returns false for non-matching text", () => {
@@ -171,7 +171,7 @@ describe("SessionLifecycle", () => {
 
 			const result = lifecycle.removeSteeringByIndex("/sessions/a.jsonl", 1);
 			expect(result).toBe(true);
-			expect(lifecycle.getSteeringQueue("/sessions/a.jsonl")).toEqual(["msg1", "msg3"]);
+			expect((lifecycle.getAllSteeringQueues()["/sessions/a.jsonl"] ?? [])).toEqual(["msg1", "msg3"]);
 		});
 
 		it("removeSteeringByIndex returns false for out-of-bounds", () => {
@@ -188,7 +188,7 @@ describe("SessionLifecycle", () => {
 			lifecycle.subscribe((e) => events.push(e));
 
 			lifecycle.clearSteering("/sessions/a.jsonl");
-			expect(lifecycle.getSteeringQueue("/sessions/a.jsonl")).toEqual([]);
+			expect((lifecycle.getAllSteeringQueues()["/sessions/a.jsonl"] ?? [])).toEqual([]);
 
 			const queueEvents = events.filter((e) => e.type === "steering_queue_update");
 			expect(queueEvents).toHaveLength(1);
@@ -208,7 +208,7 @@ describe("SessionLifecycle", () => {
 			lifecycle.enqueueSteering("/sessions/a.jsonl", "msg1");
 
 			lifecycle.detach("/sessions/a.jsonl");
-			expect(lifecycle.getSteeringQueue("/sessions/a.jsonl")).toEqual([]);
+			expect((lifecycle.getAllSteeringQueues()["/sessions/a.jsonl"] ?? [])).toEqual([]);
 		});
 
 		it("getAllSteeringQueues returns all non-empty queues", () => {
@@ -231,8 +231,8 @@ describe("SessionLifecycle", () => {
 			lifecycle.attach("/sessions/b.jsonl", makeProc(2));
 
 			expect(lifecycle.attachedCount).toBe(2);
-			expect(lifecycle.isAttached("/sessions/a.jsonl")).toBe(true);
-			expect(lifecycle.isAttached("/sessions/b.jsonl")).toBe(true);
+			expect(!!lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(true);
+			expect(!!lifecycle.getAttachedProcess("/sessions/b.jsonl")).toBe(true);
 		});
 
 		it("detaching one session doesn't affect others", () => {
@@ -241,10 +241,10 @@ describe("SessionLifecycle", () => {
 
 			lifecycle.detach("/sessions/a.jsonl");
 
-			expect(lifecycle.isAttached("/sessions/a.jsonl")).toBe(false);
-			expect(lifecycle.isAttached("/sessions/b.jsonl")).toBe(true);
-			expect(lifecycle.getStatus("/sessions/a.jsonl")).toBe("done");
-			expect(lifecycle.getStatus("/sessions/b.jsonl")).toBe("running");
+			expect(!!lifecycle.getAttachedProcess("/sessions/a.jsonl")).toBe(false);
+			expect(!!lifecycle.getAttachedProcess("/sessions/b.jsonl")).toBe(true);
+			expect(lifecycle.getAllStatuses()["/sessions/a.jsonl"]).toBe("done");
+			expect(lifecycle.getAllStatuses()["/sessions/b.jsonl"]).toBe("running");
 		});
 	});
 

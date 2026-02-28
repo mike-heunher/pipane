@@ -46,7 +46,7 @@ export function toggleJsonlPanel() {
 	onChangeCallback?.();
 }
 
-export function closeJsonlPanel() {
+function closeJsonlPanel() {
 	visible = false;
 	stopPolling();
 	renderPanel();

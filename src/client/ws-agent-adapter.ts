@@ -104,7 +104,6 @@ export class WsAgentAdapter {
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
-	get isReallyStreaming(): boolean { return this._isReallyStreaming; }
 	get steeringQueue(): readonly string[] {
 		if (!this._sessionPath) return [];
 		return this._steeringQueues.get(this._sessionPath) ?? [];
@@ -728,14 +727,6 @@ export class WsAgentAdapter {
 		this.send({ type: "remove_steering", sessionPath: this._sessionPath, index }).catch(console.error);
 	}
 
-	followUp(_m: AgentMessage) {
-		// TODO: implement follow-up for attached sessions
-	}
-
-	waitForIdle(): Promise<void> {
-		return this._runningPromise ?? Promise.resolve();
-	}
-
 	setModel(m: Model<any>) {
 		// Client-side only until a prompt is sent
 		this._state.model = m;
@@ -752,34 +743,6 @@ export class WsAgentAdapter {
 
 	setSystemPrompt(v: string) { this._state.systemPrompt = v; }
 	setTools(t: AgentTool<any>[]) { this._state.tools = t; }
-	replaceMessages(ms: AgentMessage[]) { this._state.messages = ms.slice(); }
-	appendMessage(m: AgentMessage) { this._state.messages = [...this._state.messages, m]; }
-	clearMessages() { this._state.messages = []; }
-	clearSteeringQueue() {
-		if (this._sessionPath) this._steeringQueues.delete(this._sessionPath);
-		this.emitSteeringQueueChange();
-	}
-	clearFollowUpQueue() {}
-	clearAllQueues() {
-		if (this._sessionPath) this._steeringQueues.delete(this._sessionPath);
-		this.emitSteeringQueueChange();
-	}
-	hasQueuedMessages(): boolean { return this.steeringQueue.length > 0; }
-	setSteeringMode(_mode: "all" | "one-at-a-time") {}
-	getSteeringMode(): "all" | "one-at-a-time" { return "one-at-a-time"; }
-	setFollowUpMode(_mode: "all" | "one-at-a-time") {}
-	getFollowUpMode(): "all" | "one-at-a-time" { return "one-at-a-time"; }
-
-	reset() {
-		this._state.messages = [];
-		this._state.isStreaming = false;
-		this._isReallyStreaming = false;
-		this._state.streamMessage = null;
-		this._state.pendingToolCalls = new Set();
-		this._state.error = undefined;
-		this._steeringQueues.clear();
-		this.emitSteeringQueueChange();
-	}
 
 	// ── Fork ───────────────────────────────────────────────────────────────
 

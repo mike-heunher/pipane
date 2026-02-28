@@ -56,18 +56,10 @@ export class SessionLifecycle {
 		return this.attached.get(sessionPath);
 	}
 
-	getStatus(sessionPath: string): SessionState | undefined {
-		return this.statuses.get(sessionPath);
-	}
-
 	getAllStatuses(): Record<string, SessionState> {
 		const result: Record<string, SessionState> = {};
 		for (const [k, v] of this.statuses) result[k] = v;
 		return result;
-	}
-
-	isAttached(sessionPath: string): boolean {
-		return this.attached.has(sessionPath);
 	}
 
 	getAttachedSessionForProcess(proc: LifecycleProcess): string | undefined {
@@ -135,10 +127,6 @@ export class SessionLifecycle {
 	}
 
 	// ── Steering queue management ────────────────────────────────────────
-
-	getSteeringQueue(sessionPath: string): readonly string[] {
-		return this.steeringQueues.get(sessionPath) ?? [];
-	}
 
 	getAllSteeringQueues(): Record<string, string[]> {
 		const result: Record<string, string[]> = {};
