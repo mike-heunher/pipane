@@ -66,6 +66,16 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
 				if (d.type === "get_default_model") resp({ model: { provider: "anthropic", id: "sonnet" }, thinkingLevel: "off" });
 				else if (d.type === "get_available_models") resp({ models: [{ provider: "anthropic", id: "sonnet" }] });
+				else if (d.type === "subscribe_session") {
+					ws.send(JSON.stringify({
+						type: "session_messages",
+						sessionPath: d.sessionPath,
+						messages,
+						model: { provider: "anthropic", id: "sonnet" },
+						thinkingLevel: "off",
+					}));
+					resp({});
+				}
 				else resp({});
 			});
 		});

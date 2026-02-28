@@ -163,6 +163,17 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
 				if (d.type === "get_default_model") resp({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
 				else if (d.type === "get_available_models") resp({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
+				else if (d.type === "subscribe_session") {
+					// Mirror real server: push session_messages before the response
+					ws.send(JSON.stringify({
+						type: "session_messages",
+						sessionPath: d.sessionPath,
+						messages: toolMessages,
+						model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
+						thinkingLevel: "off",
+					}));
+					resp({});
+				}
 				else resp({});
 			});
 		});
