@@ -1,36 +1,33 @@
 /**
  * WebSocket-backed Agent adapter.
  *
- * Implements the same interface as Agent from @mariozechner/pi-agent-core
- * but routes all operations through a WebSocket to the backend server,
- * which manages the pi coding agent via RPC.
+ * Architecture: sessions are either "detached" (messages read from JSONL via REST)
+ * or "attached" (a pi process is running a turn, streaming events).
+ *
+ * - On session load/switch: fetch messages from REST (reads JSONL on server)
+ * - On prompt: server acquires a pi process, attaches to session, runs one turn
+ * - During turn: events stream via WebSocket, update state live
+ * - On agent_end: server releases pi, session goes back to detached
+ * - On file watcher notification: re-fetch from REST if detached
+ *
+ * Model and thinking level are client-side state until a message is sent,
+ * at which point they are passed to the server along with the prompt.
+ *
+ * Virtual sessions (new, unsaved) have no JSONL file and don't persist
+ * until the first message is sent.
  */
 
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
 
-type WsCommand =
-	| { type: "prompt"; message: string; images?: ImageContent[] }
-	| { type: "prompt_message"; message: AgentMessage }
-	| { type: "abort" }
-	| { type: "steer"; message: string; images?: ImageContent[] }
-	| { type: "follow_up"; message: string; images?: ImageContent[] }
-	| { type: "set_model"; provider: string; modelId: string }
-	| { type: "set_thinking_level"; level: ThinkingLevel }
-	| { type: "get_state" }
-	| { type: "get_messages" }
-	| { type: "get_available_models" }
-	| { type: "switch_session"; sessionPath: string }
-	| { type: "new_session" };
+export type SessionStatus = "virtual" | "detached" | "attached";
 
-type WsResponse = {
-	id: string;
-	type: "response";
-	command: string;
-	success: boolean;
-	data?: any;
-	error?: string;
-};
+type WsCommand =
+	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel; images?: ImageContent[] }
+	| { type: "abort"; sessionPath: string }
+	| { type: "compact"; sessionPath: string; customInstructions?: string }
+	| { type: "get_available_models" }
+	| { type: "set_session_name"; sessionPath: string; name: string };
 
 export class WsAgentAdapter {
 	private ws: WebSocket | null = null;
@@ -57,38 +54,48 @@ export class WsAgentAdapter {
 		error: undefined,
 	};
 
+	// ── Session state ──────────────────────────────────────────────────────
 	private _sessionId: string = "";
-	private _sessionFile: string | undefined;
+	private _sessionPath: string | undefined;
 	private _sessionName: string | undefined;
+	private _sessionStatus: SessionStatus = "virtual";
+
 	private _sessionListeners = new Set<() => void>();
+	private _contentListeners = new Set<() => void>();
+	private _statusListeners = new Set<() => void>();
 
-	get state(): AgentState {
-		return this._state;
-	}
+	get state(): AgentState { return this._state; }
+	get sessionId(): string { return this._sessionId; }
+	get sessionFile(): string | undefined { return this._sessionPath; }
+	get sessionName(): string | undefined { return this._sessionName; }
+	get sessionStatus(): SessionStatus { return this._sessionStatus; }
 
-	get sessionId(): string {
-		return this._sessionId;
-	}
+	// ── Event subscriptions ────────────────────────────────────────────────
 
-	get sessionFile(): string | undefined {
-		return this._sessionFile;
-	}
-
-	get sessionName(): string | undefined {
-		return this._sessionName;
-	}
-
-	/** Subscribe to session change events (session switch, new session) */
 	onSessionChange(fn: () => void): () => void {
 		this._sessionListeners.add(fn);
 		return () => this._sessionListeners.delete(fn);
 	}
-
 	private emitSessionChange() {
 		for (const fn of this._sessionListeners) fn();
 	}
 
-	/** Subscribe to sessions directory file changes */
+	onContentChange(fn: () => void): () => void {
+		this._contentListeners.add(fn);
+		return () => this._contentListeners.delete(fn);
+	}
+	private emitContentChange() {
+		for (const fn of this._contentListeners) fn();
+	}
+
+	onStatusChange(fn: () => void): () => void {
+		this._statusListeners.add(fn);
+		return () => this._statusListeners.delete(fn);
+	}
+	private emitStatusChange() {
+		for (const fn of this._statusListeners) fn();
+	}
+
 	onSessionsChanged(fn: (file: string) => void): () => void {
 		this.sessionsChangedListeners.add(fn);
 		return () => this.sessionsChangedListeners.delete(fn);
@@ -98,61 +105,31 @@ export class WsAgentAdapter {
 		this.listeners.add(fn);
 		return () => this.listeners.delete(fn);
 	}
-
 	private emit(e: AgentEvent) {
-		for (const listener of this.listeners) {
-			listener(e);
-		}
+		for (const fn of this.listeners) fn(e);
 	}
 
-	/**
-	 * Connect to the WebSocket server.
-	 */
+	// ── Connection ─────────────────────────────────────────────────────────
+
 	async connect(url: string): Promise<void> {
 		return new Promise((resolve, reject) => {
 			this.ws = new WebSocket(url);
 
 			this.ws.onopen = () => {
-				// Fetch initial state
-				this.send({ type: "get_state" }).then((data) => {
-					if (data) {
-						this._state.model = data.model;
-						this._state.thinkingLevel = data.thinkingLevel;
-						this._state.isStreaming = data.isStreaming;
-						this._sessionId = data.sessionId ?? "";
-						this._sessionFile = data.sessionFile;
-						this._sessionName = data.sessionName;
-					}
-					return this.send({ type: "get_messages" });
-				}).then((data) => {
-					if (data?.messages) {
-						this._state.messages = data.messages;
-					}
-					resolve();
-				}).catch(reject);
+				// Start in virtual state (no session loaded yet)
+				this._sessionStatus = "virtual";
+				resolve();
 			};
 
-			this.ws.onerror = (ev) => {
-				reject(new Error("WebSocket error"));
-			};
-
-			this.ws.onclose = () => {
-				this.ws = null;
-			};
-
-			this.ws.onmessage = (ev) => {
-				this.handleMessage(ev.data);
-			};
+			this.ws.onerror = () => reject(new Error("WebSocket error"));
+			this.ws.onclose = () => { this.ws = null; };
+			this.ws.onmessage = (ev) => this.handleMessage(ev.data);
 		});
 	}
 
 	private handleMessage(raw: string) {
 		let data: any;
-		try {
-			data = JSON.parse(raw);
-		} catch {
-			return;
-		}
+		try { data = JSON.parse(raw); } catch { return; }
 
 		// Response to a pending request
 		if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
@@ -166,21 +143,53 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Sessions directory change notification
-		if (data.type === "sessions_changed") {
-			const file = data.file as string;
-			// If the changed file is the current session, refresh content
-			if (this._sessionFile && file === this._sessionFile) {
-				this.refreshState();
-			}
-			// Notify session change listeners (sidebar refresh)
-			for (const fn of this.sessionsChangedListeners) {
-				fn(file);
+		// Init message with attached sessions
+		if (data.type === "init") {
+			// Could update status of current session if it's in the attached list
+			return;
+		}
+
+		// Session attached/detached notifications
+		if (data.type === "session_attached") {
+			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
+				// For virtual sessions, adopt the server-assigned path
+				if (this._sessionStatus === "virtual" && data.sessionPath) {
+					this._sessionPath = data.sessionPath;
+					const filename = path.basename(data.sessionPath, ".jsonl");
+					const parts = filename.split("_");
+					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+				}
+				this._sessionStatus = "attached";
+				this.emitStatusChange();
 			}
 			return;
 		}
 
-		// Agent event — update local state and emit
+		if (data.type === "session_detached") {
+			if (data.sessionPath === this._sessionPath) {
+				this._sessionStatus = "detached";
+				this.emitStatusChange();
+				// Re-fetch messages from JSONL to get final state
+				this.fetchMessagesFromDisk();
+			}
+			return;
+		}
+
+		// Sessions directory change notification
+		if (data.type === "sessions_changed") {
+			const file = data.file as string;
+			// If the changed file is the current session and we're detached, refresh
+			if (this._sessionPath && file === this._sessionPath && this._sessionStatus === "detached") {
+				this.fetchMessagesFromDisk();
+			}
+			// Notify sidebar
+			for (const fn of this.sessionsChangedListeners) fn(file);
+			return;
+		}
+
+		// Agent event — only process if it's for our current session
+		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
+
 		const event = data as AgentEvent;
 		this.updateState(event);
 		this.emit(event);
@@ -201,11 +210,6 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
-				// Sync messages from the event
-				if (event.messages) {
-					// agent_end carries final messages array from the RPC side
-					// But we've been building up locally, so just mark done
-				}
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
@@ -228,7 +232,6 @@ export class WsAgentAdapter {
 				if (event.message.role === "assistant" && (event.message as any).errorMessage) {
 					this._state.error = (event.message as any).errorMessage;
 				}
-				// Also append tool results
 				if (event.toolResults) {
 					for (const tr of event.toolResults) {
 						this._state.messages = [...this._state.messages, tr];
@@ -252,7 +255,7 @@ export class WsAgentAdapter {
 		}
 	}
 
-	private send(command: WsCommand): Promise<any> {
+	private send(command: WsCommand | any): Promise<any> {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new Error("WebSocket not connected"));
 		}
@@ -265,44 +268,81 @@ export class WsAgentAdapter {
 			}, 30000);
 
 			this.pendingRequests.set(id, {
-				resolve: (data) => {
-					clearTimeout(timeout);
-					resolve(data);
-				},
-				reject: (err) => {
-					clearTimeout(timeout);
-					reject(err);
-				},
+				resolve: (data) => { clearTimeout(timeout); resolve(data); },
+				reject: (err) => { clearTimeout(timeout); reject(err); },
 			});
 
 			this.ws!.send(JSON.stringify({ ...command, id }));
 		});
 	}
 
-	// =========================================================================
-	// Agent interface methods used by ChatPanel / AgentInterface
-	// =========================================================================
+	// ── Fetch messages from JSONL (REST) ───────────────────────────────────
+
+	async fetchMessagesFromDisk(): Promise<void> {
+		if (!this._sessionPath) return;
+
+		try {
+			const res = await fetch(`/api/sessions/messages?path=${encodeURIComponent(this._sessionPath)}`);
+			if (!res.ok) return;
+
+			const data = await res.json();
+			this._state.messages = data.messages ?? [];
+
+			// Restore model/thinking from session if not already set by user
+			if (data.model && !this._state.model) {
+				// We don't set model here — the user picks it via the UI
+				// But we could show what model was last used
+			}
+
+			this.emitContentChange();
+		} catch (err) {
+			console.error("Failed to fetch session messages:", err);
+		}
+	}
+
+	// ── Agent interface methods ────────────────────────────────────────────
 
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]) {
+		let text: string;
 		if (typeof input === "string") {
-			// Intercept slash commands that need client-side state updates
-			const handled = await this.handleSlashCommand(input);
-			if (handled) return;
-
-			await this.send({ type: "prompt", message: input, images });
+			text = input;
 		} else if (Array.isArray(input)) {
-			// Send first message as prompt
-			for (const msg of input) {
-				// Check for slash commands in text messages
-				const text = this.extractText(msg);
-				if (text && (await this.handleSlashCommand(text))) continue;
-				await this.send({ type: "prompt_message", message: msg });
-			}
+			text = input.map((m) => this.extractText(m)).join("\n");
 		} else {
-			const text = this.extractText(input);
-			if (text && (await this.handleSlashCommand(text))) return;
-			await this.send({ type: "prompt_message", message: input });
+			text = this.extractText(input);
 		}
+
+		// Handle client-side slash commands
+		const handled = await this.handleSlashCommand(text);
+		if (handled) return;
+
+		// For virtual sessions, we need the server to create a new session file.
+		// Send the prompt — server will create the session via pi.
+		if (this._sessionStatus === "virtual") {
+			// We need a session path. Ask server to create one via pi.
+			// The prompt command will handle this — pi starts with a new session.
+			// We'll use a special "new_session_prompt" flow.
+			await this.send({
+				type: "prompt",
+				sessionPath: "__new__",
+				message: text,
+				model: this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined,
+				thinkingLevel: this._state.thinkingLevel,
+				images,
+			});
+			return;
+		}
+
+		if (!this._sessionPath) throw new Error("No session loaded");
+
+		await this.send({
+			type: "prompt",
+			sessionPath: this._sessionPath,
+			message: text,
+			model: this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined,
+			thinkingLevel: this._state.thinkingLevel,
+			images,
+		});
 	}
 
 	private extractText(msg: AgentMessage): string {
@@ -325,9 +365,10 @@ export class WsAgentAdapter {
 		}
 
 		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
+			if (!this._sessionPath) return true;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
-			await this.send({ type: "compact", customInstructions });
-			await this.refreshState();
+			await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
+			await this.fetchMessagesFromDisk();
 			return true;
 		}
 
@@ -335,17 +376,17 @@ export class WsAgentAdapter {
 	}
 
 	abort() {
-		this.send({ type: "abort" }).catch(() => {});
+		if (this._sessionPath) {
+			this.send({ type: "abort", sessionPath: this._sessionPath }).catch(() => {});
+		}
 	}
 
-	steer(m: AgentMessage) {
-		const text = "content" in m ? (typeof m.content === "string" ? m.content : "") : "";
-		this.send({ type: "steer", message: text }).catch(() => {});
+	steer(_m: AgentMessage) {
+		// TODO: implement steering for attached sessions
 	}
 
-	followUp(m: AgentMessage) {
-		const text = "content" in m ? (typeof m.content === "string" ? m.content : "") : "";
-		this.send({ type: "follow_up", message: text }).catch(() => {});
+	followUp(_m: AgentMessage) {
+		// TODO: implement follow-up for attached sessions
 	}
 
 	waitForIdle(): Promise<void> {
@@ -353,44 +394,24 @@ export class WsAgentAdapter {
 	}
 
 	setModel(m: Model<any>) {
+		// Client-side only until a prompt is sent
 		this._state.model = m;
-		this.send({ type: "set_model", provider: m.provider, modelId: m.id }).catch(() => {});
 	}
 
 	setThinkingLevel(l: ThinkingLevel) {
+		// Client-side only until a prompt is sent
 		this._state.thinkingLevel = l;
-		this.send({ type: "set_thinking_level", level: l }).catch(() => {});
 	}
 
-	setSystemPrompt(v: string) {
-		this._state.systemPrompt = v;
-	}
-
-	setTools(t: AgentTool<any>[]) {
-		// Tools are managed server-side, this is a no-op
-		this._state.tools = t;
-	}
-
-	replaceMessages(ms: AgentMessage[]) {
-		this._state.messages = ms.slice();
-	}
-
-	appendMessage(m: AgentMessage) {
-		this._state.messages = [...this._state.messages, m];
-	}
-
-	clearMessages() {
-		this._state.messages = [];
-	}
-
+	setSystemPrompt(v: string) { this._state.systemPrompt = v; }
+	setTools(t: AgentTool<any>[]) { this._state.tools = t; }
+	replaceMessages(ms: AgentMessage[]) { this._state.messages = ms.slice(); }
+	appendMessage(m: AgentMessage) { this._state.messages = [...this._state.messages, m]; }
+	clearMessages() { this._state.messages = []; }
 	clearSteeringQueue() {}
 	clearFollowUpQueue() {}
 	clearAllQueues() {}
-
-	hasQueuedMessages(): boolean {
-		return false;
-	}
-
+	hasQueuedMessages(): boolean { return false; }
 	setSteeringMode(_mode: "all" | "one-at-a-time") {}
 	getSteeringMode(): "all" | "one-at-a-time" { return "one-at-a-time"; }
 	setFollowUpMode(_mode: "all" | "one-at-a-time") {}
@@ -404,18 +425,14 @@ export class WsAgentAdapter {
 		this._state.error = undefined;
 	}
 
-	// =========================================================================
-	// Session management
-	// =========================================================================
+	// ── Session management ─────────────────────────────────────────────────
 
-	/** Fetch all sessions from the server (REST endpoint) */
 	async listSessions(): Promise<SessionInfoDTO[]> {
 		const res = await fetch("/api/sessions");
 		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
 		return res.json();
 	}
 
-	/** Delete a session file */
 	async deleteSession(sessionPath: string): Promise<void> {
 		const res = await fetch("/api/sessions", {
 			method: "DELETE",
@@ -425,42 +442,54 @@ export class WsAgentAdapter {
 		if (!res.ok) throw new Error(`Failed to delete session: ${res.statusText}`);
 	}
 
-	/** Switch to a different session */
+	/** Switch to an existing session (load messages from JSONL) */
 	async switchSession(sessionPath: string): Promise<void> {
-		const response = await this.send({ type: "switch_session", sessionPath });
-		if (response?.cancelled) return;
+		this._sessionPath = sessionPath;
+		// Extract session ID from filename
+		const filename = path.basename(sessionPath, ".jsonl");
+		const parts = filename.split("_");
+		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+		this._sessionStatus = "detached";
 
-		// Refresh state and messages
-		await this.refreshState();
+		// Clear current state
+		this._state.messages = [];
+		this._state.streamMessage = null;
+		this._state.pendingToolCalls = new Set();
+		this._state.error = undefined;
+
+		// Load messages from JSONL
+		await this.fetchMessagesFromDisk();
+
+		this.emitSessionChange();
+		this.emitStatusChange();
 	}
 
-	/** Create a new session */
+	/** Create a new virtual session (no JSONL file until first message) */
 	async newSession(): Promise<void> {
-		await this.send({ type: "new_session" });
-		await this.refreshState();
-	}
+		this._sessionId = crypto.randomUUID();
+		this._sessionPath = undefined;
+		this._sessionName = undefined;
+		this._sessionStatus = "virtual";
 
-	/** Refresh local state from the RPC process (after session switch etc.) */
-	private async refreshState(): Promise<void> {
-		const stateData = await this.send({ type: "get_state" });
-		if (stateData) {
-			this._state.model = stateData.model;
-			this._state.thinkingLevel = stateData.thinkingLevel;
-			this._state.isStreaming = stateData.isStreaming;
-			this._sessionId = stateData.sessionId ?? "";
-			this._sessionFile = stateData.sessionFile;
-			this._sessionName = stateData.sessionName;
-		}
-
-		const msgData = await this.send({ type: "get_messages" });
-		this._state.messages = msgData?.messages ?? [];
+		this._state.messages = [];
+		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
 
 		this.emitSessionChange();
+		this.emitStatusChange();
 	}
 }
+
+// path utilities for browser
+const path = {
+	basename(p: string, ext?: string): string {
+		const base = p.split("/").pop() || p;
+		if (ext && base.endsWith(ext)) return base.slice(0, -ext.length);
+		return base;
+	},
+};
 
 export interface SessionInfoDTO {
 	id: string;

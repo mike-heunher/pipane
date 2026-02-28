@@ -22,18 +22,23 @@ import "./session-picker.js";
 import { registerCodingAgentRenderers } from "./tool-renderers.js";
 import "./app.css";
 
-// Register tool renderers for coding agent tools (Read, Write, Edit)
 registerCodingAgentRenderers();
 
 let chatPanel: ChatPanel;
 let agent: WsAgentAdapter;
 let sidebarOpen = true;
 
-
-
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
+
+	const statusBadge = agent
+		? agent.sessionStatus === "attached"
+			? html`<span class="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-600 dark:text-green-400 font-mono">attached</span>`
+			: agent.sessionStatus === "virtual"
+				? html`<span class="text-xs px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 font-mono">new</span>`
+				: html`<span class="text-xs px-1.5 py-0.5 rounded bg-gray-500/20 text-gray-500 font-mono">detached</span>`
+		: "";
 
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
@@ -51,6 +56,7 @@ const renderApp = () => {
 						</svg>
 					</button>
 					<span class="text-base font-semibold text-foreground">pi web</span>
+					${statusBadge}
 				</div>
 				<div class="flex items-center gap-1 px-2">
 					<theme-toggle></theme-toggle>
@@ -88,7 +94,7 @@ async function initApp() {
 		app,
 	);
 
-	// Initialize storage with dummy backend (keys are server-side)
+	// Initialize storage
 	const settings = new SettingsStore();
 	const providerKeys = new ProviderKeysStore();
 	const sessions = new SessionsStore();
@@ -101,7 +107,7 @@ async function initApp() {
 	const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 	setAppStorage(storage);
 
-	// Connect to backend
+	// Connect WebSocket
 	agent = new WsAgentAdapter();
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
@@ -122,15 +128,30 @@ async function initApp() {
 
 	// Create ChatPanel
 	chatPanel = new ChatPanel();
-
-	// Set agent — cast to Agent since WsAgentAdapter implements the same interface
 	await chatPanel.setAgent(agent as any);
 
-	// Re-render chat when session changes (new messages after switch)
+	// Session switch: full re-init of chat panel
 	agent.onSessionChange(async () => {
 		await chatPanel.setAgent(agent as any);
 		renderApp();
 	});
+
+	// Content change (messages refreshed from disk): lightweight re-render
+	agent.onContentChange(() => {
+		const ai = chatPanel.agentInterface;
+		if (ai) {
+			ai.session = agent as any;
+			ai.requestUpdate();
+		}
+	});
+
+	// Status change (attached/detached): update header badge
+	agent.onStatusChange(() => {
+		renderApp();
+	});
+
+	// Start with a virtual new session
+	await agent.newSession();
 
 	renderApp();
 }

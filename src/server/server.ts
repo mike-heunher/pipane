@@ -1,8 +1,16 @@
 /**
  * pi-web backend server.
  *
- * Spawns pi coding agent in RPC mode and relays commands/events
- * between WebSocket clients and the RPC process.
+ * Architecture: sessions are either "detached" (read from JSONL on disk)
+ * or "attached" (a pi RPC process is running a turn for them).
+ *
+ * A pool of pi RPC processes is maintained. When a user sends a message,
+ * a free pi is acquired from the pool, switched to that session, and runs
+ * one turn. After the turn completes, pi is released back to the pool.
+ * Multiple sessions can be attached simultaneously (parallel turns).
+ *
+ * Messages for detached sessions are read directly from JSONL files
+ * using the SessionManager utilities (no pi process needed).
  */
 
 import express from "express";
@@ -10,19 +18,23 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { unlink } from "node:fs/promises";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { WebSocketServer, WebSocket } from "ws";
-import { SessionManager, getAgentDir } from "@mariozechner/pi-coding-agent";
+import {
+	SessionManager,
+	getAgentDir,
+	buildSessionContext,
+	parseSessionEntries,
+} from "@mariozechner/pi-coding-agent";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
-// Resolve the pi CLI entry point
 const PI_CLI = process.env.PI_CLI || path.resolve(
 	fileURLToPath(import.meta.url),
-	"../../../../pi-mono/packages/coding-agent/dist/cli.js"
+	"../../../../pi-mono/packages/coding-agent/dist/cli.js",
 );
 
 const app = express();
@@ -35,7 +47,7 @@ const clientDist = path.resolve(__dirname, "../client");
 app.use(express.static(clientDist));
 
 // ============================================================================
-// REST API: Session listing
+// REST API
 // ============================================================================
 
 app.get("/api/sessions", async (_req, res) => {
@@ -75,24 +87,63 @@ app.delete("/api/sessions", express.json(), async (req, res) => {
 	}
 });
 
+/**
+ * Read messages from a session JSONL file directly (no pi process needed).
+ */
+app.get("/api/sessions/messages", (req, res) => {
+	try {
+		const sessionPath = req.query.path as string;
+		if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
+			res.status(400).json({ error: "Missing or invalid session path" });
+			return;
+		}
+		if (!existsSync(sessionPath)) {
+			res.status(404).json({ error: "Session file not found" });
+			return;
+		}
+
+		const content = readFileSync(sessionPath, "utf8");
+		const entries = parseSessionEntries(content);
+		const context = buildSessionContext(entries);
+
+		res.json({
+			messages: context.messages,
+			model: context.model,
+			thinkingLevel: context.thinkingLevel,
+		});
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // ============================================================================
-// RPC Process Management
+// Pi Process Pool
 // ============================================================================
 
 interface RpcProcess {
+	id: number;
 	process: ChildProcess;
 	rl: readline.Interface;
 	pendingRequests: Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>;
 	requestId: number;
+	/** Which session this process is currently attached to (null = idle in pool) */
+	attachedSession: string | null;
+	/** Forward agent events to this WS client */
+	eventTarget: WebSocket | null;
+	/** Session path for tagging events */
+	sessionPath: string | null;
+	/** Called when agent_end is received */
+	onAgentEnd: (() => void) | null;
 }
 
-let rpcProc: RpcProcess | null = null;
-let connectedWs: WebSocket | null = null;
+let nextProcId = 0;
+const pool: RpcProcess[] = [];
+/** Map from session path → attached RPC process */
+const attachedSessions = new Map<string, RpcProcess>();
 
-function startRpcProcess(): RpcProcess {
-	console.log(`Starting pi coding agent in RPC mode...`);
-	console.log(`  CLI: ${PI_CLI}`);
-	console.log(`  CWD: ${PI_CWD}`);
+function spawnRpcProcess(): RpcProcess {
+	const procId = ++nextProcId;
+	console.log(`[pool] Spawning pi process #${procId}...`);
 
 	const child = spawn("node", [PI_CLI, "--mode", "rpc"], {
 		cwd: PI_CWD,
@@ -101,25 +152,32 @@ function startRpcProcess(): RpcProcess {
 	});
 
 	child.stderr?.on("data", (data: Buffer) => {
-		process.stderr.write(`[pi] ${data.toString()}`);
+		process.stderr.write(`[pi#${procId}] ${data.toString()}`);
 	});
 
-	child.on("exit", (code) => {
-		console.log(`pi agent exited with code ${code}`);
-		rpcProc = null;
-	});
-
-	const rl = readline.createInterface({
-		input: child.stdout!,
-		terminal: false,
-	});
+	const rl = readline.createInterface({ input: child.stdout!, terminal: false });
 
 	const proc: RpcProcess = {
+		id: procId,
 		process: child,
 		rl,
 		pendingRequests: new Map(),
 		requestId: 0,
+		attachedSession: null,
+		eventTarget: null,
+		sessionPath: null,
+		onAgentEnd: null,
 	};
+
+	child.on("exit", (code) => {
+		console.log(`[pool] pi#${proc.id} exited (code ${code})`);
+		// Remove from pool and attached map
+		const idx = pool.indexOf(proc);
+		if (idx !== -1) pool.splice(idx, 1);
+		if (proc.attachedSession) {
+			attachedSessions.delete(proc.attachedSession);
+		}
+	});
 
 	rl.on("line", (line: string) => {
 		let data: any;
@@ -129,7 +187,7 @@ function startRpcProcess(): RpcProcess {
 			return;
 		}
 
-		// Check if it's a response to a pending request
+		// Response to a pending RPC request
 		if (data.type === "response" && data.id && proc.pendingRequests.has(data.id)) {
 			const pending = proc.pendingRequests.get(data.id)!;
 			proc.pendingRequests.delete(data.id);
@@ -137,29 +195,42 @@ function startRpcProcess(): RpcProcess {
 			return;
 		}
 
-		// Otherwise it's an agent event — forward to connected WS client
-		if (connectedWs && connectedWs.readyState === WebSocket.OPEN) {
-			connectedWs.send(JSON.stringify(data));
+		// Agent event — forward to the WS client, tagged with session path
+		if (proc.eventTarget && proc.eventTarget.readyState === WebSocket.OPEN && proc.sessionPath) {
+			proc.eventTarget.send(JSON.stringify({
+				...data,
+				sessionPath: proc.sessionPath,
+			}));
+		}
+
+		// Detect agent_end to auto-release the process
+		if (data.type === "agent_end" && proc.onAgentEnd) {
+			const cb = proc.onAgentEnd;
+			proc.onAgentEnd = null;
+			cb();
 		}
 	});
 
-	console.log("pi coding agent started.");
+	pool.push(proc);
+	console.log(`[pool] pi#${procId} ready (pool size: ${pool.length})`);
 	return proc;
 }
 
-function sendRpcCommand(command: any): Promise<any> {
-	if (!rpcProc) throw new Error("RPC process not running");
+function sendRpc(proc: RpcProcess, command: any): Promise<any> {
+	if (!proc.process || proc.process.exitCode !== null) {
+		return Promise.reject(new Error("RPC process is dead"));
+	}
 
-	const id = `req_${++rpcProc.requestId}`;
+	const id = `req_${++proc.requestId}`;
 	const fullCommand = { ...command, id };
 
 	return new Promise((resolve, reject) => {
 		const timeout = setTimeout(() => {
-			rpcProc?.pendingRequests.delete(id);
+			proc.pendingRequests.delete(id);
 			reject(new Error(`Timeout waiting for RPC response to ${command.type}`));
 		}, 30000);
 
-		rpcProc!.pendingRequests.set(id, {
+		proc.pendingRequests.set(id, {
 			resolve: (data: any) => {
 				clearTimeout(timeout);
 				resolve(data);
@@ -170,19 +241,68 @@ function sendRpcCommand(command: any): Promise<any> {
 			},
 		});
 
-		rpcProc!.process.stdin!.write(JSON.stringify(fullCommand) + "\n");
+		proc.process.stdin!.write(JSON.stringify(fullCommand) + "\n");
 	});
 }
 
-// ============================================================================
-// Slash Command → RPC Mapping
-// ============================================================================
+/**
+ * Acquire a pi process from the pool. If none are idle, spawn a new one.
+ * Switches it to the target session.
+ */
+async function acquirePi(sessionPath: string, ws: WebSocket): Promise<RpcProcess> {
+	// Already attached?
+	const existing = attachedSessions.get(sessionPath);
+	if (existing) {
+		existing.eventTarget = ws;
+		return existing;
+	}
+
+	// Find an idle process
+	let proc = pool.find((p) => !p.attachedSession && p.process.exitCode === null);
+
+	if (!proc) {
+		proc = spawnRpcProcess();
+		// Wait for process to initialize
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+
+	// Switch to the target session
+	proc.attachedSession = sessionPath;
+	proc.eventTarget = ws;
+	proc.sessionPath = sessionPath;
+	attachedSessions.set(sessionPath, proc);
+
+	await sendRpc(proc, { type: "switch_session", sessionPath });
+
+	console.log(`[pool] pi#${proc.id} attached to ${path.basename(sessionPath)}`);
+	return proc;
+}
 
 /**
- * Map TUI-only slash commands to RPC equivalents.
- * Returns an RPC command object, or a direct response for client-only commands.
- * Returns null if the text is not a known slash command (pass through to RPC prompt).
+ * Release a pi process back to the pool after a turn completes.
  */
+function releasePi(proc: RpcProcess) {
+	const sessionPath = proc.attachedSession;
+	console.log(`[pool] pi#${proc.id} released from ${sessionPath ? path.basename(sessionPath) : "?"}`);
+	if (sessionPath) {
+		attachedSessions.delete(sessionPath);
+	}
+	proc.attachedSession = null;
+	proc.eventTarget = null;
+	proc.sessionPath = null;
+}
+
+/**
+ * Get the list of currently attached session paths.
+ */
+function getAttachedSessions(): string[] {
+	return Array.from(attachedSessions.keys());
+}
+
+// ============================================================================
+// Slash Command Handling
+// ============================================================================
+
 function mapSlashCommand(text: string): { rpc: any } | { response: any } | null {
 	const trimmed = text.trim();
 	if (!trimmed.startsWith("/")) return null;
@@ -217,11 +337,9 @@ function mapSlashCommand(text: string): { rpc: any } | { response: any } | null 
 				},
 			};
 
-		// /new and /compact are handled client-side (need state refresh)
-
 		case "name":
 			if (args) return { rpc: { type: "set_session_name", name: args } };
-			return { rpc: { type: "get_state" } }; // return current state (includes name)
+			return { rpc: { type: "get_state" } };
 
 		case "export":
 			return { rpc: { type: "export_html", outputPath: args || undefined } };
@@ -230,7 +348,6 @@ function mapSlashCommand(text: string): { rpc: any } | { response: any } | null 
 			return { rpc: { type: "get_session_stats" } };
 
 		case "resume":
-			// No direct RPC equivalent — client handles session switching
 			return {
 				response: {
 					type: "event",
@@ -243,7 +360,6 @@ function mapSlashCommand(text: string): { rpc: any } | { response: any } | null 
 			return { rpc: { type: "get_commands" } };
 
 		default:
-			// Check for /model:provider/id shorthand
 			if (cmd.startsWith("model:")) {
 				const modelSpec = cmd.slice(6);
 				const slashIdx = modelSpec.indexOf("/");
@@ -258,12 +374,11 @@ function mapSlashCommand(text: string): { rpc: any } | { response: any } | null 
 				}
 			}
 
-			// /model with optional search — get available models
 			if (cmd === "model") {
 				return { rpc: { type: "get_available_models" } };
 			}
 
-			return null; // Not a known built-in — let RPC prompt handle it
+			return null;
 	}
 }
 
@@ -271,106 +386,164 @@ function mapSlashCommand(text: string): { rpc: any } | { response: any } | null 
 // WebSocket Handler
 // ============================================================================
 
+let connectedWs: WebSocket | null = null;
+
 wss.on("connection", async (ws) => {
 	console.log("WebSocket client connected");
 
-	// Single-user: only one connection at a time
 	if (connectedWs && connectedWs.readyState === WebSocket.OPEN) {
 		connectedWs.close(1000, "Replaced by new connection");
 	}
 	connectedWs = ws;
 
-	// Ensure RPC process is running
-	if (!rpcProc) {
-		try {
-			rpcProc = startRpcProcess();
-			// Wait for process to initialize
-			await new Promise((resolve) => setTimeout(resolve, 500));
-		} catch (err: any) {
-			ws.send(JSON.stringify({
-				type: "response",
-				command: "connect",
-				success: false,
-				error: `Failed to start pi agent: ${err.message}`,
-			}));
-			ws.close();
-			return;
-		}
-	}
+	// Send initial state: which sessions are attached
+	ws.send(JSON.stringify({
+		type: "init",
+		attachedSessions: getAttachedSessions(),
+	}));
 
 	ws.on("message", async (raw) => {
 		let command: any;
 		try {
 			command = JSON.parse(raw.toString());
 		} catch {
-			ws.send(JSON.stringify({
-				type: "response",
-				command: "parse",
-				success: false,
-				error: "Invalid JSON",
-			}));
+			ws.send(JSON.stringify({ type: "response", command: "parse", success: false, error: "Invalid JSON" }));
 			return;
 		}
 
 		const id = command.id;
 
 		try {
-			// For prompt_message, extract text and check for slash commands
-			if (command.type === "prompt_message") {
-				const msg = command.message;
-				const text = typeof msg.content === "string"
-					? msg.content
-					: Array.isArray(msg.content)
-						? msg.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n")
-						: "";
+			switch (command.type) {
+				// ── Prompt: attach pi, run one turn ──────────────────────
+				case "prompt": {
+					let sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
 
-				// Check if it's a slash command we need to intercept
-				const mapped = mapSlashCommand(text);
-				if (mapped) {
-					if ("response" in mapped) {
-						// Client-only command — emit as assistant message sequence
-						const msg = {
-							role: "assistant",
-							content: [{ type: "text", text: mapped.response.data.message }],
-							timestamp: Date.now(),
-						};
-						ws.send(JSON.stringify({ type: "agent_start" }));
-						ws.send(JSON.stringify({ type: "message_start", message: msg }));
-						ws.send(JSON.stringify({ type: "message_end", message: msg }));
-						ws.send(JSON.stringify({ type: "agent_end", messages: [] }));
-						return;
+					let proc: RpcProcess;
+
+					if (sessionPath === "__new__") {
+						// Virtual session — spawn a pi with a fresh session
+						proc = pool.find((p) => !p.attachedSession && p.process.exitCode === null) || spawnRpcProcess();
+						if (proc.process.exitCode !== null) {
+							proc = spawnRpcProcess();
+						}
+						await new Promise((resolve) => setTimeout(resolve, 500));
+
+						// Ask pi to create a new session and get the session path
+						await sendRpc(proc, { type: "new_session" });
+						const stateResp = await sendRpc(proc, { type: "get_state" });
+						sessionPath = stateResp.data?.sessionFile;
+						if (!sessionPath) throw new Error("Failed to get session path from new session");
+
+						proc.attachedSession = sessionPath;
+						proc.eventTarget = ws;
+						proc.sessionPath = sessionPath;
+						attachedSessions.set(sessionPath, proc);
+					} else {
+						proc = await acquirePi(sessionPath, ws);
 					}
-					// Map to RPC command
-					const response = await sendRpcCommand(mapped.rpc);
-					ws.send(JSON.stringify({ ...response, id, command: "prompt_message" }));
-					return;
+
+					// Apply model/thinking level if provided
+					if (command.model) {
+						await sendRpc(proc, {
+							type: "set_model",
+							provider: command.model.provider,
+							modelId: command.model.modelId,
+						});
+					}
+					if (command.thinkingLevel) {
+						await sendRpc(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+					}
+
+					// Notify client that session is now attached (with resolved path)
+					ws.send(JSON.stringify({ type: "session_attached", sessionPath }));
+
+					// Set up agent_end callback to release pi after turn
+					proc.onAgentEnd = () => {
+						releasePi(proc);
+						if (ws.readyState === WebSocket.OPEN) {
+							ws.send(JSON.stringify({ type: "session_detached", sessionPath }));
+						}
+					};
+
+					// Send the prompt (returns immediately, events stream async)
+					const response = await sendRpc(proc, { type: "prompt", message: command.message });
+					ws.send(JSON.stringify({ ...response, id, command: "prompt" }));
+					break;
 				}
 
-				const response = await sendRpcCommand({ type: "prompt", message: text });
-				ws.send(JSON.stringify({ ...response, id, command: "prompt_message" }));
-				return;
-			}
+				// ── Abort current turn ───────────────────────────────────
+				case "abort": {
+					const sessionPath = command.sessionPath as string;
+					const proc = sessionPath ? attachedSessions.get(sessionPath) : undefined;
+					if (proc) {
+						await sendRpc(proc, { type: "abort" });
+					}
+					ws.send(JSON.stringify({ id, type: "response", command: "abort", success: true }));
+					break;
+				}
 
-			// Forward all other commands directly to RPC
-			const response = await sendRpcCommand(command);
-			// Override the id with the WS request id
-			ws.send(JSON.stringify({ ...response, id }));
+				// ── Compact (needs attached pi) ─────────────────────────
+				case "compact": {
+					const sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
+
+					const proc = await acquirePi(sessionPath, ws);
+					ws.send(JSON.stringify({ type: "session_attached", sessionPath }));
+
+					const response = await sendRpc(proc, {
+						type: "compact",
+						customInstructions: command.customInstructions,
+					});
+
+					releasePi(proc);
+					ws.send(JSON.stringify({ type: "session_detached", sessionPath }));
+					ws.send(JSON.stringify({ ...response, id, command: "compact" }));
+					break;
+				}
+
+				// ── Get available models (needs any pi process) ─────────
+				case "get_available_models": {
+					// Use any idle process, or spawn one
+					let proc = pool.find((p) => p.process.exitCode === null);
+					if (!proc) {
+						proc = spawnRpcProcess();
+						await new Promise((resolve) => setTimeout(resolve, 500));
+					}
+					const response = await sendRpc(proc, { type: "get_available_models" });
+					ws.send(JSON.stringify({ ...response, id, command: "get_available_models" }));
+					break;
+				}
+
+				// ── Set session name (needs attached pi) ────────────────
+				case "set_session_name": {
+					const sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
+
+					const proc = await acquirePi(sessionPath, ws);
+					const response = await sendRpc(proc, { type: "set_session_name", name: command.name });
+					releasePi(proc);
+					ws.send(JSON.stringify({ ...response, id, command: "set_session_name" }));
+					break;
+				}
+
+				default:
+					ws.send(JSON.stringify({
+						id, type: "response", command: command.type, success: false,
+						error: `Unknown command: ${command.type}`,
+					}));
+			}
 		} catch (err: any) {
 			ws.send(JSON.stringify({
-				id,
-				type: "response",
-				command: command.type,
-				success: false,
-				error: err.message,
+				id, type: "response", command: command.type, success: false, error: err.message,
 			}));
 		}
 	});
 
 	ws.on("close", () => {
 		console.log("WebSocket client disconnected");
-		if (connectedWs === ws) {
-			connectedWs = null;
-		}
+		if (connectedWs === ws) connectedWs = null;
 	});
 });
 
@@ -394,15 +567,12 @@ function startSessionsWatcher(): FSWatcher | null {
 
 		lastChangedFile = filename;
 
-		// Debounce: session files get many rapid writes
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
 			if (!connectedWs || connectedWs.readyState !== WebSocket.OPEN) return;
 
-			// Determine the full path of the changed file
 			const fullPath = path.join(SESSIONS_DIR, lastChangedFile!);
 
-			// Notify client: sessions list changed, and which file changed
 			connectedWs.send(JSON.stringify({
 				type: "sessions_changed",
 				file: fullPath,
