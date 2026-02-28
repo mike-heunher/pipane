@@ -4,17 +4,19 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"dev": "concurrently --names \"server,client\" --prefix-colors \"cyan,green\" \"tsx watch src/server/server.ts\" \"vite\"",
+		"dev": "./dev.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
-		"build": "vite build && tsc -p tsconfig.server.json",
-		"start": "node dist/server/server.js",
+		"build": "vite build && bun build src/server/server.ts --target=bun --outdir=dist/server --entry-naming=server.js",
+		"start": "NODE_ENV=production bun run dist/server/server.js",
+		"prod": "./prod.sh",
 		"check": "tsc --noEmit"
 	},
 	"dependencies": {
 		"@mariozechner/mini-lit": "^0.2.0",
 		"@mariozechner/pi-agent-core": "file:../pi-mono/packages/agent",
 		"@mariozechner/pi-ai": "file:../pi-mono/packages/ai",
+		"@mariozechner/pi-coding-agent": "file:../pi-mono/packages/coding-agent",
 		"@mariozechner/pi-web-ui": "file:../pi-mono/packages/web-ui",
 		"@tailwindcss/vite": "^4.1.17",
 		"express": "^5.1.0",

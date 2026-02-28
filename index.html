@@ -4,6 +4,14 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>pi web</title>
+		<script>
+			// Apply dark/light theme before first paint to avoid flash
+			(function() {
+				var t = localStorage.getItem("theme") || "system";
+				var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+				if (dark) document.documentElement.classList.add("dark");
+			})();
+		</script>
 	</head>
 	<body>
 		<div id="app"></div>

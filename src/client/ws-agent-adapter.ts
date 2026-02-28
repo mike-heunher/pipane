@@ -19,7 +19,9 @@ type WsCommand =
 	| { type: "set_thinking_level"; level: ThinkingLevel }
 	| { type: "get_state" }
 	| { type: "get_messages" }
-	| { type: "get_available_models" };
+	| { type: "get_available_models" }
+	| { type: "switch_session"; sessionPath: string }
+	| { type: "new_session" };
 
 type WsResponse = {
 	id: string;
@@ -54,8 +56,35 @@ export class WsAgentAdapter {
 		error: undefined,
 	};
 
+	private _sessionId: string = "";
+	private _sessionFile: string | undefined;
+	private _sessionName: string | undefined;
+	private _sessionListeners = new Set<() => void>();
+
 	get state(): AgentState {
 		return this._state;
+	}
+
+	get sessionId(): string {
+		return this._sessionId;
+	}
+
+	get sessionFile(): string | undefined {
+		return this._sessionFile;
+	}
+
+	get sessionName(): string | undefined {
+		return this._sessionName;
+	}
+
+	/** Subscribe to session change events (session switch, new session) */
+	onSessionChange(fn: () => void): () => void {
+		this._sessionListeners.add(fn);
+		return () => this._sessionListeners.delete(fn);
+	}
+
+	private emitSessionChange() {
+		for (const fn of this._sessionListeners) fn();
 	}
 
 	subscribe(fn: (e: AgentEvent) => void): () => void {
@@ -83,6 +112,9 @@ export class WsAgentAdapter {
 						this._state.model = data.model;
 						this._state.thinkingLevel = data.thinkingLevel;
 						this._state.isStreaming = data.isStreaming;
+						this._sessionId = data.sessionId ?? "";
+						this._sessionFile = data.sessionFile;
+						this._sessionName = data.sessionName;
 					}
 					return this.send({ type: "get_messages" });
 				}).then((data) => {
@@ -248,11 +280,13 @@ export class WsAgentAdapter {
 	}
 
 	steer(m: AgentMessage) {
-		this.send({ type: "steer", message: typeof m.content === "string" ? m.content : "" }).catch(() => {});
+		const text = "content" in m ? (typeof m.content === "string" ? m.content : "") : "";
+		this.send({ type: "steer", message: text }).catch(() => {});
 	}
 
 	followUp(m: AgentMessage) {
-		this.send({ type: "follow_up", message: typeof m.content === "string" ? m.content : "" }).catch(() => {});
+		const text = "content" in m ? (typeof m.content === "string" ? m.content : "") : "";
+		this.send({ type: "follow_up", message: text }).catch(() => {});
 	}
 
 	waitForIdle(): Promise<void> {
@@ -310,4 +344,62 @@ export class WsAgentAdapter {
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
 	}
+
+	// =========================================================================
+	// Session management
+	// =========================================================================
+
+	/** Fetch all sessions from the server (REST endpoint) */
+	async listSessions(): Promise<SessionInfoDTO[]> {
+		const res = await fetch("/api/sessions");
+		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
+		return res.json();
+	}
+
+	/** Switch to a different session */
+	async switchSession(sessionPath: string): Promise<void> {
+		const response = await this.send({ type: "switch_session", sessionPath });
+		if (response?.cancelled) return;
+
+		// Refresh state and messages
+		await this.refreshState();
+	}
+
+	/** Create a new session */
+	async newSession(): Promise<void> {
+		await this.send({ type: "new_session" });
+		await this.refreshState();
+	}
+
+	/** Refresh local state from the RPC process (after session switch etc.) */
+	private async refreshState(): Promise<void> {
+		const stateData = await this.send({ type: "get_state" });
+		if (stateData) {
+			this._state.model = stateData.model;
+			this._state.thinkingLevel = stateData.thinkingLevel;
+			this._state.isStreaming = stateData.isStreaming;
+			this._sessionId = stateData.sessionId ?? "";
+			this._sessionFile = stateData.sessionFile;
+			this._sessionName = stateData.sessionName;
+		}
+
+		const msgData = await this.send({ type: "get_messages" });
+		this._state.messages = msgData?.messages ?? [];
+		this._state.streamMessage = null;
+		this._state.pendingToolCalls = new Set();
+		this._state.error = undefined;
+
+		this.emitSessionChange();
+	}
+}
+
+export interface SessionInfoDTO {
+	id: string;
+	path: string;
+	cwd: string;
+	name?: string;
+	created: string;
+	modified: string;
+	messageCount: number;
+	firstMessage: string;
 }

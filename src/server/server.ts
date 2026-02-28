@@ -12,8 +12,9 @@ import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { WebSocketServer, WebSocket } from "ws";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 
-const PORT = parseInt(process.env.PORT || "3001", 10);
+const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
 // Resolve the pi CLI entry point
@@ -30,6 +31,29 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.resolve(__dirname, "../client");
 app.use(express.static(clientDist));
+
+// ============================================================================
+// REST API: Session listing
+// ============================================================================
+
+app.get("/api/sessions", async (_req, res) => {
+	try {
+		const sessions = await SessionManager.listAll();
+		const result = sessions.map((s) => ({
+			id: s.id,
+			path: s.path,
+			cwd: s.cwd,
+			name: s.name,
+			created: s.created.toISOString(),
+			modified: s.modified.toISOString(),
+			messageCount: s.messageCount,
+			firstMessage: s.firstMessage,
+		}));
+		res.json(result);
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
 
 // ============================================================================
 // RPC Process Management
