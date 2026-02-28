@@ -35,6 +35,7 @@ type WsResponse = {
 export class WsAgentAdapter {
 	private ws: WebSocket | null = null;
 	private listeners = new Set<(e: AgentEvent) => void>();
+	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>();
 	private requestId = 0;
 	private _runningPromise: Promise<void> | undefined;
@@ -85,6 +86,12 @@ export class WsAgentAdapter {
 
 	private emitSessionChange() {
 		for (const fn of this._sessionListeners) fn();
+	}
+
+	/** Subscribe to sessions directory file changes */
+	onSessionsChanged(fn: (file: string) => void): () => void {
+		this.sessionsChangedListeners.add(fn);
+		return () => this.sessionsChangedListeners.delete(fn);
 	}
 
 	subscribe(fn: (e: AgentEvent) => void): () => void {
@@ -155,6 +162,20 @@ export class WsAgentAdapter {
 				pending.resolve(data.data);
 			} else {
 				pending.reject(new Error(data.error || "Unknown error"));
+			}
+			return;
+		}
+
+		// Sessions directory change notification
+		if (data.type === "sessions_changed") {
+			const file = data.file as string;
+			// If the changed file is the current session, refresh content
+			if (this._sessionFile && file === this._sessionFile) {
+				this.refreshState();
+			}
+			// Notify session change listeners (sidebar refresh)
+			for (const fn of this.sessionsChangedListeners) {
+				fn(file);
 			}
 			return;
 		}

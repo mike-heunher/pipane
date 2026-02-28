@@ -10,11 +10,11 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { unlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { WebSocketServer, WebSocket } from "ws";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager, getAgentDir } from "@mariozechner/pi-coding-agent";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
@@ -373,6 +373,48 @@ wss.on("connection", async (ws) => {
 		}
 	});
 });
+
+// ============================================================================
+// Sessions Directory Watcher
+// ============================================================================
+
+const SESSIONS_DIR = path.join(getAgentDir(), "sessions");
+
+function startSessionsWatcher(): FSWatcher | null {
+	if (!existsSync(SESSIONS_DIR)) {
+		console.log(`Sessions dir does not exist yet: ${SESSIONS_DIR}`);
+		return null;
+	}
+
+	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastChangedFile: string | null = null;
+
+	const watcher = watch(SESSIONS_DIR, { recursive: true }, (_event, filename) => {
+		if (!filename || !filename.endsWith(".jsonl")) return;
+
+		lastChangedFile = filename;
+
+		// Debounce: session files get many rapid writes
+		if (debounceTimer) clearTimeout(debounceTimer);
+		debounceTimer = setTimeout(() => {
+			if (!connectedWs || connectedWs.readyState !== WebSocket.OPEN) return;
+
+			// Determine the full path of the changed file
+			const fullPath = path.join(SESSIONS_DIR, lastChangedFile!);
+
+			// Notify client: sessions list changed, and which file changed
+			connectedWs.send(JSON.stringify({
+				type: "sessions_changed",
+				file: fullPath,
+			}));
+		}, 300);
+	});
+
+	console.log(`Watching sessions directory: ${SESSIONS_DIR}`);
+	return watcher;
+}
+
+startSessionsWatcher();
 
 server.listen(PORT, () => {
 	console.log(`pi-web server listening on http://localhost:${PORT}`);

@@ -210,6 +210,7 @@ export class SessionPicker extends LitElement {
 	private searchQuery = "";
 
 	private unsubSessionChange?: () => void;
+	private unsubSessionsChanged?: () => void;
 
 	connectedCallback() {
 		super.connectedCallback();
@@ -219,12 +220,16 @@ export class SessionPicker extends LitElement {
 				this.requestUpdate();
 				this.loadSessions();
 			});
+			this.unsubSessionsChanged = this.agent.onSessionsChanged(() => {
+				this.loadSessions();
+			});
 		}
 	}
 
 	disconnectedCallback() {
 		super.disconnectedCallback();
 		this.unsubSessionChange?.();
+		this.unsubSessionsChanged?.();
 	}
 
 	async loadSessions() {
