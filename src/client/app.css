@@ -1,4 +1,5 @@
 @import "@mariozechner/pi-web-ui/app.css";
+@import "./themes/gruvbox.css";
 @import "tailwindcss";
 
 /* ── Full-width conversation: remove max-w-3xl constraint on messages & input ── */
@@ -606,4 +607,89 @@ agent-interface streaming-message-container markdown-block {
 	background: transparent;
 	cursor: pointer;
 	color: var(--foreground, #111);
+}
+
+/* ── Theme selector dropdown ───────────────────────────────────── */
+
+.theme-selector-wrap {
+	position: relative;
+	display: inline-flex;
+}
+
+.theme-selector-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 2rem;
+	height: 2rem;
+	border-radius: 0.375rem;
+	border: none;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+}
+
+.theme-selector-btn:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
+.theme-selector-dropdown {
+	position: absolute;
+	right: 0;
+	top: calc(100% + 0.35rem);
+	z-index: 50;
+	min-width: 10rem;
+	padding: 0.3rem;
+	border: 1px solid var(--border, #e5e7eb);
+	border-radius: 0.5rem;
+	background: var(--background, #fff);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.theme-selector-section-label {
+	padding: 0.3rem 0.5rem 0.15rem;
+	font-size: 0.65rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted-foreground, #6b7280);
+}
+
+.theme-selector-option {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	padding: 0.35rem 0.5rem;
+	border: none;
+	border-radius: 0.35rem;
+	background: transparent;
+	color: var(--foreground, #111);
+	font-size: 0.78rem;
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.12s;
+}
+
+.theme-selector-option:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+}
+
+.theme-selector-option.is-active {
+	background: color-mix(in srgb, var(--primary, #2563eb) 10%, transparent);
+}
+
+.theme-selector-check {
+	width: 1rem;
+	text-align: center;
+	font-size: 0.7rem;
+	color: var(--primary, #2563eb);
+}
+
+.theme-selector-divider {
+	height: 1px;
+	margin: 0.25rem 0.3rem;
+	background: var(--border, #e5e7eb);
 }

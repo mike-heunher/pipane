@@ -6,6 +6,7 @@ if ("serviceWorker" in navigator) {
 }
 
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
+import { initThemes, createThemeSelector } from "./theme-selector.js";
 import {
 	AppStorage,
 	ChatPanel,
@@ -31,6 +32,7 @@ import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
 registerCodingAgentRenderers();
+initThemes();
 
 let chatPanel: ChatPanel;
 let agent: WsAgentAdapter;
@@ -305,7 +307,7 @@ const renderApp = () => {
 							<polyline points="8 6 2 12 8 18"></polyline>
 						</svg>
 					</button>
-					<theme-toggle></theme-toggle>
+					${createThemeSelector()}
 				</div>
 			</div>
 			<!-- Main content: sidebar + chat -->

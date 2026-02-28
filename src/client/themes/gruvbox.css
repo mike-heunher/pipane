@@ -1,0 +1,110 @@
+/*
+ * Gruvbox-inspired theme for pi-web
+ * Based on gruvbox color palette by morhetz
+ * https://github.com/morhetz/gruvbox
+ *
+ * Applied via [data-color-theme="gruvbox"] selector so it can coexist
+ * with the default theme. Light/dark is still controlled by the .dark class.
+ */
+
+/* ── Gruvbox Light ─────────────────────────────────────────────── */
+/* bg0: #fbf1c7  bg1: #ebdbb2  bg2: #d5c4a1  bg3: #bdae93  bg4: #a89984
+   fg0: #282828  fg1: #3c3836  fg2: #504945  fg3: #665c54  fg4: #7c6f64
+   red: #cc241d  green: #98971a  yellow: #d79921  blue: #458588
+   purple: #b16286  aqua: #689d6a  orange: #d65d0e */
+
+[data-color-theme="gruvbox"] {
+   --background: oklch(0.96 0.02 90);       /* #fbf1c7 */
+   --foreground: oklch(0.25 0.02 60);       /* #282828 */
+   --card: oklch(0.96 0.02 90);             /* #fbf1c7 */
+   --card-foreground: oklch(0.25 0.02 60);  /* #282828 */
+   --popover: oklch(0.98 0.01 90);
+   --popover-foreground: oklch(0.30 0.02 60); /* #3c3836 */
+   --primary: oklch(0.52 0.12 210);         /* #458588 blue */
+   --primary-foreground: oklch(0.96 0.02 90);
+   --secondary: oklch(0.90 0.03 85);        /* #ebdbb2 */
+   --secondary-foreground: oklch(0.35 0.02 55); /* #504945 */
+   --muted: oklch(0.90 0.03 85);            /* #ebdbb2 */
+   --muted-foreground: oklch(0.50 0.02 55); /* #7c6f64 */
+   --accent: oklch(0.87 0.04 85);           /* #d5c4a1 */
+   --accent-foreground: oklch(0.30 0.02 60);
+   --destructive: oklch(0.53 0.20 25);      /* #cc241d red */
+   --destructive-foreground: oklch(0.96 0.02 90);
+   --border: oklch(0.82 0.04 80);           /* #bdae93 */
+   --input: oklch(0.87 0.04 85);            /* #d5c4a1 */
+   --ring: oklch(0.52 0.12 210);            /* blue */
+   --chart-1: oklch(0.52 0.12 210);         /* blue */
+   --chart-2: oklch(0.63 0.15 120);         /* green #98971a */
+   --chart-3: oklch(0.70 0.16 85);          /* yellow #d79921 */
+   --chart-4: oklch(0.58 0.14 340);         /* purple #b16286 */
+   --chart-5: oklch(0.63 0.18 45);          /* orange #d65d0e */
+   --sidebar: oklch(0.93 0.03 88);
+   --sidebar-foreground: oklch(0.25 0.02 60);
+   --sidebar-primary: oklch(0.52 0.12 210);
+   --sidebar-primary-foreground: oklch(0.96 0.02 90);
+   --sidebar-accent: oklch(0.90 0.03 85);
+   --sidebar-accent-foreground: oklch(0.30 0.02 60);
+   --sidebar-border: oklch(0.85 0.04 82);
+   --sidebar-ring: oklch(0.52 0.12 210);
+   --radius: 0.5rem;
+}
+
+/* ── Gruvbox Dark ──────────────────────────────────────────────── */
+/* bg0: #282828  bg1: #3c3836  bg2: #504945  bg3: #665c54  bg4: #7c6f64
+   fg0: #fbf1c7  fg1: #ebdbb2  fg2: #d5c4a1  fg3: #bdae93  fg4: #a89984
+   red: #fb4934  green: #b8bb26  yellow: #fabd2f  blue: #83a598
+   purple: #d3869b  aqua: #8ec07c  orange: #fe8019 */
+
+[data-color-theme="gruvbox"].dark,
+.dark[data-color-theme="gruvbox"] {
+   --background: oklch(0.25 0.02 60);       /* #282828 */
+   --foreground: oklch(0.91 0.03 88);       /* #ebdbb2 */
+   --card: oklch(0.28 0.02 58);             /* #3c3836 */
+   --card-foreground: oklch(0.91 0.03 88);
+   --popover: oklch(0.30 0.02 56);          /* #504945 */
+   --popover-foreground: oklch(0.87 0.04 85); /* #d5c4a1 */
+   --primary: oklch(0.70 0.07 180);         /* #83a598 bright blue */
+   --primary-foreground: oklch(0.25 0.02 60);
+   --secondary: oklch(0.28 0.02 58);        /* #3c3836 */
+   --secondary-foreground: oklch(0.91 0.03 88);
+   --muted: oklch(0.30 0.02 56);            /* #504945 */
+   --muted-foreground: oklch(0.68 0.03 70); /* #a89984 */
+   --accent: oklch(0.35 0.02 55);           /* #665c54 */
+   --accent-foreground: oklch(0.87 0.04 85);
+   --destructive: oklch(0.65 0.22 25);      /* #fb4934 bright red */
+   --destructive-foreground: oklch(0.25 0.02 60);
+   --border: oklch(0.35 0.02 55);           /* #665c54 */
+   --input: oklch(0.40 0.02 55);            /* #7c6f64 */
+   --ring: oklch(0.70 0.07 180);
+   --chart-1: oklch(0.70 0.07 180);         /* bright blue */
+   --chart-2: oklch(0.76 0.14 110);         /* bright green #b8bb26 */
+   --chart-3: oklch(0.83 0.15 85);          /* bright yellow #fabd2f */
+   --chart-4: oklch(0.70 0.10 340);         /* bright purple #d3869b */
+   --chart-5: oklch(0.73 0.17 55);          /* bright orange #fe8019 */
+   --sidebar: oklch(0.23 0.02 60);
+   --sidebar-foreground: oklch(0.91 0.03 88);
+   --sidebar-primary: oklch(0.70 0.07 180);
+   --sidebar-primary-foreground: oklch(0.25 0.02 60);
+   --sidebar-accent: oklch(0.30 0.02 56);
+   --sidebar-accent-foreground: oklch(0.91 0.03 88);
+   --sidebar-border: oklch(0.35 0.02 55);
+   --sidebar-ring: oklch(0.70 0.07 180);
+}
+
+/* ── Gruvbox JSONL syntax highlighting ─────────────────────────── */
+[data-color-theme="gruvbox"] .jsonl-key { color: #458588; }
+[data-color-theme="gruvbox"] .jsonl-str { color: #98971a; }
+[data-color-theme="gruvbox"] .jsonl-num { color: #d79921; }
+[data-color-theme="gruvbox"] .jsonl-bool { color: #cc241d; }
+[data-color-theme="gruvbox"] .jsonl-null { color: #cc241d; font-style: italic; }
+
+[data-color-theme="gruvbox"].dark .jsonl-key,
+.dark[data-color-theme="gruvbox"] .jsonl-key { color: #83a598; }
+[data-color-theme="gruvbox"].dark .jsonl-str,
+.dark[data-color-theme="gruvbox"] .jsonl-str { color: #b8bb26; }
+[data-color-theme="gruvbox"].dark .jsonl-num,
+.dark[data-color-theme="gruvbox"] .jsonl-num { color: #fabd2f; }
+[data-color-theme="gruvbox"].dark .jsonl-bool,
+.dark[data-color-theme="gruvbox"] .jsonl-bool { color: #fb4934; }
+[data-color-theme="gruvbox"].dark .jsonl-null,
+.dark[data-color-theme="gruvbox"] .jsonl-null { color: #fb4934; }
