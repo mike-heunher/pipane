@@ -4,6 +4,10 @@ A clean web interface for the **pi coding agent**.
 
 `pi-web` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
 
+## Screenshot
+
+![pi-web screenshot](docs/assets/pi-web-screenshot.png)
+
 ---
 
 ## What you get
