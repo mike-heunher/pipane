@@ -447,6 +447,24 @@ agent-interface streaming-message-container markdown-block {
 	background: color-mix(in srgb, var(--primary, #2563eb) 3%, transparent);
 }
 
+.jsonl-entry-focused {
+	border-color: color-mix(in srgb, var(--primary, #2563eb) 65%, var(--border, #e5e7eb));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary, #2563eb) 35%, transparent);
+}
+
+.jsonl-jump-flash {
+	animation: jsonlJumpFlash 1.1s ease-out;
+}
+
+@keyframes jsonlJumpFlash {
+	0% {
+		background: color-mix(in srgb, var(--primary, #2563eb) 14%, transparent);
+	}
+	100% {
+		background: transparent;
+	}
+}
+
 .jsonl-entry-header {
 	display: flex;
 	align-items: center;

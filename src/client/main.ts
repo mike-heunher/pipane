@@ -27,7 +27,7 @@ import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened } from "./canvas-panel.js";
-import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel } from "./jsonl-panel.js";
+import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
@@ -41,6 +41,7 @@ let steeringQueue: readonly string[] = [];
 let piInstallPromptOpen = false;
 let inputAreaObserver: ResizeObserver | null = null;
 let observedInputArea: Element | null = null;
+let chatJsonlJumpListenerInstalled = false;
 
 // Token usage visibility toggle
 const TOKEN_USAGE_KEY = "pi-web-hide-token-usage";
@@ -172,6 +173,50 @@ function observeInputAreaHeight() {
 	syncHeight();
 }
 
+/**
+ * When the JSONL panel is open, clicking a rendered chat message jumps to
+ * the corresponding JSONL line.
+ */
+function installChatJsonlJumpListener() {
+	if (chatJsonlJumpListenerInstalled) return;
+	chatJsonlJumpListenerInstalled = true;
+
+	document.addEventListener("click", (e) => {
+		if (!isJsonlPanelVisible()) return;
+		const target = e.target as HTMLElement | null;
+		if (!target) return;
+
+		const ai = chatPanel?.agentInterface as HTMLElement | undefined;
+		if (!ai) return;
+
+		const messageList = ai.querySelector("message-list") as HTMLElement | null;
+		if (!messageList || !messageList.contains(target)) return;
+
+		let displayedMessageOrdinal = NaN;
+		const messageWrapper = target.closest("[data-message-index]") as HTMLElement | null;
+		const indexRaw = messageWrapper?.getAttribute("data-message-index");
+		if (indexRaw != null) {
+			displayedMessageOrdinal = Number(indexRaw);
+		}
+
+		// Fallback path if the upstream patch is not active in the current bundle:
+		// derive ordinal from direct children in message-list.
+		if (!Number.isFinite(displayedMessageOrdinal)) {
+			const listRoot = messageList.querySelector(":scope > div") as HTMLElement | null;
+			if (!listRoot) return;
+			const children = Array.from(listRoot.children) as HTMLElement[];
+			displayedMessageOrdinal = children.findIndex((el) => el === target || el.contains(target));
+		}
+		if (!Number.isFinite(displayedMessageOrdinal) || displayedMessageOrdinal < 0) return;
+
+		const toolEl = target.closest("tool-message") as any;
+		const toolCallId =
+			(toolEl?.getAttribute?.("data-tool-call-id") as string | null) ??
+			(toolEl?.toolCall?.id as string | undefined);
+		jumpToJsonlEntryForChat(displayedMessageOrdinal, toolCallId || undefined);
+	});
+}
+
 function renderSteeringQueue() {
 	if (steeringQueue.length === 0) return "";
 	return html`
@@ -231,7 +276,7 @@ const renderApp = () => {
 					</button>
 					<button
 						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${isJsonlPanelVisible() ? 'text-foreground bg-accent' : ''}"
-						@click=${() => { toggleJsonlPanel(); }}
+						@click=${() => { toggleJsonlPanel(); renderApp(); }}
 						title="Toggle raw JSONL viewer"
 					>
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -368,6 +413,7 @@ async function initApp() {
 	// Create ChatPanel
 	chatPanel = new ChatPanel();
 	await chatPanel.setAgent(agent as any);
+	installChatJsonlJumpListener();
 
 	// Patch the AgentInterface to allow sending during streaming
 	patchAgentInterface();

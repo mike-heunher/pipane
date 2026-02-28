@@ -117,6 +117,35 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("read(config.ts)", { exact: false }).first()).toBeVisible({ timeout: 10000 });
 	});
 
+	test("clicking chat messages jumps to the corresponding JSONL line", async ({ page }) => {
+		harness.setScenarios([
+			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },
+		]);
+
+		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.waitForTimeout(2000);
+
+		// Open JSONL viewer
+		await page.getByTitle("Toggle raw JSONL viewer").click();
+		await expect(page.locator(".jsonl-panel")).toBeVisible();
+
+		const editor = page.locator("message-editor");
+		const textarea = editor.locator("textarea").first();
+		await textarea.fill("jump-test prompt");
+		await textarea.press("Meta+Enter");
+
+		await expect(page.getByText("I can help you with your project", { exact: false }).first()).toBeVisible({ timeout: 15000 });
+		await expect(page.locator(".jsonl-entry").first()).toBeVisible({ timeout: 15000 });
+
+		// Click user message and verify JSONL focuses user entry
+		await page.getByText("jump-test prompt", { exact: false }).first().click();
+		await expect(page.locator(".jsonl-entry-focused .jsonl-line-label")).toContainText("message (user)", { timeout: 5000 });
+
+		// Click assistant message and verify JSONL focuses assistant entry
+		await page.getByText("I can help you with your project", { exact: false }).first().click();
+		await expect(page.locator(".jsonl-entry-focused .jsonl-line-label")).toContainText("message (assistant)", { timeout: 5000 });
+	});
+
 	test("session appears in picker after prompt", async ({ page }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Sure, I'll help with that.") },

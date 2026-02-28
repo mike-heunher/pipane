@@ -20,6 +20,8 @@ let collapsedLines = new Set<number>();
 let scrollContainer: HTMLElement | null = null;
 let userScrolledUp = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+let focusedLineIndex: number | null = null;
+let focusClearTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Track which long strings are expanded (by unique id) */
 let expandedStrings = new Set<string>();
@@ -49,6 +51,11 @@ export function toggleJsonlPanel() {
 function closeJsonlPanel() {
 	visible = false;
 	stopPolling();
+	focusedLineIndex = null;
+	if (focusClearTimer) {
+		clearTimeout(focusClearTimer);
+		focusClearTimer = null;
+	}
 	renderPanel();
 	onChangeCallback?.();
 }
@@ -65,6 +72,11 @@ export function setJsonlSessionPath(sessionPath: string | undefined) {
 	jsonlLines = [];
 	collapsedLines.clear();
 	expandedStrings.clear();
+	focusedLineIndex = null;
+	if (focusClearTimer) {
+		clearTimeout(focusClearTimer);
+		focusClearTimer = null;
+	}
 	userScrolledUp = false;
 	if (visible) {
 		fetchAndRender();
@@ -76,6 +88,42 @@ export function refreshJsonlPanel() {
 	if (visible && currentSessionPath) {
 		fetchAndRender();
 	}
+}
+
+/**
+ * Jump to the JSONL entry associated with a clicked chat element.
+ *
+ * - If toolCallId is provided, prefers the matching toolResult entry.
+ * - Otherwise jumps to the Nth displayable message entry (0-indexed),
+ *   matching MessageList ordering (excluding toolResult/artifact).
+ */
+export function jumpToJsonlEntryForChat(displayedMessageOrdinal: number, toolCallId?: string): boolean {
+	if (!visible || !container || jsonlLines.length === 0) return false;
+
+	let targetLine =
+		(toolCallId ? findToolResultLineByToolCallId(toolCallId) : null) ??
+		findLineByDisplayedMessageOrdinal(displayedMessageOrdinal);
+	if (targetLine == null) return false;
+
+	focusedLineIndex = targetLine;
+	collapsedLines.delete(targetLine);
+	userScrolledUp = true; // preserve explicit jump position instead of auto-scrolling to bottom
+	renderPanel();
+
+	requestAnimationFrame(() => {
+		const entryEl = container?.querySelector(`.jsonl-entry[data-line-index="${targetLine}"]`) as HTMLElement | null;
+		if (!entryEl) return;
+		entryEl.scrollIntoView({ block: "center", behavior: "smooth" });
+		entryEl.classList.add("jsonl-jump-flash");
+		if (focusClearTimer) clearTimeout(focusClearTimer);
+		focusClearTimer = setTimeout(() => {
+			entryEl.classList.remove("jsonl-jump-flash");
+			focusedLineIndex = null;
+			renderPanel();
+		}, 1200);
+	});
+
+	return true;
 }
 
 function startPolling() {
@@ -294,6 +342,41 @@ function getLineLabel(jsonStr: string): string {
 	}
 }
 
+function parseLineObject(line: string): any | null {
+	try {
+		return JSON.parse(line);
+	} catch {
+		return null;
+	}
+}
+
+function findToolResultLineByToolCallId(toolCallId: string): number | null {
+	if (!toolCallId) return null;
+	for (let i = 0; i < jsonlLines.length; i++) {
+		const obj = parseLineObject(jsonlLines[i]);
+		if (!obj || obj.type !== "message") continue;
+		const msg = obj.message;
+		if (msg?.role === "toolResult" && msg.toolCallId === toolCallId) {
+			return i;
+		}
+	}
+	return null;
+}
+
+function findLineByDisplayedMessageOrdinal(displayedMessageOrdinal: number): number | null {
+	if (displayedMessageOrdinal < 0) return null;
+	let displayIdx = 0;
+	for (let i = 0; i < jsonlLines.length; i++) {
+		const obj = parseLineObject(jsonlLines[i]);
+		if (!obj || obj.type !== "message") continue;
+		const role = obj.message?.role;
+		if (role === "toolResult" || role === "artifact") continue;
+		if (displayIdx === displayedMessageOrdinal) return i;
+		displayIdx++;
+	}
+	return null;
+}
+
 function renderPanel() {
 	if (!container) return;
 
@@ -363,7 +446,10 @@ function renderPanel() {
 					? html`<div class="jsonl-empty">No session data</div>`
 					: jsonlLines.map(
 							(line, i) => html`
-								<div class="jsonl-entry ${collapsedLines.has(i) ? "collapsed" : ""}">
+								<div
+									class="jsonl-entry ${collapsedLines.has(i) ? "collapsed" : ""} ${focusedLineIndex === i ? "jsonl-entry-focused" : ""}"
+									data-line-index="${i}"
+								>
 									<div class="jsonl-entry-header" @click=${() => toggleLine(i)}>
 										<span class="jsonl-chevron">${collapsedLines.has(i) ? "▶" : "▼"}</span>
 										<span class="jsonl-line-num">${i + 1}</span>
