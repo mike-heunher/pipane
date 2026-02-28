@@ -1,3 +1,4 @@
 node_modules
 dist
 e2e/screenshots/ui/*.png
+e2e/latest/*.png

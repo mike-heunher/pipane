@@ -1,18 +1,4 @@
-/**
- * Screenshot tests for key UI elements.
- *
- * Captures screenshots of:
- * - Tool renderers: Read, Write, Edit, Bash (each in multiple states)
- * - Input area (message-editor)
- * - Steering queue
- * - Session list (session-picker)
- *
- * Screenshots from the last run are stored in e2e/screenshots/ui/ for easy viewing.
- *
- * Run: node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts
- */
-
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import express from "express";
 import path from "node:path";
@@ -20,20 +6,17 @@ import { WebSocketServer, WebSocket } from "ws";
 import fs from "node:fs";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
-const SCREENSHOT_DIR = path.resolve(import.meta.dirname, "screenshots/ui");
+const LATEST_DIR = path.resolve(import.meta.dirname, "latest");
 
-// Ensure screenshot dir exists and is clean
-fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
-for (const f of fs.readdirSync(SCREENSHOT_DIR)) {
-	fs.unlinkSync(path.join(SCREENSHOT_DIR, f));
+fs.mkdirSync(LATEST_DIR, { recursive: true });
+for (const f of fs.readdirSync(LATEST_DIR)) {
+	if (f.endsWith(".png")) fs.unlinkSync(path.join(LATEST_DIR, f));
 }
 
 const usage = (input: number, output: number, total: number) => ({
 	input, output, cacheRead: 0, cacheWrite: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
 });
-
-// ---------- Mock session data for different tool states ----------
 
 const SESSION_PATH = "/tmp/mock-sessions/test-session.jsonl";
 const SESSION_PATH_2 = "/tmp/mock-sessions/other-project.jsonl";
@@ -65,12 +48,8 @@ const sessions = [
 	},
 ];
 
-// Messages that exercise all tool renderers
 const toolMessages = [
-	// User prompt
 	{ role: "user", content: [{ type: "text", text: "Read the config file, edit it, write a new file, and run the tests" }], timestamp: 1000 },
-
-	// Assistant with Read tool call (completed)
 	{
 		role: "assistant",
 		content: [
@@ -82,96 +61,61 @@ const toolMessages = [
 		stopReason: "tool_use",
 	},
 	{
-		role: "toolResult", toolCallId: "t1", toolName: "Read",
-		isError: false,
-		content: [{ type: "text", text: 'export const config = {\n  port: 3000,\n  host: "localhost",\n  database: {\n    url: "postgres://localhost:5432/mydb",\n    pool: 10,\n  },\n  auth: {\n    secret: "change-me",\n    expiresIn: "24h",\n  },\n};' }],
-		timestamp: 1002,
+		role: "toolResult", toolCallId: "t1", toolName: "Read", isError: false,
+		content: [{ type: "text", text: 'export const config = {\n  port: 3000,\n  host: "localhost",\n};' }], timestamp: 1002,
 	},
-
-	// Assistant with Edit tool call (completed with diff)
 	{
 		role: "assistant",
 		content: [
 			{ type: "text", text: "Now I'll update the auth configuration." },
 			{ type: "toolCall", id: "t2", name: "Edit", arguments: {
 				path: "/Users/dev/my-project/src/config.ts",
-				oldText: '  auth: {\n    secret: "change-me",\n    expiresIn: "24h",\n  },',
-				newText: '  auth: {\n    secret: process.env.JWT_SECRET || "change-me",\n    expiresIn: "7d",\n    refreshExpiresIn: "30d",\n    algorithm: "HS256",\n  },',
+				oldText: '  auth: {\n    secret: "change-me",\n  },',
+				newText: '  auth: {\n    secret: process.env.JWT_SECRET || "change-me",\n    algorithm: "HS256",\n  },',
 			} },
 		],
 		usage: usage(1800, 120, 0.015),
 		timestamp: 1003,
 		stopReason: "tool_use",
 	},
-	{
-		role: "toolResult", toolCallId: "t2", toolName: "Edit",
-		isError: false,
-		content: [{ type: "text", text: "Edit applied successfully." }],
-		timestamp: 1004,
-	},
-
-	// Assistant with Write tool call (completed)
+	{ role: "toolResult", toolCallId: "t2", toolName: "Edit", isError: false, content: [{ type: "text", text: "Edit applied successfully." }], timestamp: 1004 },
 	{
 		role: "assistant",
 		content: [
 			{ type: "text", text: "I'll create a new auth utility file." },
-			{ type: "toolCall", id: "t3", name: "Write", arguments: {
-				path: "/Users/dev/my-project/src/auth/jwt.ts",
-				content: 'import jwt from "jsonwebtoken";\nimport { config } from "../config.js";\n\nexport function signToken(payload: object): string {\n  return jwt.sign(payload, config.auth.secret, {\n    expiresIn: config.auth.expiresIn,\n    algorithm: config.auth.algorithm,\n  });\n}\n\nexport function verifyToken(token: string): any {\n  return jwt.verify(token, config.auth.secret);\n}\n',
-			} },
+			{ type: "toolCall", id: "t3", name: "Write", arguments: { path: "/Users/dev/my-project/src/auth/jwt.ts", content: 'export const ok = true;\n' } },
 		],
 		usage: usage(2400, 150, 0.02),
 		timestamp: 1005,
 		stopReason: "tool_use",
 	},
-	{
-		role: "toolResult", toolCallId: "t3", toolName: "Write",
-		isError: false,
-		content: [{ type: "text", text: "File written successfully." }],
-		timestamp: 1006,
-	},
-
-	// Assistant with Bash tool call (completed with output)
+	{ role: "toolResult", toolCallId: "t3", toolName: "Write", isError: false, content: [{ type: "text", text: "File written successfully." }], timestamp: 1006 },
 	{
 		role: "assistant",
 		content: [
-			{ type: "text", text: "Now let's run the tests to make sure everything works." },
+			{ type: "text", text: "Now let's run tests." },
 			{ type: "toolCall", id: "t4", name: "Bash", arguments: { command: "cd /Users/dev/my-project && npm test" } },
 		],
 		usage: usage(3000, 90, 0.018),
 		timestamp: 1007,
 		stopReason: "tool_use",
 	},
-	{
-		role: "toolResult", toolCallId: "t4", toolName: "Bash",
-		isError: false,
-		content: [{ type: "text", text: "> my-project@1.0.0 test\n> vitest run\n\n ✓ src/auth/jwt.test.ts (3 tests) 42ms\n ✓ src/config.test.ts (2 tests) 18ms\n\n Tests  5 passed\n Time   0.8s" }],
-		timestamp: 1008,
-	},
-
-	// Assistant with Bash error
+	{ role: "toolResult", toolCallId: "t4", toolName: "Bash", isError: false, content: [{ type: "text", text: "Tests 5 passed" }], timestamp: 1008 },
 	{
 		role: "assistant",
 		content: [
-			{ type: "text", text: "Let me also check the type coverage." },
+			{ type: "text", text: "Let me also check type coverage." },
 			{ type: "toolCall", id: "t5", name: "Bash", arguments: { command: "npx tsc --noEmit" } },
 		],
 		usage: usage(3200, 60, 0.016),
 		timestamp: 1009,
 		stopReason: "tool_use",
 	},
-	{
-		role: "toolResult", toolCallId: "t5", toolName: "Bash",
-		isError: true,
-		content: [{ type: "text", text: "src/auth/jwt.ts(1,19): error TS2307: Cannot find module 'jsonwebtoken' or its corresponding type declarations.\nsrc/auth/jwt.ts(5,10): error TS2339: Property 'sign' does not exist on type 'typeof jwt'." }],
-		timestamp: 1010,
-	},
-
-	// Assistant with Canvas tool call
+	{ role: "toolResult", toolCallId: "t5", toolName: "Bash", isError: true, content: [{ type: "text", text: "TS2307: Cannot find module 'jsonwebtoken'" }], timestamp: 1010 },
 	{
 		role: "assistant",
 		content: [
-			{ type: "text", text: "I'll open a quick canvas summary of the findings." },
+			{ type: "text", text: "I'll open a canvas summary." },
 			{ type: "toolCall", id: "t6", name: "canvas", arguments: { title: "Auth migration summary" } },
 		],
 		usage: usage(3400, 70, 0.017),
@@ -179,20 +123,13 @@ const toolMessages = [
 		stopReason: "tool_use",
 	},
 	{
-		role: "toolResult", toolCallId: "t6", toolName: "canvas",
-		isError: false,
-		details: {
-			title: "Auth migration summary",
-			markdown: "# Auth Migration\n\n- Updated config defaults\n- Added JWT utility\n- Verified tests\n- Remaining: install typings",
-		},
-		content: [{ type: "text", text: "Canvas prepared" }],
-		timestamp: 1012,
+		role: "toolResult", toolCallId: "t6", toolName: "canvas", isError: false,
+		details: { title: "Auth migration summary", markdown: "# Auth Migration\n\n- Updated config defaults" },
+		content: [{ type: "text", text: "Canvas prepared" }], timestamp: 1012,
 	},
-
-	// Final assistant message
 	{
 		role: "assistant",
-		content: [{ type: "text", text: "The tests pass but there are TypeScript errors. We need to install the `@types/jsonwebtoken` package. Let me fix that." }],
+		content: [{ type: "text", text: "Done." }],
 		usage: usage(3600, 100, 0.02),
 		timestamp: 1013,
 		stopReason: "end_turn",
@@ -219,10 +156,7 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 		let clientWs: WebSocket | null = null;
 		wss.on("connection", (ws) => {
 			clientWs = ws;
-			ws.send(JSON.stringify({
-				type: "init",
-				sessionStatuses: { [SESSION_PATH_2]: "running" },
-			}));
+			ws.send(JSON.stringify({ type: "init", sessionStatuses: { [SESSION_PATH_2]: "running" } }));
 			ws.on("message", (raw) => {
 				const d = JSON.parse(raw.toString());
 				if (!d.id) return;
@@ -233,14 +167,26 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 			});
 		});
 
-		server.listen(0, () => {
-			const port = (server.address() as any).port;
-			resolve({ server, port, ws: () => clientWs });
-		});
+		server.listen(0, () => resolve({ server, port: (server.address() as any).port, ws: () => clientWs }));
 	});
 }
 
-test.describe("UI Screenshot Tests", () => {
+async function captureAndCompare(target: Locator | Page, name: string) {
+	await target.screenshot({ path: path.join(LATEST_DIR, name), animations: "disabled" });
+	await expect(target as any).toHaveScreenshot(name, { animations: "disabled" });
+}
+
+async function openMainSession(page: Page) {
+	await page.evaluate(() => {
+		const picker = document.querySelector("session-picker") as any;
+		const items = picker.shadowRoot.querySelectorAll(".session-item");
+		if (items.length > 0) items[0].click();
+	});
+	await expect(page.locator("tool-message").first()).toBeVisible();
+}
+
+test.describe("UI visual goldens", () => {
+	test.use({ viewport: { width: 1440, height: 900 } });
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
@@ -248,198 +194,88 @@ test.describe("UI Screenshot Tests", () => {
 
 	test("session list", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
-
-		// Screenshot the session picker sidebar
-		const sidebar = page.locator("session-picker");
-		await expect(sidebar).toBeVisible();
-
-		// Click on a session to load it (so we see 'active' state too)
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
-		});
-		await page.waitForTimeout(1000);
-
-		await sidebar.screenshot({ path: path.join(SCREENSHOT_DIR, "session-list.png") });
+		await page.waitForTimeout(1500);
+		await openMainSession(page);
+		await captureAndCompare(page.locator("session-picker"), "session-list.png");
 	});
 
-	test("tool renderers - all tools", async ({ page }) => {
+	test("tool renderers", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
+		await page.waitForTimeout(1500);
+		await openMainSession(page);
 
-		// Select the session to load tool messages
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
-		});
-		await page.waitForTimeout(2000);
+		await captureAndCompare(page, "tool-renderers-full.png");
 
-		// Screenshot the full chat area with all tool renderers visible
-		const chatArea = page.locator("agent-interface");
-		await expect(chatArea).toBeVisible();
-
-		// Full page screenshot showing all tools
-		await page.screenshot({
-			path: path.join(SCREENSHOT_DIR, "tool-renderers-full.png"),
-			fullPage: false,
-		});
-
-		// Screenshot individual tool blocks in deterministic order
 		const tools = page.locator("tool-message");
 		await expect(tools).toHaveCount(6);
-
-		const names = [
-			"tool-read.png",
-			"tool-edit.png",
-			"tool-write.png",
-			"tool-bash-success.png",
-			"tool-bash-error.png",
-			"tool-canvas.png",
-		];
-
+		const names = ["tool-read.png", "tool-edit.png", "tool-write.png", "tool-bash-success.png", "tool-bash-error.png", "tool-canvas.png"];
 		for (let i = 0; i < names.length; i++) {
 			const tool = tools.nth(i);
 			await tool.scrollIntoViewIfNeeded();
-			await expect(tool).toBeVisible();
-			await tool.screenshot({ path: path.join(SCREENSHOT_DIR, names[i]) });
+			await captureAndCompare(tool, names[i]);
 		}
 	});
 
-	test("input area", async ({ page }) => {
+	test("input", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
-
-		// Screenshot the empty input area
+		await page.waitForTimeout(1500);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible();
-		await editor.screenshot({ path: path.join(SCREENSHOT_DIR, "input-empty.png") });
+		await captureAndCompare(editor, "input-empty.png");
 
-		// Type some text and screenshot again
-		const textarea = editor.locator("textarea").first();
-		await textarea.fill("Can you help me refactor the database module to use connection pooling?");
-		await page.waitForTimeout(300);
-		await editor.screenshot({ path: path.join(SCREENSHOT_DIR, "input-with-text.png") });
+		await editor.locator("textarea").first().fill("Can you help me refactor the database module to use connection pooling?");
+		await page.waitForTimeout(150);
+		await captureAndCompare(editor, "input-with-text.png");
 	});
 
 	test("steering queue", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
+		await page.waitForTimeout(1500);
+		await openMainSession(page);
 
-		// Select a session
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
-		});
-		await expect(page.locator("tool-message").first()).toBeVisible();
-
-		// Inject steering queue via WebSocket events to simulate a running session
 		const ws = mock.ws()!;
 		const send = (msg: any) => ws.send(JSON.stringify(msg));
-
-		// Attach the session and start an agent run
 		send({ type: "session_attached", sessionPath: SESSION_PATH });
 		send({ type: "agent_start", sessionPath: SESSION_PATH });
-		send({
-			type: "message_start",
-			sessionPath: SESSION_PATH,
-			message: { role: "assistant", content: [{ type: "thinking", thinking: "" }] },
-		});
-		send({
-			type: "message_update",
-			sessionPath: SESSION_PATH,
-			message: {
-				role: "assistant",
-				content: [{ type: "text", text: "Working on the refactoring..." }],
-			},
-		});
-		await page.waitForTimeout(500);
+		send({ type: "message_start", sessionPath: SESSION_PATH, message: { role: "assistant", content: [{ type: "thinking", thinking: "" }] } });
+		send({ type: "message_update", sessionPath: SESSION_PATH, message: { role: "assistant", content: [{ type: "text", text: "Working..." }] } });
+		send({ type: "steering_queue_update", sessionPath: SESSION_PATH, queue: ["Also update error handling", "Add retry logic"] });
 
-		// Send steering queue update from server
-		send({
-			type: "steering_queue_update",
-			sessionPath: SESSION_PATH,
-			queue: [
-				"Also make sure to update the error handling",
-				"And add retry logic for transient failures",
-			],
-		});
-
-		// Force a session switch cycle to ensure main.ts refreshes the local steeringQueue variable
+		// force queue refresh in UI (main.ts re-reads steeringQueue on session switch)
 		await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
 			if (items.length > 1) items[1].click();
 		});
-		await page.waitForTimeout(300);
+		await page.waitForTimeout(250);
 		await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
 			if (items.length > 0) items[0].click();
 		});
 
-		// Screenshot the steering queue overlay
-		const steeringQueue = page.locator(".steering-queue");
-		await expect(steeringQueue).toBeVisible();
-		await steeringQueue.screenshot({ path: path.join(SCREENSHOT_DIR, "steering-queue.png") });
-
-		// Also take a full page screenshot showing queue in context
-		await page.screenshot({
-			path: path.join(SCREENSHOT_DIR, "steering-queue-in-context.png"),
-			fullPage: false,
-		});
+		const queue = page.locator(".steering-queue");
+		await expect(queue).toBeVisible();
+		await captureAndCompare(queue, "steering-queue.png");
+		await captureAndCompare(page, "steering-queue-in-context.png");
 	});
 
-	test("tool renderer - in-progress state", async ({ page }) => {
+	test("tool in progress", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
-
-		// Select a session
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
-		});
 		await page.waitForTimeout(1500);
+		await openMainSession(page);
 
 		const ws = mock.ws()!;
 		const send = (msg: any) => ws.send(JSON.stringify(msg));
-
-		// Start a new turn with a tool call that's in progress
 		send({ type: "session_attached", sessionPath: SESSION_PATH });
 		send({ type: "agent_start", sessionPath: SESSION_PATH });
-		send({
-			type: "message_end",
-			sessionPath: SESSION_PATH,
-			message: { role: "user", content: [{ type: "text", text: "run the build" }], timestamp: 3000 },
-		});
-
-		// Stream an assistant message with a Bash tool call
-		const assistantMsg = {
-			role: "assistant",
-			content: [
-				{ type: "toolCall", id: "t-progress", name: "Bash", arguments: { command: "npm run build" } },
-			],
-			usage: usage(500, 40, 0.005),
-			timestamp: 3001,
-			stopReason: "tool_use",
-		};
+		send({ type: "message_end", sessionPath: SESSION_PATH, message: { role: "user", content: [{ type: "text", text: "run build" }], timestamp: 3000 } });
+		const assistantMsg = { role: "assistant", content: [{ type: "toolCall", id: "t-progress", name: "Bash", arguments: { command: "npm run build" } }], usage: usage(500, 40, 0.005), timestamp: 3001, stopReason: "tool_use" };
 		send({ type: "message_start", sessionPath: SESSION_PATH, message: { role: "assistant", content: [] } });
 		send({ type: "message_update", sessionPath: SESSION_PATH, message: assistantMsg });
 		send({ type: "message_end", sessionPath: SESSION_PATH, message: assistantMsg });
-		await page.waitForTimeout(200);
-
-		// Start tool execution (in progress)
 		send({ type: "tool_execution_start", sessionPath: SESSION_PATH, toolCallId: "t-progress" });
-		await page.waitForTimeout(500);
-
-		// Screenshot the in-progress tool (should show spinner)
-		await page.screenshot({
-			path: path.join(SCREENSHOT_DIR, "tool-bash-in-progress.png"),
-			fullPage: false,
-		});
+		await page.waitForTimeout(250);
+		await captureAndCompare(page, "tool-bash-in-progress.png");
 	});
 });
