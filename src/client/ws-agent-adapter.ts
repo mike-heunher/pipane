@@ -531,16 +531,17 @@ export class WsAgentAdapter {
 	/** Fetch available models from the server (uses any idle pi process) */
 	async fetchAvailableModels(): Promise<any[]> {
 		const data = await this.send({ type: "get_available_models" });
-		this._availableModels = data?.models ?? [];
-		return this._availableModels;
+		const models = data?.models ?? [];
+		this._availableModels = models;
+		return models;
 	}
 
 	/** Find a matching model from the available models cache */
-	private findModelMatch(serverModel: { provider: string; modelId: string }): any | null {
-		if (!this._availableModels) return null;
+	private findModelMatch(serverModel: { provider: string; modelId: string }): any | undefined {
+		if (!this._availableModels) return undefined;
 		return this._availableModels.find(
 			(m: any) => m.provider === serverModel.provider && m.id === serverModel.modelId,
-		) ?? null;
+		);
 	}
 
 	async installPi(): Promise<void> {

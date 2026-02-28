@@ -220,7 +220,7 @@ export class SessionMessageCache {
 				const entries = parseSessionEntries(content);
 				const context = buildSessionContext(entries as any);
 				messages = context.messages ?? [];
-				model = context.model;
+				model = context.model ?? undefined;
 				thinkingLevel = context.thinkingLevel;
 			}
 		} catch (err) {

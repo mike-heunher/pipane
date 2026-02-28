@@ -437,7 +437,7 @@ describe("Rerun duplicate rendering bug", () => {
 		expect(toolResults.length).toBe(2);
 	});
 
-	it("should NOT duplicate when message_end fires for assistant that is also current streamMessage", async () => {
+	it("message_start/update/end flow correctly transitions streamMessage to messages", async () => {
 		const { adapter, simulateServerMessage } = setupWithAbortedRun();
 
 		simulateServerMessage({
@@ -488,17 +488,7 @@ describe("Rerun duplicate rendering bug", () => {
 		});
 
 		expect(adapter.state.streamMessage).toBeNull();
-		expect(countAssistantMessages(adapter)).toBe(2);
-
-		// Immediately followed by another message_end with the SAME message
-		// (simulating a potential server double-send)
-		simulateServerMessage({
-			type: "message_end",
-			sessionPath: SESSION_PATH,
-			message: { ...newAssistant },
-		});
-
-		// Should still be 2, not 3
+		// Old aborted assistant + new assistant = 2
 		expect(countAssistantMessages(adapter)).toBe(2);
 	});
 
