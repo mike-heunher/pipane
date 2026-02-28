@@ -26,6 +26,7 @@ import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages } from "./canvas-panel.js";
+import { ensureInputMenuButton } from "./input-menu.js";
 
 registerCodingAgentRenderers();
 
@@ -126,10 +127,12 @@ function patchMessageEditor(ai: any) {
 		}
 	};
 
-	// After every Lit render, ensure the send button is present when streaming
-	const injectSendButton = () => {
+	// After every Lit render, ensure the input controls are present.
+	const injectInputControls = () => {
+		ensureInputMenuButton(editor, () => agent?.sessionFile);
+
 		if (!editor.isStreaming) {
-			// Not streaming — remove injected button if present
+			// Not streaming — remove injected send button if present
 			const existing = editor.querySelector(".injected-send-btn");
 			if (existing) existing.remove();
 			return;
@@ -162,13 +165,13 @@ function patchMessageEditor(ai: any) {
 	const origUpdated = editor.updated?.bind(editor);
 	editor.updated = (changedProps: Map<string, any>) => {
 		origUpdated?.(changedProps);
-		injectSendButton();
+		injectInputControls();
 	};
 
 	// Force a re-render so Lit picks up our new handleKeyDown
 	editor.requestUpdate();
 	// Initial sync after the forced re-render
-	editor.updateComplete.then(() => injectSendButton());
+	editor.updateComplete.then(() => injectInputControls());
 }
 
 /** Watch the input area inside AgentInterface and sync its height to a CSS variable */
