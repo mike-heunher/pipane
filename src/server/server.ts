@@ -402,6 +402,14 @@ function sendRpc(proc: RpcProcess, command: any): Promise<any> {
 	});
 }
 
+async function sendRpcChecked(proc: RpcProcess, command: any): Promise<any> {
+	const response = await sendRpc(proc, command);
+	if (!response?.success) {
+		throw new Error(response?.error || `RPC command failed: ${command.type}`);
+	}
+	return response;
+}
+
 /**
  * Acquire a pi process from the pool. If none are idle, spawn a new one.
  * Switches it to the target session.
@@ -686,14 +694,21 @@ wss.on("connection", async (ws) => {
 
 					// Apply model/thinking level if provided
 					if (command.model) {
-						await sendRpc(proc, {
+						await sendRpcChecked(proc, {
 							type: "set_model",
 							provider: command.model.provider,
 							modelId: command.model.modelId,
 						});
+						// Verify model actually changed; otherwise we'd silently continue with
+						// the previous model from session context.
+						const modelState = await sendRpcChecked(proc, { type: "get_state" });
+						const activeModel = modelState.data?.model;
+						if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+							throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+						}
 					}
 					if (command.thinkingLevel) {
-						await sendRpc(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+						await sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 					}
 
 					// Notify client that session is now attached (with resolved path).
@@ -864,14 +879,19 @@ wss.on("connection", async (ws) => {
 
 					// 3. Apply model/thinking level if provided
 					if (command.model) {
-						await sendRpc(proc, {
+						await sendRpcChecked(proc, {
 							type: "set_model",
 							provider: command.model.provider,
 							modelId: command.model.modelId,
 						});
+						const modelState = await sendRpcChecked(proc, { type: "get_state" });
+						const activeModel = modelState.data?.model;
+						if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+							throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+						}
 					}
 					if (command.thinkingLevel) {
-						await sendRpc(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+						await sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 					}
 
 					// 4. Notify client that session is attached
