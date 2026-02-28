@@ -26,7 +26,7 @@ import "./thinking-block-patch.js";
 import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
-import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened, resetCanvasTracking } from "./canvas-panel.js";
+import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened } from "./canvas-panel.js";
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
@@ -57,80 +57,36 @@ if (isTokenUsageHidden()) {
 }
 
 /**
- * Patch the AgentInterface to allow sending messages during streaming.
- * The upstream component blocks input when isStreaming=true. We override
- * sendMessage to bypass that guard, and patch the message-editor's
- * handleKeyDown so Enter sends even while streaming. The native stop
- * button in the message-editor is left intact.
+ * Configure the AgentInterface to allow sending messages during streaming
+ * and set up custom keyboard shortcuts, model picker, and input menu.
+ *
+ * Uses upstream extension points (added via patch-package) instead of
+ * monkey-patching internal methods:
+ *   - `allowSendDuringStreaming` on AgentInterface + MessageEditor
+ *   - `onKeyDown` callback on MessageEditor (return true to suppress default)
+ *   - `extraToolbarButtons` on MessageEditor (render custom buttons in toolbar)
  */
 function patchAgentInterface() {
 	const ai = chatPanel.agentInterface;
 	if (!ai) return;
 
-	// Override sendMessage to bypass isStreaming guard
-	ai.sendMessage = async (input: string, attachments?: any[]) => {
-		if (!input.trim() && (!attachments || attachments.length === 0)) return;
-		const session = ai.session;
-		if (!session) return;
-		if (!session.state.model) return;
+	// Enable sending during streaming (bypasses isStreaming guard in sendMessage
+	// and shows send+stop buttons together in the editor)
+	(ai as any).allowSendDuringStreaming = true;
 
-		// Clear editor
-		const editor = ai.querySelector("message-editor") as any;
-		if (editor) {
-			editor.value = "";
-			editor.attachments = [];
-		}
-
-		try {
-			// Extract images and document text from attachments
-			if (attachments && attachments.length > 0) {
-				const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-				const docTexts: string[] = [];
-
-				for (const att of attachments) {
-					if (att.type === "image") {
-						images.push({ type: "image", data: att.content, mimeType: att.mimeType });
-					} else if (att.extractedText) {
-						docTexts.push(att.extractedText);
-					}
-				}
-
-				// Append document text to the user message
-				const fullInput = docTexts.length > 0
-					? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
-					: input;
-
-				if (images.length > 0) {
-					await session.prompt(fullInput, images);
-				} else {
-					await session.prompt(fullInput);
-				}
-			} else {
-				await session.prompt(input);
-			}
-		} catch (err) {
-			console.error("Failed to send message:", err);
-			alert(err instanceof Error ? err.message : String(err));
-		}
-	};
-
-	// Patch the message-editor to allow sending during streaming.
-	// Wait a frame to ensure the editor has rendered.
-	requestAnimationFrame(() => patchMessageEditor(ai));
+	// Wait a frame for the editor to render, then configure it
+	requestAnimationFrame(() => configureMessageEditor(ai));
 }
 
 /**
- * Patch the message-editor's keyboard handler and add a send button
- * that's visible alongside the native stop button during streaming.
+ * Configure the message-editor via its public extension points.
  */
-function patchMessageEditor(ai: any) {
+function configureMessageEditor(ai: any) {
 	const editor = ai.querySelector("message-editor") as any;
 	if (!editor) return;
 
-	// Override handleKeyDown to allow Enter to send even while streaming
-	// (original blocks Enter when isStreaming=true)
-	// Cmd+Enter (or Ctrl+Enter): fork session and prompt in the fork
-	editor.handleKeyDown = (e: KeyboardEvent) => {
+	// Custom keyboard handler: Cmd+Enter forks, default Enter/Escape handled by upstream
+	editor.onKeyDown = (e: KeyboardEvent): boolean => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
 			e.preventDefault();
 			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
@@ -140,18 +96,13 @@ function patchMessageEditor(ai: any) {
 				editor.attachments = [];
 				handleForkAndPrompt(value, attachments);
 			}
-		} else if (e.key === "Enter" && !e.shiftKey) {
-			e.preventDefault();
-			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
-				editor.onSend?.(editor.value, editor.attachments);
-			}
-		} else if (e.key === "Escape" && editor.isStreaming) {
-			e.preventDefault();
-			editor.onAbort?.();
+			return true; // suppress default Enter handling
 		}
+		return false; // let upstream handle Enter, Escape, etc.
 	};
 
-	const customModelSelect = async () => {
+	// Custom model picker
+	editor.onModelSelect = async () => {
 		try {
 			const models = await agent.fetchAvailableModels();
 			const selected = await openModelPickerDialog(models as any, agent.state.model as any);
@@ -161,57 +112,15 @@ function patchMessageEditor(ai: any) {
 		}
 	};
 
-	// After every Lit render, ensure the input controls are present.
-	const injectInputControls = () => {
-		// Guard against infinite update loops: onModelSelect is a reactive property.
-		// Re-assign only if upstream replaced our handler.
-		if (editor.onModelSelect !== customModelSelect) {
-			editor.onModelSelect = customModelSelect;
-		}
+	// Input menu button (injected once via DOM, still needs the ensureInputMenuButton helper)
+	ensureInputMenuButton(editor, () => agent?.sessionFile);
 
-		ensureInputMenuButton(editor, () => agent?.sessionFile);
-
-		if (!editor.isStreaming) {
-			// Not streaming — remove injected send button if present
-			const existing = editor.querySelector(".injected-send-btn");
-			if (existing) existing.remove();
-			return;
-		}
-
-		// Already injected and still in DOM — nothing to do
-		if (editor.querySelector(".injected-send-btn")) return;
-
-		// Find the right-side toolbar div (contains the stop button)
-		const toolbarDivs = editor.querySelectorAll(".flex.gap-2.items-center");
-		const rightToolbar = toolbarDivs[toolbarDivs.length - 1];
-		if (!rightToolbar) return;
-
-		const sendBtn = document.createElement("button");
-		sendBtn.className = "injected-send-btn";
-		sendBtn.title = "Send message (steer)";
-		sendBtn.type = "button";
-		sendBtn.innerHTML = `<span style="transform: translateY(3px) rotate(-45deg); display: inline-flex;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg></span>`;
-		sendBtn.addEventListener("click", (ev: Event) => {
-			ev.preventDefault();
-			ev.stopPropagation();
-			if (editor.value.trim() || editor.attachments.length > 0) {
-				editor.onSend?.(editor.value, editor.attachments);
-			}
-		});
-		rightToolbar.appendChild(sendBtn);
-	};
-
-	// Hook into Lit's updated lifecycle to re-inject after every render
+	// Re-inject input menu after Lit re-renders (it can get removed)
 	const origUpdated = editor.updated?.bind(editor);
 	editor.updated = (changedProps: Map<string, any>) => {
 		origUpdated?.(changedProps);
-		injectInputControls();
+		ensureInputMenuButton(editor, () => agent?.sessionFile);
 	};
-
-	// Force a re-render so Lit picks up our new handleKeyDown
-	editor.requestUpdate();
-	// Initial sync after the forced re-render
-	editor.updateComplete.then(() => injectInputControls());
 }
 
 /** Watch the input area inside AgentInterface and sync its height to a CSS variable */
@@ -512,8 +421,7 @@ async function initApp() {
 		patchAgentInterface();
 		// Refresh steering queue for the new session (it's per-session now)
 		steeringQueue = agent.steeringQueue;
-		// Reset canvas tracking for the new session, then restore
-		resetCanvasTracking();
+		// Restore canvas if this session has one we haven't auto-opened yet
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		// Update JSONL panel with new session path
 		setJsonlSessionPath(agent.sessionFile);

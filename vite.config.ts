@@ -1,5 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, type Plugin } from "vite";
+import path from "node:path";
 
 const devPort = parseInt(process.env.DEV_PORT || "8111", 10);
 const backendPort = process.env.BACKEND_PORT || "18111";
@@ -41,11 +42,18 @@ function nodeStubPlugin(): Plugin {
 export default defineConfig({
 	plugins: [tailwindcss(), nodeStubPlugin()],
 	resolve: {
-		// Force Lit's production bundles in dev mode.  The "development" exports
-		// include a class-field-shadowing check that throws when compiled output
-		// (from tsgo in pi-web-ui) emits native class fields alongside legacy
-		// decorators.  The production bundles omit this DEV_MODE-only guard.
-		conditions: ["browser", "default"],
+		alias: [
+			{
+				// Resolve pi-web-ui JS/TS imports from TypeScript source so we only
+				// need to patch-package the .ts files (not compiled dist/).
+				// The CSS import (@mariozechner/pi-web-ui/app.css) must NOT match.
+				find: /^@mariozechner\/pi-web-ui$/,
+				replacement: path.resolve(
+					__dirname,
+					"node_modules/@mariozechner/pi-web-ui/src/index.ts",
+				),
+			},
+		],
 	},
 	esbuild: {
 		tsconfigRaw: {

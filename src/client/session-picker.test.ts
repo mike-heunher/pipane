@@ -609,6 +609,47 @@ describe("session-picker", () => {
 		});
 	});
 
+	describe("collapse expanded groups on session pick", () => {
+		it("collapses all expanded groups when a session is clicked", async () => {
+			const agent = new MockAgent();
+			const sessions: SessionInfoDTO[] = [];
+			for (let i = 0; i < 8; i++) {
+				sessions.push(
+					createSession({
+						name: `Session ${i + 1}`,
+						cwd: "/home/user/project",
+						lastUserPromptTime: `2026-02-28T${String(10 + i).padStart(2, "0")}:00:00.000Z`,
+					}),
+				);
+			}
+			agent.setSessions(sessions);
+
+			const el = await createPicker(agent);
+
+			// Initially truncated to 5
+			expect(getSessionItems(el)).toHaveLength(5);
+
+			// Expand the group
+			const showMoreBtn = getShowMoreButtons(el)[0];
+			showMoreBtn.click();
+			await el.updateComplete;
+			expect(getSessionItems(el)).toHaveLength(8);
+
+			// Click a session (not the active one)
+			const items = getSessionItems(el);
+			items[3].click();
+			await el.updateComplete;
+
+			// Group should be collapsed back to 5
+			expect(getSessionItems(el)).toHaveLength(5);
+
+			// "Show more" button should be back
+			const btns = getShowMoreButtons(el);
+			expect(btns).toHaveLength(1);
+			expect(btns[0].textContent).toContain("3 more");
+		});
+	});
+
 	describe("active session highlighting", () => {
 		it("marks the active session with the 'active' class", async () => {
 			const agent = new MockAgent();

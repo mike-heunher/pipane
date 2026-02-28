@@ -1,8 +1,95 @@
+diff --git a/node_modules/@mariozechner/pi-web-ui/src/components/AgentInterface.ts b/node_modules/@mariozechner/pi-web-ui/src/components/AgentInterface.ts
+index fd4872a..9e43d65 100644
+--- a/node_modules/@mariozechner/pi-web-ui/src/components/AgentInterface.ts
++++ b/node_modules/@mariozechner/pi-web-ui/src/components/AgentInterface.ts
+@@ -203,8 +203,15 @@ export class AgentInterface extends LitElement {
+ 		this._lastClientHeight = clientHeight;
+ 	};
+ 
++	/**
++	 * When true, sendMessage() bypasses the isStreaming guard,
++	 * allowing messages to be sent while the agent is running (steering).
++	 */
++	@property({ type: Boolean }) allowSendDuringStreaming = false;
++
+ 	public async sendMessage(input: string, attachments?: Attachment[]) {
+-		if ((!input.trim() && attachments?.length === 0) || this.session?.state.isStreaming) return;
++		if (!input.trim() && attachments?.length === 0) return;
++		if (this.session?.state.isStreaming && !this.allowSendDuringStreaming) return;
+ 		const session = this.session;
+ 		if (!session) throw new Error("No session set on AgentInterface");
+ 		if (!session.state.model) throw new Error("No model set on AgentInterface");
+@@ -354,6 +361,7 @@ export class AgentInterface extends LitElement {
+ 					<div class="max-w-3xl mx-auto px-2">
+ 						<message-editor
+ 							.isStreaming=${state.isStreaming}
++							.allowSendDuringStreaming=${this.allowSendDuringStreaming}
+ 							.currentModel=${state.model}
+ 							.thinkingLevel=${state.thinkingLevel}
+ 							.showAttachmentButton=${this.enableAttachments}
 diff --git a/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts b/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
-index 78e4423..ba05f09 100644
+index 78e4423..48ec6a3 100644
 --- a/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
 +++ b/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
-@@ -387,7 +387,7 @@ export class MessageEditor extends LitElement {
+@@ -39,6 +39,21 @@ export class MessageEditor extends LitElement {
+ 	@property() onModelSelect?: () => void;
+ 	@property() onThinkingChange?: (level: "off" | "minimal" | "low" | "medium" | "high") => void;
+ 	@property() onFilesChange?: (files: Attachment[]) => void;
++	/**
++	 * Custom keyboard handler. Called before the default handler.
++	 * Return true to prevent the default keydown behavior.
++	 */
++	@property() onKeyDown?: (e: KeyboardEvent) => boolean;
++	/**
++	 * When true, the send button is shown alongside the stop button during streaming,
++	 * and Enter sends even while streaming (for steering messages).
++	 */
++	@property({ type: Boolean }) allowSendDuringStreaming = false;
++	/**
++	 * Optional extra buttons to render in the right toolbar area,
++	 * between the model selector and the send/stop button.
++	 */
++	@property() extraToolbarButtons?: () => import("lit").TemplateResult;
+ 	@property() attachments: Attachment[] = [];
+ 	@property() maxFiles = 10;
+ 	@property() maxFileSize = 20 * 1024 * 1024; // 20MB
+@@ -60,9 +75,13 @@ export class MessageEditor extends LitElement {
+ 	};
+ 
+ 	private handleKeyDown = (e: KeyboardEvent) => {
++		// Custom handler gets first crack — return true to suppress default behavior
++		if (this.onKeyDown?.(e)) return;
++
+ 		if (e.key === "Enter" && !e.shiftKey) {
+ 			e.preventDefault();
+-			if (!this.isStreaming && !this.processingFiles && (this.value.trim() || this.attachments.length > 0)) {
++			const canSend = this.allowSendDuringStreaming || !this.isStreaming;
++			if (canSend && !this.processingFiles && (this.value.trim() || this.attachments.length > 0)) {
+ 				this.handleSend();
+ 			}
+ 		} else if (e.key === "Escape" && this.isStreaming) {
+@@ -370,9 +389,20 @@ export class MessageEditor extends LitElement {
+ 								`
+ 								: ""
+ 						}
++						${this.extraToolbarButtons?.() ?? ""}
+ 						${
+ 							this.isStreaming
+ 								? html`
++									${this.allowSendDuringStreaming ? html`
++										${Button({
++											variant: "ghost",
++											size: "icon",
++											onClick: this.handleSend,
++											disabled: (!this.value.trim() && this.attachments.length === 0) || this.processingFiles,
++											children: html`<span style="transform: translateY(3px) rotate(-45deg); display: inline-flex;">${icon(Send, "sm")}</span>`,
++											className: "h-8 w-8",
++										})}
++									` : ""}
+ 									${Button({
+ 										variant: "ghost",
+ 										size: "icon",
+@@ -387,7 +417,7 @@ export class MessageEditor extends LitElement {
  										size: "icon",
  										onClick: this.handleSend,
  										disabled: (!this.value.trim() && this.attachments.length === 0) || this.processingFiles,

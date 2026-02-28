@@ -19,6 +19,8 @@ export class MockAgent {
 	private _sessionChangeListeners = new Set<() => void>();
 	private _sessionsChangedListeners = new Set<(file: string) => void>();
 	private _globalStatusListeners = new Set<() => void>();
+	private _statusChangeListeners = new Set<() => void>();
+	private _sessionStatus: "virtual" | "attached" | "detached" = "virtual";
 
 	// ── Public API (matches WsAgentAdapter interface used by session-picker) ──
 
@@ -47,6 +49,19 @@ export class MockAgent {
 	onGlobalStatusChange(fn: () => void): () => void {
 		this._globalStatusListeners.add(fn);
 		return () => this._globalStatusListeners.delete(fn);
+	}
+
+	get sessionStatus(): "virtual" | "attached" | "detached" {
+		return this._sessionStatus;
+	}
+
+	set sessionStatus(status: "virtual" | "attached" | "detached") {
+		this._sessionStatus = status;
+	}
+
+	onStatusChange(fn: () => void): () => void {
+		this._statusChangeListeners.add(fn);
+		return () => this._statusChangeListeners.delete(fn);
 	}
 
 	async listSessions(): Promise<SessionInfoDTO[]> {
@@ -100,6 +115,11 @@ export class MockAgent {
 	/** Emit a global status change event (triggers status badge re-render). */
 	emitGlobalStatusChange() {
 		for (const fn of this._globalStatusListeners) fn();
+	}
+
+	/** Emit a status change event (triggers status-dependent UI updates). */
+	emitStatusChange() {
+		for (const fn of this._statusChangeListeners) fn();
 	}
 }
 

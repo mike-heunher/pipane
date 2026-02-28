@@ -91,12 +91,16 @@ export class ProcessPool {
 		const procId = ++this.nextProcId;
 		console.log(`[pool] Spawning pi process #${procId} (cwd: ${cwd})...`);
 
+		// Strip NODE_ENV from the child environment so tools spawned by pi
+		// (e.g. bash) don't inherit pi-web's "production" setting.
+		const { NODE_ENV: _, ...parentEnv } = process.env;
+
 		const child = spawn(this.spawnConfig.command, [
 			...this.spawnConfig.baseArgs,
 			...(this.spawnConfig.extraArgs ?? []),
 		], {
 			cwd,
-			env: { ...process.env, ...(this.spawnConfig.env ?? {}) },
+			env: { ...parentEnv, ...(this.spawnConfig.env ?? {}) },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 

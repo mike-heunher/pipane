@@ -534,6 +534,7 @@ export class SessionPicker extends LitElement {
 	private unsubSessionChange?: () => void;
 	private unsubSessionsChanged?: () => void;
 	private unsubGlobalStatus?: () => void;
+	private unsubStatusChange?: () => void;
 
 	connectedCallback() {
 		super.connectedCallback();
@@ -552,6 +553,12 @@ export class SessionPicker extends LitElement {
 			this.unsubGlobalStatus = this.agent.onGlobalStatusChange(() => {
 				this.requestUpdate();
 			});
+			this.unsubStatusChange = this.agent.onStatusChange(() => {
+				// Clear search filter when a prompt is sent (session becomes attached/streaming)
+				if (this.agent.sessionStatus === "attached") {
+					this.clearSearchFilter();
+				}
+			});
 		}
 	}
 
@@ -560,6 +567,7 @@ export class SessionPicker extends LitElement {
 		this.unsubSessionChange?.();
 		this.unsubSessionsChanged?.();
 		this.unsubGlobalStatus?.();
+		this.unsubStatusChange?.();
 	}
 
 	/**
@@ -706,6 +714,10 @@ export class SessionPicker extends LitElement {
 
 	private async handleSessionClick(session: SessionInfoDTO) {
 		if (session.id === this.agent?.sessionId) return;
+		// Collapse all expanded groups when picking a session
+		if (this.expandedGroups.size > 0) {
+			this.expandedGroups = new Set();
+		}
 		try {
 			await this.agent.switchSession(session.path);
 		} catch (err) {
@@ -714,6 +726,7 @@ export class SessionPicker extends LitElement {
 	}
 
 	private async handleNewSessionInGroup(cwd: string) {
+		this.clearSearchFilter();
 		try {
 			await this.agent.newSession(cwd);
 		} catch (err) {
@@ -768,6 +781,13 @@ export class SessionPicker extends LitElement {
 		this.searchQuery = (e.target as HTMLInputElement).value;
 	}
 
+	/** Clear the session search filter (e.g. after creating a new session or sending input). */
+	private clearSearchFilter() {
+		if (this.searchQuery) {
+			this.searchQuery = "";
+		}
+	}
+
 	// ── Folder picker ───────────────────────────────────────────────────────
 
 	private openFolderPicker() {
@@ -814,6 +834,7 @@ export class SessionPicker extends LitElement {
 
 	private handleFolderSelect() {
 		this.showFolderPicker = false;
+		this.clearSearchFilter();
 		this.agent.newSession(this.folderPath);
 	}
 
