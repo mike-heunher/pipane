@@ -136,6 +136,7 @@ interface RpcProcess {
 	onAgentEnd: (() => void) | null;
 }
 
+const POOL_SIZE = 3;
 let nextProcId = 0;
 const pool: RpcProcess[] = [];
 /** Map from session path → attached RPC process */
@@ -290,6 +291,35 @@ function releasePi(proc: RpcProcess) {
 	proc.attachedSession = null;
 	proc.eventTarget = null;
 	proc.sessionPath = null;
+	// Replenish pool if a process died while attached
+	ensurePoolSize();
+}
+
+/**
+ * Ensure the pool has at least POOL_SIZE live processes.
+ * Spawns new ones if needed (non-blocking).
+ */
+function ensurePoolSize() {
+	const alive = pool.filter((p) => p.process.exitCode === null).length;
+	const needed = POOL_SIZE - alive;
+	for (let i = 0; i < needed; i++) {
+		spawnRpcProcess();
+	}
+}
+
+/**
+ * Get any live pi process (idle preferred), or spawn one.
+ */
+async function getOrSpawnIdlePi(): Promise<RpcProcess> {
+	let proc = pool.find((p) => !p.attachedSession && p.process.exitCode === null);
+	if (!proc) {
+		proc = pool.find((p) => p.process.exitCode === null);
+	}
+	if (!proc) {
+		proc = spawnRpcProcess();
+		await new Promise((resolve) => setTimeout(resolve, 500));
+	}
+	return proc;
 }
 
 /**
@@ -505,14 +535,22 @@ wss.on("connection", async (ws) => {
 
 				// ── Get available models (needs any pi process) ─────────
 				case "get_available_models": {
-					// Use any idle process, or spawn one
-					let proc = pool.find((p) => p.process.exitCode === null);
-					if (!proc) {
-						proc = spawnRpcProcess();
-						await new Promise((resolve) => setTimeout(resolve, 500));
-					}
+					const proc = await getOrSpawnIdlePi();
 					const response = await sendRpc(proc, { type: "get_available_models" });
 					ws.send(JSON.stringify({ ...response, id, command: "get_available_models" }));
+					break;
+				}
+
+				// ── Get default model and thinking level from pi's config ─
+				case "get_default_model": {
+					const proc = await getOrSpawnIdlePi();
+					const stateResp = await sendRpc(proc, { type: "get_state" });
+					const model = stateResp.data?.model ?? null;
+					const thinkingLevel = stateResp.data?.thinkingLevel ?? "off";
+					ws.send(JSON.stringify({
+						id, type: "response", command: "get_default_model",
+						success: true, data: { model, thinkingLevel },
+					}));
 					break;
 				}
 
@@ -585,6 +623,10 @@ function startSessionsWatcher(): FSWatcher | null {
 }
 
 startSessionsWatcher();
+
+// Eagerly start pi process pool
+console.log(`[pool] Starting ${POOL_SIZE} pi processes...`);
+ensurePoolSize();
 
 server.listen(PORT, () => {
 	console.log(`pi-web server listening on http://localhost:${PORT}`);

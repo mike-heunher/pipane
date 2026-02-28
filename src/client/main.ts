@@ -150,7 +150,8 @@ async function initApp() {
 		renderApp();
 	});
 
-	// Start with a virtual new session
+	// Load models and start with a virtual new session
+	await agent.loadDefaultModel();
 	await agent.newSession();
 
 	renderApp();

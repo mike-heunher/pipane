@@ -276,6 +276,26 @@ export class WsAgentAdapter {
 		});
 	}
 
+	// ── Models ─────────────────────────────────────────────────────────────
+
+	/** Fetch available models from the server (uses any idle pi process) */
+	async fetchAvailableModels(): Promise<any[]> {
+		const data = await this.send({ type: "get_available_models" });
+		return data?.models ?? [];
+	}
+
+	/** Load the default model from the pi process (respects user's settings) */
+	async loadDefaultModel(): Promise<void> {
+		if (this._state.model) return;
+		const data = await this.send({ type: "get_default_model" });
+		if (data?.model) {
+			this._state.model = data.model;
+		}
+		if (data?.thinkingLevel) {
+			this._state.thinkingLevel = data.thinkingLevel;
+		}
+	}
+
 	// ── Fetch messages from JSONL (REST) ───────────────────────────────────
 
 	async fetchMessagesFromDisk(): Promise<void> {
@@ -288,10 +308,19 @@ export class WsAgentAdapter {
 			const data = await res.json();
 			this._state.messages = data.messages ?? [];
 
-			// Restore model/thinking from session if not already set by user
-			if (data.model && !this._state.model) {
-				// We don't set model here — the user picks it via the UI
-				// But we could show what model was last used
+			// Restore model/thinking level from session context
+			if (data.model) {
+				// Find the matching model from available models
+				const models = await this.fetchAvailableModels();
+				const match = models.find(
+					(m: any) => m.provider === data.model.provider && m.id === data.model.modelId,
+				);
+				if (match) {
+					this._state.model = match;
+				}
+			}
+			if (data.thinkingLevel) {
+				this._state.thinkingLevel = data.thinkingLevel;
 			}
 
 			this.emitContentChange();
