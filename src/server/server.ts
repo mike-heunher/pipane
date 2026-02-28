@@ -17,7 +17,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { unlink, appendFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
@@ -28,8 +28,6 @@ import {
 	buildSessionContext,
 	parseSessionEntries,
 } from "@mariozechner/pi-coding-agent";
-import { completeSimple, getModel } from "@mariozechner/pi-ai";
-
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
@@ -41,175 +39,6 @@ const PI_CLI = process.env.PI_CLI || path.resolve(
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
-
-// ============================================================================
-// Auto-Title Generation
-// ============================================================================
-
-/** Map from provider to a cheap/fast model suitable for summarization. */
-const CHEAP_MODELS: Record<string, { provider: string; modelId: string }> = {
-	anthropic: { provider: "anthropic", modelId: "claude-haiku-4-5" },
-	openai: { provider: "openai", modelId: "gpt-4o-mini" },
-	google: { provider: "google", modelId: "gemini-2.0-flash-lite" },
-	"google-vertex": { provider: "google-vertex", modelId: "gemini-2.0-flash-lite" },
-	"google-gemini-cli": { provider: "google", modelId: "gemini-2.0-flash-lite" },
-	"google-antigravity": { provider: "google", modelId: "gemini-2.0-flash-lite" },
-	xai: { provider: "xai", modelId: "grok-2" },
-	groq: { provider: "groq", modelId: "gemma2-9b-it" },
-	"amazon-bedrock": { provider: "amazon-bedrock", modelId: "anthropic.claude-haiku-4-5-20251001-v1:0" },
-	openrouter: { provider: "openrouter", modelId: "anthropic/claude-haiku-4-5" },
-};
-
-/**
- * After a turn ends, generate or update the session title.
- * Uses a cheap model from the same provider the session is already using.
- * If a title already exists, it's provided to the model with instructions
- * to keep it unless the conversation's trajectory has changed significantly.
- * Appends a session_info entry to the JSONL and notifies the WS client.
- */
-async function autoTitleSession(sessionPath: string, ws: WebSocket | null): Promise<void> {
-	try {
-		if (!existsSync(sessionPath)) return;
-
-		const content = readFileSync(sessionPath, "utf8");
-		const entries = parseSessionEntries(content);
-
-		// Find existing name (latest session_info with a name)
-		let currentName: string | undefined;
-		for (let i = entries.length - 1; i >= 0; i--) {
-			if ((entries[i] as any).type === "session_info" && (entries[i] as any).name) {
-				currentName = (entries[i] as any).name;
-				break;
-			}
-		}
-
-		const context = buildSessionContext(entries as any);
-		if (!context.messages || context.messages.length === 0) return;
-
-		// Find the provider from the session's model_change entries
-		let provider: string | undefined;
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const entry = entries[i] as any;
-			if (entry.type === "model_change" && entry.provider) {
-				provider = entry.provider;
-				break;
-			}
-		}
-		if (!provider) return;
-
-		// Resolve cheap model
-		const cheapSpec = CHEAP_MODELS[provider];
-		if (!cheapSpec) {
-			console.log(`[auto-title] No cheap model mapping for provider "${provider}", skipping`);
-			return;
-		}
-
-		const model = getModel(cheapSpec.provider as any, cheapSpec.modelId as any);
-		if (!model) {
-			console.log(`[auto-title] Model ${cheapSpec.provider}/${cheapSpec.modelId} not found, skipping`);
-			return;
-		}
-
-		// Build a condensed transcript: only user and assistant text messages (skip tool calls/results)
-		const transcript: string[] = [];
-		for (const msg of context.messages) {
-			if (msg.role === "user") {
-				const text = typeof msg.content === "string"
-					? msg.content
-					: msg.content.filter((c) => c.type === "text").map((c) => (c as any).text).join(" ");
-				if (text) transcript.push(`User: ${text}`);
-			} else if (msg.role === "assistant") {
-				const text = msg.content
-					.filter((c) => c.type === "text")
-					.map((c) => (c as any).text)
-					.join(" ");
-				if (text) transcript.push(`Assistant: ${text}`);
-			}
-		}
-
-		if (transcript.length === 0) return;
-
-		// Truncate to avoid sending too much to the cheap model
-		const truncated = transcript.join("\n").slice(0, 4000);
-
-		console.log(`[auto-title] Generating title for ${path.basename(sessionPath)} via ${cheapSpec.provider}/${cheapSpec.modelId}${currentName ? ` (current: "${currentName}")` : ""}...`);
-
-		// Build the prompt: if there's an existing name, instruct the model to keep it unless trajectory changed
-		let userPrompt: string;
-		if (currentName) {
-			userPrompt = `The current title of this conversation is: "${currentName}"\n\nSummarize this conversation in 12 words or less. If the current title still accurately describes the conversation, respond with the EXACT same title. Only change it if the conversation's trajectory has shifted significantly.\n\n${truncated}`;
-		} else {
-			userPrompt = `Summarize this conversation in 12 words or less. Be specific and descriptive about what was discussed or accomplished.\n\n${truncated}`;
-		}
-
-		const result = await completeSimple(model, {
-			systemPrompt: "You are a helpful assistant that summarizes conversations. Respond with ONLY the summary, nothing else. No quotes, no punctuation at the end, no prefixes.\n\nGood examples:\n- Added a prompt summarization feature\n- Debugging issue with input\n\nBad examples:\n- The user asked to debug an issue with input.\n- We discussed adding a prompt summarization feature to the system.",
-			messages: [
-				{
-					role: "user",
-					content: userPrompt,
-					timestamp: Date.now(),
-				},
-			],
-		}, {
-			maxTokens: 30,
-			temperature: 0,
-		});
-
-		// Extract text from the response
-		const title = result.content
-			.filter((c) => c.type === "text")
-			.map((c) => (c as any).text)
-			.join("")
-			.trim()
-			.replace(/^["']|["']$/g, "")  // strip wrapping quotes
-			.replace(/\.+$/, "");           // strip trailing periods
-
-		if (!title || title.length === 0) return;
-
-		// Skip writing if the title hasn't changed
-		if (currentName && title === currentName) {
-			console.log(`[auto-title] Title unchanged: "${title}"`);
-			return;
-		}
-
-		console.log(`[auto-title] ${currentName ? "Updated" : "Generated"}: "${title}"`);
-
-		// Generate a unique ID for the entry
-		const id = Math.random().toString(36).slice(2, 10);
-
-		// Find the last entry's id to use as parentId
-		let parentId: string | null = null;
-		for (let i = entries.length - 1; i >= 0; i--) {
-			if ((entries[i] as any).id) {
-				parentId = (entries[i] as any).id;
-				break;
-			}
-		}
-
-		// Append session_info entry to the JSONL file
-		const infoEntry = {
-			type: "session_info",
-			id,
-			parentId,
-			timestamp: new Date().toISOString(),
-			name: title,
-		};
-
-		await appendFile(sessionPath, "\n" + JSON.stringify(infoEntry) + "\n");
-
-		// Notify the connected WS client about the title update
-		if (ws && ws.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({
-				type: "session_auto_titled",
-				sessionPath,
-				title,
-			}));
-		}
-	} catch (err: any) {
-		console.error(`[auto-title] Failed for ${path.basename(sessionPath)}: ${err.message}`);
-	}
-}
 
 // Serve static files in production
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -223,25 +52,62 @@ app.use(express.static(clientDist));
 app.get("/api/sessions", async (_req, res) => {
 	try {
 		const sessions = await SessionManager.listAll();
-		const result = sessions.map((s) => ({
-			id: s.id,
-			path: s.path,
-			cwd: s.cwd,
-			name: s.name,
-			created: s.created.toISOString(),
-			modified: s.modified.toISOString(),
-			messageCount: s.messageCount,
-			firstMessage: s.firstMessage,
-		}));
+		const result = sessions.map((s) => {
+			// Extract last user prompt timestamp from the session file
+			let lastUserPromptTime: string | undefined;
+			try {
+				if (existsSync(s.path)) {
+					const content = readFileSync(s.path, "utf8");
+					const entries = parseSessionEntries(content);
+					let latestUserTs = 0;
+					for (const entry of entries) {
+						if ((entry as any).type !== "message") continue;
+						const msg = (entry as any).message;
+						if (!msg || msg.role !== "user") continue;
+						// Check message timestamp first (epoch ms), then entry timestamp (ISO string)
+						if (typeof msg.timestamp === "number" && msg.timestamp > latestUserTs) {
+							latestUserTs = msg.timestamp;
+						} else if (typeof (entry as any).timestamp === "string") {
+							const t = new Date((entry as any).timestamp).getTime();
+							if (!Number.isNaN(t) && t > latestUserTs) {
+								latestUserTs = t;
+							}
+						}
+					}
+					if (latestUserTs > 0) {
+						lastUserPromptTime = new Date(latestUserTs).toISOString();
+					}
+				}
+			} catch {
+				// Ignore errors - lastUserPromptTime will be undefined
+			}
+
+			return {
+				id: s.id,
+				path: s.path,
+				cwd: s.cwd,
+				name: s.name,
+				created: s.created.toISOString(),
+				modified: s.modified.toISOString(),
+				lastUserPromptTime,
+				messageCount: s.messageCount,
+				firstMessage: s.firstMessage,
+			};
+		});
 		res.json(result);
 	} catch (err: any) {
 		res.status(500).json({ error: err.message });
 	}
 });
 
-app.delete("/api/sessions", express.json(), async (req, res) => {
+app.delete("/api/sessions", async (req, res) => {
 	try {
-		const { path: sessionPath } = req.body;
+		// Manually parse JSON body to avoid express.json() / body-parser dependency issues
+		const chunks: Buffer[] = [];
+		for await (const chunk of req) chunks.push(chunk);
+		const body = JSON.parse(Buffer.concat(chunks).toString());
+
+		const { path: sessionPath } = body;
 		if (!sessionPath || typeof sessionPath !== "string") {
 			res.status(400).json({ error: "Missing session path" });
 			return;
@@ -339,6 +205,21 @@ let nextProcId = 0;
 const pool: RpcProcess[] = [];
 /** Map from session path → attached RPC process */
 const attachedSessions = new Map<string, RpcProcess>();
+
+/**
+ * Persistent (for server lifetime) session status tracking.
+ * "running" = pi process currently attached and executing a turn.
+ * "done"    = pi process was attached at some point and has since detached.
+ * Absent    = never had a pi process attached during this server run.
+ */
+const sessionStatus = new Map<string, "running" | "done">();
+
+/** Get all session statuses as a plain object for sending over WS. */
+function getSessionStatuses(): Record<string, "running" | "done"> {
+	const result: Record<string, "running" | "done"> = {};
+	for (const [k, v] of sessionStatus) result[k] = v;
+	return result;
+}
 
 function spawnRpcProcess(cwd?: string): RpcProcess {
 	const procId = ++nextProcId;
@@ -471,6 +352,7 @@ async function acquirePi(sessionPath: string, ws: WebSocket): Promise<RpcProcess
 	proc.eventTarget = ws;
 	proc.sessionPath = sessionPath;
 	attachedSessions.set(sessionPath, proc);
+	sessionStatus.set(sessionPath, "running");
 
 	await sendRpc(proc, { type: "switch_session", sessionPath });
 
@@ -486,6 +368,7 @@ function releasePi(proc: RpcProcess) {
 	console.log(`[pool] pi#${proc.id} released from ${sessionPath ? path.basename(sessionPath) : "?"}`);
 	if (sessionPath) {
 		attachedSessions.delete(sessionPath);
+		sessionStatus.set(sessionPath, "done");
 	}
 	proc.attachedSession = null;
 	proc.eventTarget = null;
@@ -519,13 +402,6 @@ async function getOrSpawnIdlePi(): Promise<RpcProcess> {
 		await new Promise((resolve) => setTimeout(resolve, 500));
 	}
 	return proc;
-}
-
-/**
- * Get the list of currently attached session paths.
- */
-function getAttachedSessions(): string[] {
-	return Array.from(attachedSessions.keys());
 }
 
 // ============================================================================
@@ -625,10 +501,10 @@ wss.on("connection", async (ws) => {
 	}
 	connectedWs = ws;
 
-	// Send initial state: which sessions are attached
+	// Send initial state: all session statuses (running/done) tracked this server lifetime
 	ws.send(JSON.stringify({
 		type: "init",
-		attachedSessions: getAttachedSessions(),
+		sessionStatuses: getSessionStatuses(),
 	}));
 
 	ws.on("message", async (raw) => {
@@ -675,6 +551,7 @@ wss.on("connection", async (ws) => {
 						proc.eventTarget = ws;
 						proc.sessionPath = sessionPath;
 						attachedSessions.set(sessionPath, proc);
+						sessionStatus.set(sessionPath, "running");
 					} else {
 						proc = await acquirePi(sessionPath, ws);
 					}
@@ -691,8 +568,15 @@ wss.on("connection", async (ws) => {
 						await sendRpc(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 					}
 
-					// Notify client that session is now attached (with resolved path)
-					ws.send(JSON.stringify({ type: "session_attached", sessionPath }));
+					// Notify client that session is now attached (with resolved path).
+					// Include cwd + firstMessage so the client can optimistically
+					// show the session in the sidebar before the JSONL scan catches up.
+					ws.send(JSON.stringify({
+						type: "session_attached",
+						sessionPath,
+						cwd: command.cwd || PI_CWD,
+						firstMessage: command.message,
+					}));
 
 					// Set up agent_end callback to release pi after turn
 					proc.onAgentEnd = () => {
@@ -700,12 +584,14 @@ wss.on("connection", async (ws) => {
 						if (ws.readyState === WebSocket.OPEN) {
 							ws.send(JSON.stringify({ type: "session_detached", sessionPath }));
 						}
-						// Auto-generate a title for untitled sessions (fire-and-forget)
-						autoTitleSession(sessionPath, ws);
 					};
 
 					// Send the prompt (returns immediately, events stream async)
-					const response = await sendRpc(proc, { type: "prompt", message: command.message });
+					const promptCmd: any = { type: "prompt", message: command.message };
+					if (command.images && command.images.length > 0) {
+						promptCmd.images = command.images;
+					}
+					const response = await sendRpc(proc, promptCmd);
 					ws.send(JSON.stringify({ ...response, id, command: "prompt" }));
 					break;
 				}
@@ -768,6 +654,15 @@ wss.on("connection", async (ws) => {
 					ws.send(JSON.stringify({
 						id, type: "response", command: "get_default_model",
 						success: true, data: { model, thinkingLevel },
+					}));
+					break;
+				}
+
+				// ── Get session statuses (no pi needed) ─────────────────
+				case "get_session_statuses": {
+					ws.send(JSON.stringify({
+						id, type: "response", command: "get_session_statuses",
+						success: true, data: { statuses: getSessionStatuses() },
 					}));
 					break;
 				}
