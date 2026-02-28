@@ -133,18 +133,23 @@ function patchMessageEditor(ai: any) {
 		}
 	};
 
+	const customModelSelect = async () => {
+		try {
+			const models = await agent.fetchAvailableModels();
+			const selected = await selectModelFromAvailable(models as any, agent.state.model as any, (msg) => Promise.resolve(window.prompt(msg)));
+			if (selected) agent.setModel(selected as any);
+		} catch (err) {
+			console.error("Failed to open model picker:", err);
+		}
+	};
+
 	// After every Lit render, ensure the input controls are present.
 	const injectInputControls = () => {
-		// Re-apply on every render because AgentInterface rebinds callbacks.
-		editor.onModelSelect = async () => {
-			try {
-				const models = await agent.fetchAvailableModels();
-				const selected = await selectModelFromAvailable(models as any, agent.state.model as any, (msg) => Promise.resolve(window.prompt(msg)));
-				if (selected) agent.setModel(selected as any);
-			} catch (err) {
-				console.error("Failed to open model picker:", err);
-			}
-		};
+		// Guard against infinite update loops: onModelSelect is a reactive property.
+		// Re-assign only if upstream replaced our handler.
+		if (editor.onModelSelect !== customModelSelect) {
+			editor.onModelSelect = customModelSelect;
+		}
 
 		ensureInputMenuButton(editor, () => agent?.sessionFile);
 
