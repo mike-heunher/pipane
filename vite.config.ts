@@ -40,6 +40,13 @@ function nodeStubPlugin(): Plugin {
 
 export default defineConfig({
 	plugins: [tailwindcss(), nodeStubPlugin()],
+	resolve: {
+		// Force Lit's production bundles in dev mode.  The "development" exports
+		// include a class-field-shadowing check that throws when compiled output
+		// (from tsgo in pi-web-ui) emits native class fields alongside legacy
+		// decorators.  The production bundles omit this DEV_MODE-only guard.
+		conditions: ["browser", "default"],
+	},
 	esbuild: {
 		tsconfigRaw: {
 			compilerOptions: {
