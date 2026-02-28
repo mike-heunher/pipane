@@ -260,52 +260,29 @@ describe("Rerun duplicate rendering bug", () => {
 		expect(allToolIds.length).toBe(uniqueToolIds.size);
 	});
 
-	it("should NOT duplicate when session_detached fetchMessagesFromDisk races with new rerun events", async () => {
+	it("session_detached followed by rerun has no race (server pushes authoritative state)", async () => {
 		const { adapter, simulateServerMessage } = setupWithAbortedRun();
-
-		// Mock fetchMessagesFromDisk to simulate a slow network response
-		let resolveFetch: (() => void) | null = null;
-		const originalFetch = (adapter as any).fetchMessagesFromDisk.bind(adapter);
 
 		// Track content changes
 		let contentChanges = 0;
 		adapter.onContentChange(() => contentChanges++);
 
-		// Save the current messages (what JSONL would return)
-		const jsonlMessages = [...adapter.state.messages];
-
-		// Override fetch to be controllable
-		const fetchCalls: Array<{ resolve: () => void }> = [];
-		(globalThis as any).fetch = vi.fn().mockImplementation((url: string) => {
-			if (url.includes("/api/sessions/messages")) {
-				return new Promise((resolve) => {
-					fetchCalls.push({
-						resolve: () => {
-							resolve({
-								ok: true,
-								json: () =>
-									Promise.resolve({
-										messages: [...jsonlMessages],
-									}),
-							});
-						},
-					});
-				});
-			}
-			return Promise.reject(new Error("unexpected fetch: " + url));
-		});
-
-		// Simulate: session_detached from previous run → triggers fetchMessagesFromDisk
+		// Simulate: session_detached from previous run
+		// In the new architecture, the server pushes session_messages after detach
+		// so there's no client-side fetch to race with.
 		simulateServerMessage({
 			type: "session_detached",
 			sessionPath: SESSION_PATH,
 		});
 
-		// fetchMessagesFromDisk is in flight (fetch hasn't resolved yet)
-		expect(fetchCalls.length).toBe(1);
+		// Server pushes final state (authoritative, from disk)
+		simulateServerMessage({
+			type: "session_messages",
+			sessionPath: SESSION_PATH,
+			messages: [...adapter.state.messages], // same messages (the aborted run)
+		});
 
-		// Now user clicks rerun while fetch is still pending
-		// Server processes quickly and sends session_attached + events
+		// Now user clicks rerun — server attaches and streams
 		simulateServerMessage({
 			type: "session_attached",
 			sessionPath: SESSION_PATH,
@@ -333,24 +310,13 @@ describe("Rerun duplicate rendering bug", () => {
 			message: newAssistant,
 		});
 
-		simulateServerMessage({
-			type: "tool_execution_start",
-			sessionPath: SESSION_PATH,
-			toolCallId: newToolCallId,
-		});
-
-		// At this point, if events were buffered (fix applied),
-		// they haven't been processed yet. If NOT buffered, they
-		// were processed and state.messages was modified.
-
-		// Now the slow fetch resolves
-		fetchCalls[0].resolve();
-		await new Promise((r) => setTimeout(r, 50));
-
-		// Check for duplicates
+		// Should have exactly 2 assistant messages (old aborted + new rerun)
 		const assistantMsgs = adapter.state.messages.filter(
 			(m: any) => m.role === "assistant",
 		);
+		expect(assistantMsgs.length).toBe(2);
+
+		// No duplicate tool call IDs
 		const bashToolUseIds = assistantMsgs.flatMap((m: any) =>
 			Array.isArray(m.content)
 				? m.content
@@ -358,22 +324,6 @@ describe("Rerun duplicate rendering bug", () => {
 					.map((c: any) => c.id)
 				: [],
 		);
-
-		console.log(
-			"[race test] assistant messages:",
-			assistantMsgs.length,
-			"tool_use IDs:",
-			bashToolUseIds,
-		);
-		console.log(
-			"[race test] all messages by role:",
-			adapter.state.messages.map((m: any) => m.role),
-		);
-
-		// Should have exactly 2 assistant messages (old aborted + new rerun)
-		expect(assistantMsgs.length).toBe(2);
-
-		// No duplicate tool call IDs
 		expect(bashToolUseIds.length).toBe(new Set(bashToolUseIds).size);
 	});
 

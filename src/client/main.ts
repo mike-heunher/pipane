@@ -26,6 +26,7 @@ import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened, resetCanvasTracking } from "./canvas-panel.js";
+import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
@@ -294,6 +295,16 @@ const renderApp = () => {
 					<span class="text-base font-semibold text-foreground">pi web</span>
 				</div>
 				<div class="flex items-center gap-1 px-2">
+					<button
+						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${isJsonlPanelVisible() ? 'text-foreground bg-accent' : ''}"
+						@click=${() => { toggleJsonlPanel(); }}
+						title="Toggle raw JSONL viewer"
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<polyline points="16 18 22 12 16 6"></polyline>
+							<polyline points="8 6 2 12 8 18"></polyline>
+						</svg>
+					</button>
 					<theme-toggle></theme-toggle>
 				</div>
 			</div>
@@ -325,6 +336,9 @@ const renderApp = () => {
 						${isCanvasVisible()
 							? html`<div id="canvas-container" class="canvas-container border-l border-border"></div>`
 							: ""}
+						${isJsonlPanelVisible()
+							? html`<div id="jsonl-container" class="jsonl-container border-l border-border"></div>`
+							: ""}
 					</div>
 				</div>
 			</div>
@@ -339,6 +353,10 @@ const renderApp = () => {
 		const canvasEl = document.getElementById("canvas-container");
 		if (canvasEl) {
 			initCanvas(canvasEl, renderApp);
+		}
+		const jsonlEl = document.getElementById("jsonl-container");
+		if (jsonlEl) {
+			initJsonlPanel(jsonlEl, renderApp);
 		}
 	});
 };
@@ -426,7 +444,13 @@ async function initApp() {
 	// but between message_end and agent_end (while tools are executing)
 	// the streaming container still holds the old streamMessage.
 	agent.subscribe((ev) => {
+		// Update JSONL panel path when session gets created (virtual → attached)
+		if (ev.type === "agent_start" || ev.type === "agent_end") {
+			setJsonlSessionPath(agent.sessionFile);
+			refreshJsonlPanel();
+		}
 		if (ev.type === "message_end") {
+			refreshJsonlPanel();
 			const ai = chatPanel.agentInterface;
 			if (ai) {
 				const sc = ai.querySelector("streaming-message-container") as any;
@@ -466,6 +490,8 @@ async function initApp() {
 		// Reset canvas tracking for the new session, then restore
 		resetCanvasTracking();
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
+		// Update JSONL panel with new session path
+		setJsonlSessionPath(agent.sessionFile);
 		renderApp();
 	});
 
@@ -478,6 +504,8 @@ async function initApp() {
 		}
 		// Restore canvas state from refreshed messages (won't reopen if already shown)
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
+		// Refresh JSONL panel
+		refreshJsonlPanel();
 	});
 
 	// Status change (attached/detached): update header badge & abort button

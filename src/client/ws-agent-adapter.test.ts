@@ -512,84 +512,32 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("message de-duplication when switching to running session", () => {
-		it("does not duplicate assistant messages loaded from disk when message_end arrives", async () => {
+	describe("server-pushed session_messages replaces state", () => {
+		it("session_messages push replaces messages completely", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 
-			// Simulate messages loaded from disk (as if fetchMessagesFromDisk ran)
-			const toolCallId = "tool_abc123";
-			const assistantMsg = {
-				role: "assistant",
-				content: [
-					{ type: "text", text: "" },
-					{ type: "tool_use", id: toolCallId, name: "bash", input: { command: "sleep 150" } },
+			// Start with some messages
+			(adapter as any)._state.messages = [
+				{ role: "user", content: "old message", timestamp: 999 },
+			];
+
+			// Server pushes new message state
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [
+					{ role: "user", content: "hello", timestamp: 1000 },
+					{ role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 1001 },
 				],
-				timestamp: 1000,
-			};
-			const toolResult = {
-				role: "tool",
-				tool_use_id: toolCallId,
-				content: [{ type: "text", text: "done" }],
-				timestamp: 1001,
-			};
-			(adapter as any)._state.messages = [
-				{ role: "user", content: "do it again", timestamp: 999 },
-				assistantMsg,
-				toolResult,
-			];
-
-			// Mark as running (switched to a running session)
-			(adapter as any)._globalSessionStatus.set(sessionPath, "running");
-			(adapter as any)._state.isStreaming = true;
-
-			// Now simulate message_end arriving for the same assistant message
-			(adapter as any).updateState({
-				type: "message_end",
-				message: { ...assistantMsg },
 			});
 
-			// The assistant message should NOT be duplicated
-			const assistantMsgs = adapter.state.messages.filter(
-				(m: any) => m.role === "assistant",
-			);
-			expect(assistantMsgs).toHaveLength(1);
+			expect(adapter.state.messages).toHaveLength(2);
+			expect(adapter.state.messages[0].role).toBe("user");
+			expect(adapter.state.messages[1].role).toBe("assistant");
 		});
 
-		it("does not duplicate tool results loaded from disk when turn_end arrives", async () => {
-			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter } = setupWithSession(sessionPath);
-
-			const toolCallId = "tool_abc123";
-			const toolResult = {
-				role: "tool",
-				tool_use_id: toolCallId,
-				content: [{ type: "text", text: "done" }],
-				timestamp: 1001,
-			};
-			(adapter as any)._state.messages = [
-				{ role: "user", content: "test", timestamp: 999 },
-				{
-					role: "assistant",
-					content: [{ type: "tool_use", id: toolCallId, name: "bash", input: { command: "sleep 150" } }],
-					timestamp: 1000,
-				},
-				toolResult,
-			];
-
-			// Simulate turn_end arriving with the same tool result
-			(adapter as any).updateState({
-				type: "turn_end",
-				message: { role: "assistant", content: [], timestamp: 1000 },
-				toolResults: [{ ...toolResult }],
-			});
-
-			// Tool result should NOT be duplicated
-			const toolMsgs = adapter.state.messages.filter((m: any) => m.role === "tool");
-			expect(toolMsgs).toHaveLength(1);
-		});
-
-		it("still appends genuinely new messages", async () => {
+		it("streaming message_end appends to messages", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
 
@@ -597,7 +545,6 @@ describe("WsAgentAdapter prompt routing", () => {
 				{ role: "user", content: "test", timestamp: 999 },
 			];
 
-			// New assistant message (not loaded from disk)
 			(adapter as any).updateState({
 				type: "message_end",
 				message: {
@@ -609,6 +556,26 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			expect(adapter.state.messages).toHaveLength(2);
 			expect(adapter.state.messages[1].role).toBe("assistant");
+		});
+
+		it("turn_end appends tool results", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			(adapter as any)._state.messages = [
+				{ role: "user", content: "test", timestamp: 999 },
+			];
+
+			(adapter as any).updateState({
+				type: "turn_end",
+				message: { role: "assistant", content: [], timestamp: 1000 },
+				toolResults: [
+					{ role: "tool", tool_use_id: "tool_1", content: [{ type: "text", text: "output" }], timestamp: 1001 },
+				],
+			});
+
+			expect(adapter.state.messages).toHaveLength(2);
+			expect(adapter.state.messages[1].role).toBe("tool");
 		});
 
 		it("sets sessionStatus to attached when switching to a running session", async () => {
@@ -724,51 +691,50 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("model persistence across disk refreshes", () => {
-		it("does not overwrite a locally selected model during background fetchMessagesFromDisk", async () => {
+	describe("model persistence across session messages", () => {
+		it("does not overwrite a locally selected model when server pushes session_messages", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter } = setupWithSession(sessionPath);
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 
 			const localModel = { provider: "openai", id: "gpt-5" };
-			(adapter as any)._state.model = localModel;
+			adapter.setModel(localModel as any);
 
-			const oldSessionModel = { provider: "anthropic", modelId: "claude-sonnet-4-20250514" };
-			vi.spyOn(adapter, "fetchAvailableModels").mockResolvedValue([
-				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
-			]);
-
-			const fetchMock = vi.fn().mockResolvedValue({
-				ok: true,
-				json: async () => ({ messages: [], model: oldSessionModel, thinkingLevel: "off" }),
+			// Server pushes session_messages with the old model
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+				thinkingLevel: "off",
 			});
-			(globalThis as any).fetch = fetchMock;
 
-			await adapter.fetchMessagesFromDisk();
-
+			// Local override should be preserved
 			expect(adapter.state.model).toEqual(localModel);
 		});
 
-		it("restores persisted model when explicitly switching sessions", async () => {
+		it("restores persisted model when switching sessions via session_messages", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter } = setupWithSession(sessionPath);
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 
 			(adapter as any)._state.model = { provider: "openai", id: "gpt-5" };
 
-			vi.spyOn(adapter, "fetchAvailableModels").mockResolvedValue([
+			// Pre-populate available models cache
+			(adapter as any)._availableModels = [
 				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
-			]);
+			];
 
-			const fetchMock = vi.fn().mockResolvedValue({
-				ok: true,
-				json: async () => ({
-					messages: [],
-					model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
-					thinkingLevel: "high",
-				}),
-			});
-			(globalThis as any).fetch = fetchMock;
-
+			// switchSession clears _localModelOverride and subscribes.
+			// Simulate the server responding with session_messages.
 			await adapter.switchSession(sessionPath);
+
+			// Server pushes session_messages (this is what subscribe_session triggers)
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+				thinkingLevel: "high",
+			});
 
 			expect(adapter.state.model).toEqual({ provider: "anthropic", id: "claude-sonnet-4-20250514" });
 			expect(adapter.state.thinkingLevel).toBe("high");

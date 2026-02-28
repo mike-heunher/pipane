@@ -12,11 +12,13 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
 import { getSessionCwd } from "./session-cwd.js";
+import { SessionMessageCache } from "./session-message-cache.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 
 export interface WsHandlerOptions {
 	lifecycle: SessionLifecycle;
 	pool: ProcessPool;
+	messageCache: SessionMessageCache;
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
@@ -45,6 +47,7 @@ function debugTurn(stage: string, data: Record<string, any>) {
 export class WsHandler {
 	private lifecycle: SessionLifecycle;
 	private pool: ProcessPool;
+	private messageCache: SessionMessageCache;
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
@@ -61,12 +64,16 @@ export class WsHandler {
 	/** Per-process event listener cleanup */
 	private procEventCleanup = new Map<RpcProcess, () => void>();
 
+	/** Session the connected client is subscribed to (for push updates) */
+	private subscribedSession: string | null = null;
+
 	private piAvailable: boolean;
 	private piInstalling = false;
 
 	constructor(options: WsHandlerOptions) {
 		this.lifecycle = options.lifecycle;
 		this.pool = options.pool;
+		this.messageCache = options.messageCache;
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
@@ -98,10 +105,31 @@ export class WsHandler {
 					break;
 			}
 		});
+
+		// Subscribe to cache events and forward to WS client
+		this.messageCache.subscribe((event) => {
+			if (!this.connectedWs || this.connectedWs.readyState !== WebSocket.OPEN) return;
+
+			// Only push session_messages if the client is subscribed to this session
+			if (event.type === "session_messages" && event.sessionPath === this.subscribedSession) {
+				this.connectedWs.send(JSON.stringify({
+					type: "session_messages",
+					sessionPath: event.sessionPath,
+					messages: event.messages,
+					model: event.model,
+					thinkingLevel: event.thinkingLevel,
+				}));
+			}
+		});
 	}
 
 	get isPiAvailable(): boolean {
 		return this.piAvailable;
+	}
+
+	/** Notify the cache that a session file changed on disk (from file watcher). */
+	notifySessionFileChanged(sessionPath: string): void {
+		this.messageCache.refreshIfChanged(sessionPath);
 	}
 
 	setPiAvailable(available: boolean): void {
@@ -203,6 +231,9 @@ export class WsHandler {
 				case "install_pi":
 					await this.handleInstallPi(ws, id);
 					break;
+				case "subscribe_session":
+					this.handleSubscribeSession(ws, id, command);
+					break;
 				case "prompt":
 					await this.handlePrompt(ws, id, command);
 					break;
@@ -280,6 +311,33 @@ export class WsHandler {
 		ws.send(JSON.stringify({ id, type: "response", command: "install_pi", success: true, data: {} }));
 	}
 
+	private handleSubscribeSession(ws: WebSocket, id: string, command: any): void {
+		const sessionPath = command.sessionPath as string;
+
+		if (!sessionPath) {
+			// Unsubscribe (e.g., new virtual session)
+			this.subscribedSession = null;
+			ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
+			return;
+		}
+
+		this.subscribedSession = sessionPath;
+
+		// Load from cache (reads from disk if not cached)
+		const cached = this.messageCache.load(sessionPath);
+
+		// Push the full message state to the client
+		ws.send(JSON.stringify({
+			type: "session_messages",
+			sessionPath,
+			messages: cached.messages,
+			model: cached.model,
+			thinkingLevel: cached.thinkingLevel,
+		}));
+
+		ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
+	}
+
 	private async handlePrompt(ws: WebSocket, id: string, command: any): Promise<void> {
 		let sessionPath = command.sessionPath as string;
 		if (!sessionPath) throw new Error("Missing sessionPath");
@@ -301,6 +359,7 @@ export class WsHandler {
 
 			this.busyProcesses.add(proc);
 			this.lifecycle.attach(sessionPath, proc);
+			this.messageCache.setStreaming(sessionPath, true);
 
 			// Send enriched session_attached with cwd + firstMessage for optimistic sidebar
 			ws.send(JSON.stringify({
@@ -463,6 +522,7 @@ export class WsHandler {
 
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(newSessionPath, proc);
+		this.messageCache.setStreaming(newSessionPath, true);
 
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
 
@@ -536,6 +596,9 @@ export class WsHandler {
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(sessionPath, proc);
 
+		// Mark session as streaming in the cache
+		this.messageCache.setStreaming(sessionPath, true);
+
 		// Switch to the target session
 		this.pool.sendRpc(proc, { type: "switch_session", sessionPath }).catch((err) => {
 			console.error(`[ws] Failed to switch session: ${err.message}`);
@@ -575,8 +638,21 @@ export class WsHandler {
 				this.procEventCleanup.delete(proc);
 			}
 		}
+		this.messageCache.setStreaming(sessionPath, false);
 		this.lifecycle.detach(sessionPath);
 		this.activeTurns.delete(sessionPath);
+
+		// Push final messages to client after detach (authoritative disk state)
+		if (this.connectedWs && this.connectedWs.readyState === WebSocket.OPEN && this.subscribedSession === sessionPath) {
+			const cached = this.messageCache.load(sessionPath);
+			this.connectedWs.send(JSON.stringify({
+				type: "session_messages",
+				sessionPath,
+				messages: cached.messages,
+				model: cached.model,
+				thinkingLevel: cached.thinkingLevel,
+			}));
+		}
 	}
 
 	/**
@@ -617,6 +693,9 @@ export class WsHandler {
 
 			// Skip RPC responses — those are handled by the pool's pendingRequests
 			if (data.type === "response" && data.id) return;
+
+			// Update the server-side message cache
+			this.messageCache.applyEvent(sessionPath, data);
 
 			// Forward agent event to WS client, tagged with session path
 			if (ws.readyState === WebSocket.OPEN) {

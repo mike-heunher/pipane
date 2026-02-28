@@ -27,6 +27,7 @@ import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool } from "./process-pool.js";
+import { SessionMessageCache } from "./session-message-cache.js";
 import { WsHandler } from "./ws-handler.js";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
@@ -57,6 +58,7 @@ registerRestApi(app);
 // ============================================================================
 
 const lifecycle = new SessionLifecycle();
+const messageCache = new SessionMessageCache();
 
 // Resolve canvas extension path relative to project root
 const canvasExtension = path.resolve(__dirname, "../../extensions/canvas.ts");
@@ -87,6 +89,7 @@ const pool = new ProcessPool(
 const wsHandler = new WsHandler({
 	lifecycle,
 	pool,
+	messageCache,
 	defaultCwd: PI_CWD,
 	piLaunch: PI_LAUNCH,
 	ensurePool: () => {
@@ -178,13 +181,13 @@ function startSessionsWatcher(): FSWatcher | null {
 
 		if (debounceTimer) clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
-			// Get the connected WS from the debug state (not ideal but avoids exposing internals)
-			const debug = wsHandler.getDebugState();
-			if (!debug.connectedWsOpen) return;
-
 			const fullPath = path.join(SESSIONS_DIR, lastChangedFile!);
 
-			// We need to access the WS — let's expose a broadcast method on the handler
+			// Notify the message cache — it will re-read from disk if changed
+			// and push session_messages to the subscribed client if needed.
+			wsHandler.notifySessionFileChanged(fullPath);
+
+			// Also notify all WS clients about the file change (for sidebar refresh)
 			wss.clients.forEach((client) => {
 				if (client.readyState === WebSocket.OPEN) {
 					client.send(JSON.stringify({

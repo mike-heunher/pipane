@@ -154,6 +154,25 @@ export function registerRestApi(app: Express) {
 		}
 	});
 
+	app.get("/api/sessions/raw", (req, res) => {
+		try {
+			const sessionPath = req.query.path as string;
+			if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
+				res.status(400).json({ error: "Missing or invalid session path" });
+				return;
+			}
+			if (!existsSync(sessionPath)) {
+				res.status(404).json({ error: "Session file not found" });
+				return;
+			}
+
+			const content = readFileSync(sessionPath, "utf8");
+			res.type("text/plain").send(content);
+		} catch (err: any) {
+			res.status(500).json({ error: err.message });
+		}
+	});
+
 	app.get("/api/browse", (req, res) => {
 		try {
 			const requestedPath = (req.query.path as string) || process.env.HOME || "/";

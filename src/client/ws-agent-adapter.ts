@@ -1,14 +1,16 @@
 /**
  * WebSocket-backed Agent adapter.
  *
- * Architecture: sessions are either "detached" (messages read from JSONL via REST)
- * or "attached" (a pi process is running a turn, streaming events).
+ * Architecture: the server is the single source of truth for message state.
+ * Messages are delivered via two mechanisms, both over WebSocket:
  *
- * - On session load/switch: fetch messages from REST (reads JSONL on server)
- * - On prompt: server acquires a pi process, attaches to session, runs one turn
- * - During turn: events stream via WebSocket, update state live
- * - On agent_end: server releases pi, session goes back to detached
- * - On file watcher notification: re-fetch from REST if detached
+ * - `session_messages` push: full message list (on subscribe, after turn
+ *   completes, and when external clients modify the JSONL file).
+ * - Streaming events (`message_start`, `message_update`, `message_end`,
+ *   `turn_end`, etc.): incremental updates during an active turn.
+ *
+ * The client never reads JSONL files directly. It subscribes to a session
+ * via the `subscribe_session` WS command and receives all state from the server.
  *
  * Model and thinking level are client-side state until a message is sent,
  * at which point they are passed to the server along with the prompt.
@@ -30,6 +32,7 @@ type WsCommand =
 	| { type: "get_available_models" }
 	| { type: "set_session_name"; sessionPath: string; name: string }
 	| { type: "fork"; sessionPath: string; entryId: string }
+	| { type: "subscribe_session"; sessionPath: string }
 	| { type: "install_pi" };
 
 export interface PiInstallRequiredInfo {
@@ -72,11 +75,11 @@ export class WsAgentAdapter {
 	/** Whether the agent is actually running a turn (separate from state.isStreaming which we keep false for the editor) */
 	private _isReallyStreaming = false;
 
-	// ── Disk-fetch event buffering ─────────────────────────────────────────
-	/** True while fetchMessagesFromDisk is in-flight. Streaming events are buffered. */
-	private _fetchingDisk = false;
-	/** Buffered agent events received while the disk fetch was in-flight. */
-	private _diskFetchBuffer: AgentEvent[] = [];
+	/** True when the user has locally selected a model (blocks server model restore until next session_messages) */
+	private _localModelOverride = false;
+
+	/** Cached available models for model matching */
+	private _availableModels: any[] | null = null;
 
 	// ── Session state ──────────────────────────────────────────────────────
 	private _sessionId: string = "";
@@ -227,13 +230,17 @@ export class WsAgentAdapter {
 	}
 
 	/**
-	 * Called when the tab regains visibility. Syncs session statuses from the
-	 * server (in case we missed WS messages while backgrounded) and fixes up
-	 * stale streaming state.
+	 * Called when the tab regains visibility. Syncs session statuses and
+	 * re-subscribes to the current session to get authoritative state
+	 * from the server (in case WS messages were missed while backgrounded).
 	 */
 	private async syncStateOnFocus() {
-		// Always refresh session statuses from server
 		this.refreshSessionStatuses();
+
+		// Re-subscribe to get fresh messages from the server
+		if (this._sessionPath && this._sessionStatus !== "virtual") {
+			this.subscribeToSession(this._sessionPath);
+		}
 
 		if (this._sessionStatus === "detached" && this._state.isStreaming) {
 			console.log("[ws-adapter] Tab regained focus: clearing stale streaming state");
@@ -244,7 +251,6 @@ export class WsAgentAdapter {
 			this._runningPromise = undefined;
 			this._resolveRunning = undefined;
 			this.emitStatusChange();
-			this.fetchMessagesFromDisk();
 		}
 	}
 
@@ -257,6 +263,15 @@ export class WsAgentAdapter {
 			}
 		} catch (err) {
 			console.error("Failed to refresh session statuses:", err);
+		}
+	}
+
+	/** Tell the server we want to receive messages for this session. */
+	private async subscribeToSession(sessionPath: string | undefined) {
+		try {
+			await this.send({ type: "subscribe_session", sessionPath: sessionPath ?? "" });
+		} catch (err) {
+			console.error("Failed to subscribe to session:", err);
 		}
 	}
 
@@ -312,6 +327,25 @@ export class WsAgentAdapter {
 					this._steeringQueues.delete(sp);
 				}
 				this.emitSteeringQueueChange();
+			}
+			return;
+		}
+
+		// Server-pushed full message state for the subscribed session
+		if (data.type === "session_messages") {
+			const sp = data.sessionPath as string;
+			if (sp === this._sessionPath) {
+				this._state.messages = data.messages ?? [];
+				// Restore model/thinkingLevel from server if provided
+				// (but only if the user hasn't locally selected a different model)
+				if (data.model && !this._localModelOverride) {
+					this._state.model = this.findModelMatch(data.model) ?? this._state.model;
+				}
+				if (data.thinkingLevel && !this._localModelOverride) {
+					this._state.thinkingLevel = data.thinkingLevel;
+				}
+				this._localModelOverride = false;
+				this.emitContentChange();
 			}
 			return;
 		}
@@ -375,8 +409,8 @@ export class WsAgentAdapter {
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
 				this.emitStatusChange();
-				// Re-fetch messages from JSONL to get final state
-				this.fetchMessagesFromDisk();
+				// Server pushes final session_messages automatically after detach —
+				// no need to fetch from disk.
 			}
 			return;
 		}
@@ -384,11 +418,7 @@ export class WsAgentAdapter {
 		// Sessions directory change notification
 		if (data.type === "sessions_changed") {
 			const file = data.file as string;
-			// If the changed file is the current session and we're detached, refresh
-			if (this._sessionPath && file === this._sessionPath && this._sessionStatus === "detached") {
-				this.fetchMessagesFromDisk();
-			}
-			// Notify sidebar
+			// Server handles message refresh via cache — we just notify sidebar
 			for (const fn of this.sessionsChangedListeners) fn(file);
 			return;
 		}
@@ -397,56 +427,8 @@ export class WsAgentAdapter {
 		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
 
 		const event = data as AgentEvent;
-
-		// Buffer streaming events while a disk fetch is in-flight to prevent
-		// the race between JSONL loading and live WebSocket events which causes
-		// duplicate messages. Events are replayed (with dedup) after the fetch.
-		if (this._fetchingDisk) {
-			this._diskFetchBuffer.push(event);
-			return;
-		}
-
 		this.updateState(event);
 		this.emit(event);
-	}
-
-	/**
-	 * Check if a message is already present in the messages array.
-	 * This prevents duplicates when switching to a running session (messages
-	 * loaded from disk overlap with streaming events).
-	 *
-	 * For assistant messages: compares tool_use block IDs.
-	 * For tool result messages: compares tool_use_id.
-	 * Fallback: compares role + timestamp.
-	 */
-	private isMessageAlreadyPresent(msg: AgentMessage): boolean {
-		const messages = this._state.messages;
-		// Only check the last few messages for performance
-		const start = Math.max(0, messages.length - 10);
-		for (let i = start; i < messages.length; i++) {
-			const existing = messages[i];
-			if (existing.role !== msg.role) continue;
-
-			// Compare tool_use IDs for assistant messages
-			if (msg.role === "assistant" && Array.isArray(msg.content) && Array.isArray(existing.content)) {
-				const msgToolIds = msg.content.filter((c: any) => c.type === "tool_use").map((c: any) => c.id);
-				const existToolIds = existing.content.filter((c: any) => c.type === "tool_use").map((c: any) => c.id);
-				if (msgToolIds.length > 0 && existToolIds.length > 0 && msgToolIds[0] === existToolIds[0]) {
-					return true;
-				}
-			}
-
-			// Compare tool_use_id for tool result messages
-			if (msg.role === "tool" && (msg as any).tool_use_id && (msg as any).tool_use_id === (existing as any).tool_use_id) {
-				return true;
-			}
-
-			// Fallback: compare timestamps (if both have them)
-			if (msg.timestamp && existing.timestamp && msg.timestamp === existing.timestamp) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	private updateState(event: AgentEvent) {
@@ -484,9 +466,7 @@ export class WsAgentAdapter {
 
 			case "message_end":
 				this._state.streamMessage = null;
-				if (!this.isMessageAlreadyPresent(event.message)) {
-					this._state.messages = [...this._state.messages, event.message];
-				}
+				this._state.messages = [...this._state.messages, event.message];
 				// Steering queue dequeuing is now handled server-side via steering_queue_update events
 				break;
 
@@ -496,7 +476,13 @@ export class WsAgentAdapter {
 				}
 				if (event.toolResults) {
 					for (const tr of event.toolResults) {
-						if (!this.isMessageAlreadyPresent(tr)) {
+						// turn_end redundantly includes tool results already sent via message_end.
+						// Deduplicate by tool_use_id to avoid double-appending.
+						const trId = (tr as any).tool_use_id;
+						const alreadyPresent = trId && this._state.messages.some(
+							(m: any) => m.role === "tool" && m.tool_use_id === trId,
+						);
+						if (!alreadyPresent) {
 							this._state.messages = [...this._state.messages, tr];
 						}
 					}
@@ -545,7 +531,16 @@ export class WsAgentAdapter {
 	/** Fetch available models from the server (uses any idle pi process) */
 	async fetchAvailableModels(): Promise<any[]> {
 		const data = await this.send({ type: "get_available_models" });
-		return data?.models ?? [];
+		this._availableModels = data?.models ?? [];
+		return this._availableModels;
+	}
+
+	/** Find a matching model from the available models cache */
+	private findModelMatch(serverModel: { provider: string; modelId: string }): any | null {
+		if (!this._availableModels) return null;
+		return this._availableModels.find(
+			(m: any) => m.provider === serverModel.provider && m.id === serverModel.modelId,
+		) ?? null;
 	}
 
 	async installPi(): Promise<void> {
@@ -561,62 +556,6 @@ export class WsAgentAdapter {
 		}
 		if (data?.thinkingLevel) {
 			this._state.thinkingLevel = data.thinkingLevel;
-		}
-	}
-
-	// ── Fetch messages from JSONL (REST) ───────────────────────────────────
-
-	async fetchMessagesFromDisk(options?: { restoreContext?: boolean }): Promise<void> {
-		if (!this._sessionPath) return;
-		const restoreContext = options?.restoreContext === true;
-
-		this._fetchingDisk = true;
-		this._diskFetchBuffer = [];
-
-		try {
-			const res = await fetch(`/api/sessions/messages?path=${encodeURIComponent(this._sessionPath)}`);
-			if (!res.ok) return;
-
-			const data = await res.json();
-			this._state.messages = data.messages ?? [];
-
-			// Restore model/thinking level from session context only when explicitly requested
-			// (e.g. when switching sessions). Background refreshes should not clobber
-			// a user-selected model/thinking level in the current UI state.
-			if (restoreContext) {
-				if (data.model) {
-					// Find the matching model from available models
-					const models = await this.fetchAvailableModels();
-					const match = models.find(
-						(m: any) => m.provider === data.model.provider && m.id === data.model.modelId,
-					);
-					if (match) {
-						this._state.model = match;
-					}
-				}
-				if (data.thinkingLevel) {
-					this._state.thinkingLevel = data.thinkingLevel;
-				}
-			}
-
-			// Replay any streaming events that arrived while the fetch was in-flight.
-			// The JSONL is now the authoritative base; updateState's dedup will skip
-			// messages already present from the JSONL.
-			const buffered = this._diskFetchBuffer;
-			this._diskFetchBuffer = [];
-			this._fetchingDisk = false;
-
-			for (const event of buffered) {
-				this.updateState(event);
-				this.emit(event);
-			}
-
-			this.emitContentChange();
-		} catch (err) {
-			console.error("Failed to fetch session messages:", err);
-		} finally {
-			this._fetchingDisk = false;
-			this._diskFetchBuffer = [];
 		}
 	}
 
@@ -759,7 +698,8 @@ export class WsAgentAdapter {
 			if (!this._sessionPath) return true;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
 			await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
-			await this.fetchMessagesFromDisk();
+			// Re-subscribe to get fresh messages after compaction
+			await this.subscribeToSession(this._sessionPath);
 			return true;
 		}
 
@@ -937,7 +877,7 @@ export class WsAgentAdapter {
 		if (!res.ok) throw new Error(`Failed to delete session: ${res.statusText}`);
 	}
 
-	/** Switch to an existing session (load messages from JSONL) */
+	/** Switch to an existing session (load messages from server cache) */
 	async switchSession(sessionPath: string): Promise<void> {
 		this._sessionPath = sessionPath;
 		// Extract session ID from filename
@@ -945,6 +885,7 @@ export class WsAgentAdapter {
 		const parts = filename.split("_");
 		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 		this._sessionStatus = "detached";
+		this._localModelOverride = false;
 
 		// Clear current state — including isStreaming since a detached session is never streaming
 		this._state.messages = [];
@@ -953,8 +894,9 @@ export class WsAgentAdapter {
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
 
-		// Load messages from JSONL and restore persisted model/thinking context
-		await this.fetchMessagesFromDisk({ restoreContext: true });
+		// Subscribe to this session on the server — it will push session_messages
+		// with messages, model, and thinkingLevel.
+		await this.subscribeToSession(sessionPath);
 
 		// If the session is currently running on the server, restore streaming state
 		// so the stop button is visible, and mark as "attached" to prevent file-watcher
@@ -982,6 +924,9 @@ export class WsAgentAdapter {
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
+
+		// Unsubscribe from any previous session
+		this.subscribeToSession(undefined);
 
 		this.emitSessionChange();
 		this.emitStatusChange();
