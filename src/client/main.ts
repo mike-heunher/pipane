@@ -20,6 +20,7 @@ import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { DummyStorageBackend } from "./dummy-storage.js";
 import "./session-picker.js";
 import { registerCodingAgentRenderers } from "./tool-renderers.js";
+import "./message-renderers.js";
 import "./app.css";
 
 registerCodingAgentRenderers();
