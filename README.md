@@ -100,20 +100,20 @@ LLM/API keys are read from standard environment variables (for example `ANTHROPI
 
 ```mermaid
 flowchart LR
-  subgraph Browser[Browser]
-    UI[Vite + Lit UI\n(ChatPanel / pi-web-ui)]
+  subgraph Browser["Browser"]
+    UI["Vite + Lit UI<br/>(ChatPanel / pi-web-ui)"]
   end
 
-  subgraph Server[pi-web backend]
-    WS[Express + WebSocket relay\n(port 3001)]
+  subgraph Server["pi-web backend"]
+    WS["Express + WebSocket relay<br/>(port 3001)"]
   end
 
-  subgraph Agent[pi coding-agent process]
-    PI[pi --mode rpc\n(subprocess)]
+  subgraph Agent["pi coding-agent process"]
+    PI["pi --mode rpc<br/>(subprocess)"]
   end
 
-  UI <-->|WS (/ws)| WS
-  WS <-->|RPC over stdin/stdout| PI
+  UI <-->|"WS (/ws)"| WS
+  WS <-->|"RPC over stdin/stdout"| PI
 ```
 
 ---
