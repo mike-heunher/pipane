@@ -18,7 +18,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { unlink } from "node:fs/promises";
-import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, readFileSync, readdirSync, watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { WebSocketServer, WebSocket } from "ws";
@@ -116,6 +116,34 @@ app.get("/api/sessions/messages", (req, res) => {
 	}
 });
 
+/**
+ * Browse directories on disk (for folder picker).
+ */
+app.get("/api/browse", (req, res) => {
+	try {
+		const requestedPath = (req.query.path as string) || process.env.HOME || "/";
+		const resolved = path.resolve(requestedPath.replace(/^~/, process.env.HOME || "/"));
+
+		if (!existsSync(resolved)) {
+			res.status(404).json({ error: "Path not found" });
+			return;
+		}
+
+		const entries = readdirSync(resolved, { withFileTypes: true });
+		const dirs = entries
+			.filter((e) => e.isDirectory() && !e.name.startsWith("."))
+			.map((e) => ({
+				name: e.name,
+				path: path.join(resolved, e.name),
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name));
+
+		res.json({ path: resolved, dirs });
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // ============================================================================
 // Pi Process Pool
 // ============================================================================
@@ -142,12 +170,13 @@ const pool: RpcProcess[] = [];
 /** Map from session path → attached RPC process */
 const attachedSessions = new Map<string, RpcProcess>();
 
-function spawnRpcProcess(): RpcProcess {
+function spawnRpcProcess(cwd?: string): RpcProcess {
 	const procId = ++nextProcId;
-	console.log(`[pool] Spawning pi process #${procId}...`);
+	const useCwd = cwd || PI_CWD;
+	console.log(`[pool] Spawning pi process #${procId} (cwd: ${useCwd})...`);
 
 	const child = spawn("node", [PI_CLI, "--mode", "rpc"], {
-		cwd: PI_CWD,
+		cwd: useCwd,
 		env: { ...process.env },
 		stdio: ["pipe", "pipe", "pipe"],
 	});
@@ -453,12 +482,18 @@ wss.on("connection", async (ws) => {
 					let proc: RpcProcess;
 
 					if (sessionPath === "__new__") {
-						// Virtual session — spawn a pi with a fresh session
-						proc = pool.find((p) => !p.attachedSession && p.process.exitCode === null) || spawnRpcProcess();
-						if (proc.process.exitCode !== null) {
-							proc = spawnRpcProcess();
+						const cwd = command.cwd as string | undefined;
+						// For new sessions with a specific CWD, spawn a dedicated pi process
+						if (cwd) {
+							proc = spawnRpcProcess(cwd);
+							await new Promise((resolve) => setTimeout(resolve, 500));
+						} else {
+							proc = pool.find((p) => !p.attachedSession && p.process.exitCode === null) || spawnRpcProcess();
+							if (proc.process.exitCode !== null) {
+								proc = spawnRpcProcess();
+							}
+							await new Promise((resolve) => setTimeout(resolve, 500));
 						}
-						await new Promise((resolve) => setTimeout(resolve, 500));
 
 						// Ask pi to create a new session and get the session path
 						await sendRpc(proc, { type: "new_session" });

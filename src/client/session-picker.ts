@@ -2,7 +2,9 @@
  * Session picker sidebar component.
  *
  * Shows a list of all sessions from the pi CLI state files,
- * grouped by project (cwd). Allows switching sessions and creating new ones.
+ * grouped by project (cwd). Each group has a "+" button to create
+ * a new session in that folder. The top "+ New" button opens a
+ * folder picker to choose a CWD for a new session.
  */
 
 import { html, css, LitElement, nothing, type TemplateResult } from "lit";
@@ -14,6 +16,11 @@ interface SessionGroup {
 	cwd: string;
 	label: string;
 	sessions: SessionInfoDTO[];
+}
+
+interface DirEntry {
+	name: string;
+	path: string;
 }
 
 @customElement("session-picker")
@@ -96,7 +103,13 @@ export class SessionPicker extends LitElement {
 		}
 
 		.group-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
 			padding: 0.4rem 0.75rem 0.2rem;
+		}
+
+		.group-label {
 			font-size: 0.7rem;
 			font-weight: 600;
 			color: var(--picker-muted);
@@ -105,6 +118,32 @@ export class SessionPicker extends LitElement {
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
+			flex: 1;
+			min-width: 0;
+		}
+
+		.group-new-btn {
+			background: none;
+			border: none;
+			color: var(--picker-muted);
+			cursor: pointer;
+			padding: 0 0.25rem;
+			font-size: 0.8rem;
+			line-height: 1;
+			border-radius: 3px;
+			opacity: 0;
+			transition: all 0.15s;
+			flex-shrink: 0;
+		}
+
+		.group-header:hover .group-new-btn {
+			opacity: 0.6;
+		}
+
+		.group-new-btn:hover {
+			opacity: 1 !important;
+			color: var(--picker-active);
+			background: var(--picker-active-bg);
 		}
 
 		.session-item {
@@ -196,19 +235,177 @@ export class SessionPicker extends LitElement {
 			color: var(--picker-muted);
 			font-size: 0.8rem;
 		}
+
+		/* ── Folder picker overlay ────────────────────────────────── */
+
+		.folder-picker {
+			position: absolute;
+			inset: 0;
+			z-index: 10;
+			display: flex;
+			flex-direction: column;
+			background: var(--picker-bg);
+		}
+
+		.folder-picker-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 0.5rem 0.75rem;
+			border-bottom: 1px solid var(--picker-border);
+			flex-shrink: 0;
+		}
+
+		.folder-picker-title {
+			font-size: 0.8rem;
+			font-weight: 600;
+			color: var(--picker-text);
+		}
+
+		.folder-picker-close {
+			background: none;
+			border: none;
+			color: var(--picker-muted);
+			cursor: pointer;
+			padding: 0.15rem 0.3rem;
+			border-radius: 3px;
+			font-size: 0.85rem;
+			line-height: 1;
+		}
+
+		.folder-picker-close:hover {
+			color: var(--picker-text);
+			background: var(--picker-hover);
+		}
+
+		.folder-picker-input {
+			padding: 0.5rem 0.75rem;
+			border-bottom: 1px solid var(--picker-border);
+			flex-shrink: 0;
+		}
+
+		.folder-picker-input input {
+			width: 100%;
+			box-sizing: border-box;
+			padding: 0.35rem 0.5rem;
+			border: 1px solid var(--picker-border);
+			border-radius: 4px;
+			background: var(--picker-bg);
+			color: var(--picker-text);
+			font-size: 0.75rem;
+			font-family: monospace;
+			outline: none;
+		}
+
+		.folder-picker-input input:focus {
+			border-color: var(--picker-active);
+		}
+
+		.folder-picker-list {
+			flex: 1;
+			overflow-y: auto;
+			padding: 0.25rem 0;
+		}
+
+		.folder-picker-section {
+			padding: 0.4rem 0.75rem 0.2rem;
+			font-size: 0.65rem;
+			font-weight: 600;
+			color: var(--picker-muted);
+			text-transform: uppercase;
+			letter-spacing: 0.03em;
+		}
+
+		.folder-item {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			width: 100%;
+			box-sizing: border-box;
+			padding: 0.3rem 0.75rem;
+			border: none;
+			background: none;
+			color: var(--picker-text);
+			text-align: left;
+			cursor: pointer;
+			font-size: 0.8rem;
+			transition: background 0.1s;
+		}
+
+		.folder-item:hover {
+			background: var(--picker-hover);
+		}
+
+		.folder-item.known-cwd {
+			color: var(--picker-active);
+		}
+
+		.folder-icon {
+			flex-shrink: 0;
+			color: var(--picker-muted);
+		}
+
+		.folder-name {
+			flex: 1;
+			min-width: 0;
+			white-space: nowrap;
+			overflow: hidden;
+			text-overflow: ellipsis;
+		}
+
+		.folder-go-btn {
+			background: none;
+			border: 1px solid var(--picker-border);
+			color: var(--picker-muted);
+			cursor: pointer;
+			padding: 0.1rem 0.35rem;
+			border-radius: 3px;
+			font-size: 0.65rem;
+			flex-shrink: 0;
+			transition: all 0.15s;
+		}
+
+		.folder-go-btn:hover {
+			color: var(--picker-text);
+			border-color: var(--picker-active);
+		}
+
+		.folder-picker-actions {
+			padding: 0.5rem 0.75rem;
+			border-top: 1px solid var(--picker-border);
+			flex-shrink: 0;
+		}
+
+		.folder-picker-actions button {
+			width: 100%;
+			padding: 0.4rem;
+			border: 1px solid var(--picker-active);
+			border-radius: 4px;
+			background: var(--picker-active);
+			color: white;
+			cursor: pointer;
+			font-size: 0.8rem;
+			font-weight: 500;
+			transition: opacity 0.15s;
+		}
+
+		.folder-picker-actions button:hover {
+			opacity: 0.9;
+		}
 	`;
 
 	@property({ attribute: false })
 	agent!: WsAgentAdapter;
 
-	@state()
-	private sessions: SessionInfoDTO[] = [];
+	@state() private sessions: SessionInfoDTO[] = [];
+	@state() private loading = true;
+	@state() private searchQuery = "";
 
-	@state()
-	private loading = true;
-
-	@state()
-	private searchQuery = "";
+	// Folder picker state
+	@state() private showFolderPicker = false;
+	@state() private folderPath = "~";
+	@state() private folderDirs: DirEntry[] = [];
+	@state() private folderLoading = false;
 
 	private unsubSessionChange?: () => void;
 	private unsubSessionsChanged?: () => void;
@@ -234,7 +431,6 @@ export class SessionPicker extends LitElement {
 	}
 
 	async loadSessions() {
-		// Only show loading spinner on first load to avoid DOM thrashing
 		const isInitial = this.sessions.length === 0;
 		if (isInitial) this.loading = true;
 		try {
@@ -244,6 +440,14 @@ export class SessionPicker extends LitElement {
 			this.sessions = [];
 		}
 		this.loading = false;
+	}
+
+	private get knownCwds(): string[] {
+		const cwds = new Set<string>();
+		for (const s of this.sessions) {
+			if (s.cwd) cwds.add(s.cwd);
+		}
+		return Array.from(cwds).sort();
 	}
 
 	private get filteredGroups(): SessionGroup[] {
@@ -259,7 +463,6 @@ export class SessionPicker extends LitElement {
 			);
 		}
 
-		// Group by cwd
 		const groupMap = new Map<string, SessionInfoDTO[]>();
 		for (const s of filtered) {
 			const key = s.cwd || "(unknown)";
@@ -267,7 +470,6 @@ export class SessionPicker extends LitElement {
 			groupMap.get(key)!.push(s);
 		}
 
-		// Convert to array, label is last path segment
 		const groups: SessionGroup[] = [];
 		for (const [cwd, sessions] of groupMap) {
 			const parts = cwd.split("/").filter(Boolean);
@@ -275,7 +477,6 @@ export class SessionPicker extends LitElement {
 			groups.push({ cwd, label, sessions });
 		}
 
-		// Sort groups: group with active session first, then by most recent
 		const activeSessionId = this.agent?.sessionId;
 		groups.sort((a, b) => {
 			const aHasActive = a.sessions.some((s) => s.id === activeSessionId);
@@ -312,6 +513,8 @@ export class SessionPicker extends LitElement {
 		return d.toLocaleDateString();
 	}
 
+	// ── Actions ─────────────────────────────────────────────────────────────
+
 	private async handleSessionClick(session: SessionInfoDTO) {
 		if (session.id === this.agent?.sessionId) return;
 		try {
@@ -321,9 +524,9 @@ export class SessionPicker extends LitElement {
 		}
 	}
 
-	private async handleNewSession() {
+	private async handleNewSessionInGroup(cwd: string) {
 		try {
-			await this.agent.newSession();
+			await this.agent.newSession(cwd);
 		} catch (err) {
 			console.error("Failed to create new session:", err);
 		}
@@ -352,36 +555,104 @@ export class SessionPicker extends LitElement {
 		this.searchQuery = (e.target as HTMLInputElement).value;
 	}
 
+	// ── Folder picker ───────────────────────────────────────────────────────
+
+	private openFolderPicker() {
+		this.showFolderPicker = true;
+		this.folderPath = "~";
+		this.browseTo("~");
+	}
+
+	private closeFolderPicker() {
+		this.showFolderPicker = false;
+	}
+
+	private async browseTo(dirPath: string) {
+		this.folderLoading = true;
+		try {
+			const res = await fetch(`/api/browse?path=${encodeURIComponent(dirPath)}`);
+			if (!res.ok) throw new Error("Failed to browse");
+			const data = await res.json();
+			this.folderPath = data.path;
+			this.folderDirs = data.dirs;
+		} catch (err) {
+			console.error("Failed to browse directory:", err);
+			this.folderDirs = [];
+		}
+		this.folderLoading = false;
+	}
+
+	private handleFolderInputChange(e: Event) {
+		this.folderPath = (e.target as HTMLInputElement).value;
+	}
+
+	private handleFolderInputKeydown(e: KeyboardEvent) {
+		if (e.key === "Enter") {
+			this.browseTo(this.folderPath);
+		}
+	}
+
+	private handleFolderClick(dir: DirEntry) {
+		// Set the input to the clicked folder's path
+		this.folderPath = dir.path;
+		// Also browse into it to show subfolders
+		this.browseTo(dir.path);
+	}
+
+	private handleFolderSelect() {
+		this.showFolderPicker = false;
+		this.agent.newSession(this.folderPath);
+	}
+
+	private handleParentFolder() {
+		const parent = this.folderPath.replace(/\/[^/]+\/?$/, "") || "/";
+		this.folderPath = parent;
+		this.browseTo(parent);
+	}
+
+	// ── Render ──────────────────────────────────────────────────────────────
+
 	render() {
 		const groups = this.filteredGroups;
 		const activeId = this.agent?.sessionId;
 
 		return html`
-			<div class="header">
-				<span class="header-title">Sessions</span>
-				<button class="new-btn" @click=${this.handleNewSession}>+ New</button>
-			</div>
-			<div class="search">
-				<input
-					type="text"
-					placeholder="Search sessions…"
-					.value=${this.searchQuery}
-					@input=${this.handleSearch}
-				/>
-			</div>
-			<div class="sessions-list">
-				${this.loading
-					? html`<div class="loading">Loading sessions…</div>`
-					: groups.length === 0
-						? html`<div class="empty">No sessions found</div>`
-						: repeat(groups, (g) => g.cwd, (group) => this.renderGroup(group, activeId))}
+			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
+				<div class="header">
+					<span class="header-title">Sessions</span>
+					<button class="new-btn" @click=${this.openFolderPicker}>+ New</button>
+				</div>
+				<div class="search">
+					<input
+						type="text"
+						placeholder="Search sessions…"
+						.value=${this.searchQuery}
+						@input=${this.handleSearch}
+					/>
+				</div>
+				<div class="sessions-list">
+					${this.loading
+						? html`<div class="loading">Loading sessions…</div>`
+						: groups.length === 0
+							? html`<div class="empty">No sessions found</div>`
+							: repeat(groups, (g) => g.cwd, (group) => this.renderGroup(group, activeId))}
+				</div>
+
+				${this.showFolderPicker ? this.renderFolderPicker() : nothing}
 			</div>
 		`;
 	}
 
 	private renderGroup(group: SessionGroup, activeId: string): TemplateResult {
 		return html`
-			<div class="group-header" title=${group.cwd}>${group.label}</div>
+			<div class="group-header" title=${group.cwd}>
+				<span class="group-label">${group.label}</span>
+				<button
+					class="group-new-btn"
+					@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd); }}
+					title="New session in ${group.cwd}"
+				>+</button>
+			</div>
 			${repeat(
 				group.sessions,
 				(s) => s.id,
@@ -410,6 +681,75 @@ export class SessionPicker extends LitElement {
 					</button>
 				`,
 			)}
+		`;
+	}
+
+	private renderFolderPicker(): TemplateResult {
+		const knownCwds = this.knownCwds;
+		// Folder icon SVG
+		const folderIcon = html`
+			<svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+			</svg>
+		`;
+
+		return html`
+			<div class="folder-picker">
+				<div class="folder-picker-header">
+					<span class="folder-picker-title">Open Folder</span>
+					<button class="folder-picker-close" @click=${this.closeFolderPicker}>✕</button>
+				</div>
+
+				<div class="folder-picker-input">
+					<input
+						type="text"
+						.value=${this.folderPath}
+						@input=${this.handleFolderInputChange}
+						@keydown=${this.handleFolderInputKeydown}
+						placeholder="/path/to/project"
+					/>
+				</div>
+
+				<div class="folder-picker-list">
+					${knownCwds.length > 0 ? html`
+						<div class="folder-picker-section">Recent projects</div>
+						${knownCwds.map((cwd) => {
+							const label = cwd.split("/").filter(Boolean).pop() || cwd;
+							return html`
+								<button class="folder-item known-cwd" @click=${() => { this.folderPath = cwd; this.browseTo(cwd); }} title=${cwd}>
+									${folderIcon}
+									<span class="folder-name">${label}</span>
+								</button>
+							`;
+						})}
+					` : nothing}
+
+					<div class="folder-picker-section">
+						${this.folderPath}
+						${this.folderPath !== "/" ? html`
+							<button class="folder-go-btn" @click=${this.handleParentFolder} title="Go up">↑ up</button>
+						` : nothing}
+					</div>
+
+					${this.folderLoading
+						? html`<div class="loading">Loading…</div>`
+						: this.folderDirs.length === 0
+							? html`<div class="empty">No subfolders</div>`
+							: this.folderDirs.map((dir) => html`
+								<button class="folder-item" @click=${() => this.handleFolderClick(dir)} title=${dir.path}>
+									${folderIcon}
+									<span class="folder-name">${dir.name}</span>
+								</button>
+							`)
+					}
+				</div>
+
+				<div class="folder-picker-actions">
+					<button @click=${this.handleFolderSelect}>
+						Open in ${this.folderPath.split("/").filter(Boolean).pop() || this.folderPath}
+					</button>
+				</div>
+			</div>
 		`;
 	}
 }

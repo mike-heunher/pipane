@@ -331,6 +331,18 @@ export class WsAgentAdapter {
 
 	// ── Agent interface methods ────────────────────────────────────────────
 
+	/** CWD for the next new session (set when user picks a folder) */
+	private _pendingCwd: string | undefined;
+
+	/** Set the CWD for the next virtual session */
+	setCwd(cwd: string) {
+		this._pendingCwd = cwd;
+	}
+
+	get cwd(): string | undefined {
+		return this._pendingCwd;
+	}
+
 	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]) {
 		let text: string;
 		if (typeof input === "string") {
@@ -345,20 +357,19 @@ export class WsAgentAdapter {
 		const handled = await this.handleSlashCommand(text);
 		if (handled) return;
 
-		// For virtual sessions, we need the server to create a new session file.
-		// Send the prompt — server will create the session via pi.
+		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
+
 		if (this._sessionStatus === "virtual") {
-			// We need a session path. Ask server to create one via pi.
-			// The prompt command will handle this — pi starts with a new session.
-			// We'll use a special "new_session_prompt" flow.
 			await this.send({
 				type: "prompt",
 				sessionPath: "__new__",
+				cwd: this._pendingCwd,
 				message: text,
-				model: this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined,
+				model: modelPayload,
 				thinkingLevel: this._state.thinkingLevel,
 				images,
 			});
+			this._pendingCwd = undefined;
 			return;
 		}
 
@@ -368,7 +379,7 @@ export class WsAgentAdapter {
 			type: "prompt",
 			sessionPath: this._sessionPath,
 			message: text,
-			model: this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined,
+			model: modelPayload,
 			thinkingLevel: this._state.thinkingLevel,
 			images,
 		});
@@ -494,11 +505,12 @@ export class WsAgentAdapter {
 	}
 
 	/** Create a new virtual session (no JSONL file until first message) */
-	async newSession(): Promise<void> {
+	async newSession(cwd?: string): Promise<void> {
 		this._sessionId = crypto.randomUUID();
 		this._sessionPath = undefined;
 		this._sessionName = undefined;
 		this._sessionStatus = "virtual";
+		this._pendingCwd = cwd;
 
 		this._state.messages = [];
 		this._state.isStreaming = false;
