@@ -699,4 +699,55 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.isStreaming).toBe(true);
 		});
 	});
+
+	describe("model persistence across disk refreshes", () => {
+		it("does not overwrite a locally selected model during background fetchMessagesFromDisk", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			const localModel = { provider: "openai", id: "gpt-5" };
+			(adapter as any)._state.model = localModel;
+
+			const oldSessionModel = { provider: "anthropic", modelId: "claude-sonnet-4-20250514" };
+			vi.spyOn(adapter, "fetchAvailableModels").mockResolvedValue([
+				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
+			]);
+
+			const fetchMock = vi.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ messages: [], model: oldSessionModel, thinkingLevel: "off" }),
+			});
+			(globalThis as any).fetch = fetchMock;
+
+			await adapter.fetchMessagesFromDisk();
+
+			expect(adapter.state.model).toEqual(localModel);
+		});
+
+		it("restores persisted model when explicitly switching sessions", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			(adapter as any)._state.model = { provider: "openai", id: "gpt-5" };
+
+			vi.spyOn(adapter, "fetchAvailableModels").mockResolvedValue([
+				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
+			]);
+
+			const fetchMock = vi.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({
+					messages: [],
+					model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+					thinkingLevel: "high",
+				}),
+			});
+			(globalThis as any).fetch = fetchMock;
+
+			await adapter.switchSession(sessionPath);
+
+			expect(adapter.state.model).toEqual({ provider: "anthropic", id: "claude-sonnet-4-20250514" });
+			expect(adapter.state.thinkingLevel).toBe("high");
+		});
+	});
 });

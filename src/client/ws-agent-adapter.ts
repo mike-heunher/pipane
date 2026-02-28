@@ -526,8 +526,9 @@ export class WsAgentAdapter {
 
 	// ── Fetch messages from JSONL (REST) ───────────────────────────────────
 
-	async fetchMessagesFromDisk(): Promise<void> {
+	async fetchMessagesFromDisk(options?: { restoreContext?: boolean }): Promise<void> {
 		if (!this._sessionPath) return;
+		const restoreContext = options?.restoreContext === true;
 
 		this._fetchingDisk = true;
 		this._diskFetchBuffer = [];
@@ -539,19 +540,23 @@ export class WsAgentAdapter {
 			const data = await res.json();
 			this._state.messages = data.messages ?? [];
 
-			// Restore model/thinking level from session context
-			if (data.model) {
-				// Find the matching model from available models
-				const models = await this.fetchAvailableModels();
-				const match = models.find(
-					(m: any) => m.provider === data.model.provider && m.id === data.model.modelId,
-				);
-				if (match) {
-					this._state.model = match;
+			// Restore model/thinking level from session context only when explicitly requested
+			// (e.g. when switching sessions). Background refreshes should not clobber
+			// a user-selected model/thinking level in the current UI state.
+			if (restoreContext) {
+				if (data.model) {
+					// Find the matching model from available models
+					const models = await this.fetchAvailableModels();
+					const match = models.find(
+						(m: any) => m.provider === data.model.provider && m.id === data.model.modelId,
+					);
+					if (match) {
+						this._state.model = match;
+					}
 				}
-			}
-			if (data.thinkingLevel) {
-				this._state.thinkingLevel = data.thinkingLevel;
+				if (data.thinkingLevel) {
+					this._state.thinkingLevel = data.thinkingLevel;
+				}
 			}
 
 			// Replay any streaming events that arrived while the fetch was in-flight.
@@ -903,8 +908,8 @@ export class WsAgentAdapter {
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
 
-		// Load messages from JSONL
-		await this.fetchMessagesFromDisk();
+		// Load messages from JSONL and restore persisted model/thinking context
+		await this.fetchMessagesFromDisk({ restoreContext: true });
 
 		// If the session is currently running on the server, restore streaming state
 		// so the stop button is visible, and mark as "attached" to prevent file-watcher
