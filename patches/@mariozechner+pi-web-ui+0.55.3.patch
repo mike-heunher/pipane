@@ -1,0 +1,41 @@
+diff --git a/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts b/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
+index 78e4423..ba05f09 100644
+--- a/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
++++ b/node_modules/@mariozechner/pi-web-ui/src/components/MessageEditor.ts
+@@ -387,7 +387,7 @@ export class MessageEditor extends LitElement {
+ 										size: "icon",
+ 										onClick: this.handleSend,
+ 										disabled: (!this.value.trim() && this.attachments.length === 0) || this.processingFiles,
+-										children: html`<div style="transform: rotate(-45deg)">${icon(Send, "sm")}</div>`,
++										children: html`<span style="transform: translateY(3px) rotate(-45deg); display: inline-flex;">${icon(Send, "sm")}</span>`,
+ 										className: "h-8 w-8",
+ 									})}
+ 								`
+diff --git a/node_modules/@mariozechner/pi-web-ui/src/components/Messages.ts b/node_modules/@mariozechner/pi-web-ui/src/components/Messages.ts
+index 485c513..a92f2ef 100644
+--- a/node_modules/@mariozechner/pi-web-ui/src/components/Messages.ts
++++ b/node_modules/@mariozechner/pi-web-ui/src/components/Messages.ts
+@@ -56,7 +56,7 @@ export class UserMessage extends LitElement {
+ 		const content =
+ 			typeof this.message.content === "string"
+ 				? this.message.content
+-				: this.message.content.find((c) => c.type === "text")?.text || "";
++				: (this.message.content.find((c) => c.type === "text") as { type: "text"; text: string } | undefined)?.text || "";
+ 
+ 		return html`
+ 			<div class="flex justify-start mx-4">
+diff --git a/node_modules/@mariozechner/pi-web-ui/src/utils/model-discovery.ts b/node_modules/@mariozechner/pi-web-ui/src/utils/model-discovery.ts
+index 299aa9a..b35ef36 100644
+--- a/node_modules/@mariozechner/pi-web-ui/src/utils/model-discovery.ts
++++ b/node_modules/@mariozechner/pi-web-ui/src/utils/model-discovery.ts
+@@ -232,8 +232,8 @@ export async function discoverLMStudioModels(baseUrl: string, _apiKey?: string):
+ 					api: "openai-completions" as any,
+ 					provider: "", // Will be set by caller
+ 					baseUrl: `${baseUrl}/v1`,
+-					reasoning: model.trainedForToolUse || false,
+-					input: model.vision ? ["text", "image"] : ["text"],
++					reasoning: (model as any).trainedForToolUse || false,
++					input: (model as any).vision ? ["text", "image"] : ["text"],
+ 					cost: {
+ 						input: 0,
+ 						output: 0,

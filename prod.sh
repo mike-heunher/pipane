@@ -15,7 +15,7 @@ echo "🏗️  Building pi-web for production..."
 
 # 0. Rebuild pi-web-ui with tsc (tsgo has a bug with useDefineForClassFields: false)
 echo "   → Rebuilding pi-web-ui (tsc)..."
-WEB_UI_DIR="$(realpath "$(node -e "const pkg=JSON.parse(require('fs').readFileSync('package.json'));console.log(pkg.dependencies['@mariozechner/pi-web-ui'].replace('file:',''))")")"
+WEB_UI_DIR="$(node -e "const p=require.resolve('@mariozechner/pi-web-ui');const marker='node_modules/@mariozechner/pi-web-ui';console.log(p.substring(0,p.indexOf(marker)+marker.length))")"
 npx tsc -p "$WEB_UI_DIR/tsconfig.build.json"
 
 # 1. Build client (vite + tailwind)

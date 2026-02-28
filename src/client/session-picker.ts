@@ -23,6 +23,22 @@ interface DirEntry {
 	path: string;
 }
 
+const PINNED_STORAGE_KEY = "pi-web-pinned-sessions";
+
+function loadPinnedSessions(): Set<string> {
+	try {
+		const raw = localStorage.getItem(PINNED_STORAGE_KEY);
+		if (raw) return new Set(JSON.parse(raw));
+	} catch { /* */ }
+	return new Set();
+}
+
+function savePinnedSessions(pinned: Set<string>) {
+	try {
+		localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify([...pinned]));
+	} catch { /* */ }
+}
+
 @customElement("session-picker")
 export class SessionPicker extends LitElement {
 	static styles = css`
@@ -253,6 +269,38 @@ export class SessionPicker extends LitElement {
 			min-width: 0;
 		}
 
+		.pin-btn {
+			background: none;
+			border: none;
+			color: var(--picker-muted);
+			cursor: pointer;
+			padding: 0.15rem;
+			border-radius: 3px;
+			opacity: 0;
+			transition: all 0.15s;
+			flex-shrink: 0;
+			margin-top: 0.1rem;
+		}
+
+		.pin-btn.pinned {
+			opacity: 0.6;
+			color: var(--picker-active);
+		}
+
+		.session-item:hover .pin-btn {
+			opacity: 0.5;
+		}
+
+		.pin-btn:hover {
+			opacity: 1 !important;
+			color: var(--picker-active);
+			background: var(--picker-active-bg);
+		}
+
+		.pin-indicator {
+			font-size: 0.65rem;
+		}
+
 		.delete-btn {
 			background: none;
 			border: none;
@@ -475,6 +523,7 @@ export class SessionPicker extends LitElement {
 	@state() private loading = true;
 	@state() private searchQuery = "";
 	@state() private expandedGroups = new Set<string>();
+	@state() private pinnedSessions = loadPinnedSessions();
 
 	// Folder picker state
 	@state() private showFolderPicker = false;
@@ -582,15 +631,16 @@ export class SessionPicker extends LitElement {
 			groups.push({ cwd, label, sessions });
 		}
 
-		// Sort sessions within each group by the most recent user prompt time.
-		// Running sessions are pinned to top; among themselves sorted by name for stability.
+		// Sort sessions within each group:
+		//   1. Running sessions (sorted by name for stability)
+		//   2. Pinned sessions (sorted by recency)
+		//   3. Unpinned sessions (sorted by recency)
 		for (const g of groups) {
 			g.sessions.sort((a, b) => {
 				const aRunning = this.agent.getSessionStatus(a.path) === "running";
 				const bRunning = this.agent.getSessionStatus(b.path) === "running";
 
 				if (aRunning && bRunning) {
-					// Both running: sort by display name for stable ordering
 					const aName = this.getSessionDisplayName(a);
 					const bName = this.getSessionDisplayName(b);
 					return aName.localeCompare(bName, undefined, { sensitivity: "base" });
@@ -598,8 +648,11 @@ export class SessionPicker extends LitElement {
 				if (aRunning) return -1;
 				if (bRunning) return 1;
 
-				// Neither running: sort by last user prompt time, most recent first.
-				// Fall back to modified time if no user prompts exist.
+				const aPinned = this.pinnedSessions.has(a.path);
+				const bPinned = this.pinnedSessions.has(b.path);
+				if (aPinned && !bPinned) return -1;
+				if (!aPinned && bPinned) return 1;
+
 				const aTime = a.lastUserPromptTime ? new Date(a.lastUserPromptTime).getTime() : new Date(a.modified).getTime();
 				const bTime = b.lastUserPromptTime ? new Date(b.lastUserPromptTime).getTime() : new Date(b.modified).getTime();
 				return bTime - aTime;
@@ -668,6 +721,19 @@ export class SessionPicker extends LitElement {
 		}
 	}
 
+	private handleTogglePin(e: Event, session: SessionInfoDTO) {
+		e.stopPropagation();
+		e.preventDefault();
+		const next = new Set(this.pinnedSessions);
+		if (next.has(session.path)) {
+			next.delete(session.path);
+		} else {
+			next.add(session.path);
+		}
+		this.pinnedSessions = next;
+		savePinnedSessions(next);
+	}
+
 	private async handleDeleteSession(e: Event, session: SessionInfoDTO) {
 		e.stopPropagation();
 		e.preventDefault();
@@ -678,6 +744,12 @@ export class SessionPicker extends LitElement {
 
 		// Optimistically remove from UI immediately
 		this.sessions = this.sessions.filter((s) => s.path !== session.path);
+		if (this.pinnedSessions.has(session.path)) {
+			const next = new Set(this.pinnedSessions);
+			next.delete(session.path);
+			this.pinnedSessions = next;
+			savePinnedSessions(next);
+		}
 		if (isActive) {
 			this.agent.newSession();
 		}
@@ -815,6 +887,7 @@ export class SessionPicker extends LitElement {
 				(s) => s.id,
 				(s) => {
 					const status = this.agent.getSessionStatus(s.path);
+					const isPinned = this.pinnedSessions.has(s.path);
 					return html`
 					<button
 						class="session-item ${s.id === activeId ? "active" : ""}"
@@ -823,7 +896,7 @@ export class SessionPicker extends LitElement {
 					>
 						<div class="session-item-row">
 							<div class="session-item-content">
-								<span class="session-name">${this.getSessionDisplayName(s)}</span>
+								<span class="session-name">${isPinned ? html`<span class="pin-indicator">📌</span> ` : nothing}${this.getSessionDisplayName(s)}</span>
 								<span class="session-meta">
 									${status === "running"
 										? html`<span class="status-badge running"><span class="status-dot"></span>running</span>`
@@ -833,6 +906,16 @@ export class SessionPicker extends LitElement {
 									${this.formatTime(s.lastUserPromptTime || s.modified)} · ${s.messageCount} msgs
 								</span>
 							</div>
+							<span
+								class="pin-btn ${isPinned ? "pinned" : ""}"
+								@click=${(e: Event) => this.handleTogglePin(e, s)}
+								title="${isPinned ? "Unpin session" : "Pin to top"}"
+							>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="${isPinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M12 17v5"></path>
+									<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"></path>
+								</svg>
+							</span>
 							<span
 								class="delete-btn"
 								@click=${(e: Event) => this.handleDeleteSession(e, s)}

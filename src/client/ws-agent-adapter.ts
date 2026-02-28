@@ -135,15 +135,7 @@ export class WsAgentAdapter {
 		for (const fn of this._steeringQueueListeners) fn();
 	}
 
-	/** Get the steering queue for a specific session, creating it if needed. */
-	private getQueue(sessionPath: string): string[] {
-		let q = this._steeringQueues.get(sessionPath);
-		if (!q) {
-			q = [];
-			this._steeringQueues.set(sessionPath, q);
-		}
-		return q;
-	}
+
 
 	onSessionChange(fn: () => void): () => void {
 		this._sessionListeners.add(fn);
@@ -262,6 +254,28 @@ export class WsAgentAdapter {
 		if (data.type === "init") {
 			if (data.sessionStatuses) {
 				this.setAllSessionStatuses(data.sessionStatuses);
+			}
+			// Restore steering queues from server
+			if (data.steeringQueues) {
+				this._steeringQueues.clear();
+				for (const [sp, q] of Object.entries(data.steeringQueues as Record<string, string[]>)) {
+					if (q.length > 0) this._steeringQueues.set(sp, [...q]);
+				}
+				this.emitSteeringQueueChange();
+			}
+			return;
+		}
+
+		// Server-authoritative steering queue update
+		if (data.type === "steering_queue_update") {
+			const sp = data.sessionPath as string;
+			if (sp) {
+				if (data.queue && data.queue.length > 0) {
+					this._steeringQueues.set(sp, [...data.queue]);
+				} else {
+					this._steeringQueues.delete(sp);
+				}
+				this.emitSteeringQueueChange();
 			}
 			return;
 		}
@@ -417,10 +431,7 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
-				if (this._sessionPath) {
-					this._steeringQueues.delete(this._sessionPath);
-				}
-				this.emitSteeringQueueChange();
+				// Steering queue clearing is now handled server-side via steering_queue_update events
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
@@ -440,21 +451,7 @@ export class WsAgentAdapter {
 				if (!this.isMessageAlreadyPresent(event.message)) {
 					this._state.messages = [...this._state.messages, event.message];
 				}
-				// When a user message appears during streaming, it was a steering message being delivered
-				if (event.message.role === "user" && this._sessionPath) {
-					const queue = this._steeringQueues.get(this._sessionPath);
-					if (queue && queue.length > 0) {
-						const text = typeof event.message.content === "string"
-							? event.message.content
-							: event.message.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join(" ");
-						const idx = queue.indexOf(text);
-						if (idx !== -1) {
-							queue.splice(idx, 1);
-							if (queue.length === 0) this._steeringQueues.delete(this._sessionPath);
-							this.emitSteeringQueueChange();
-						}
-					}
-				}
+				// Steering queue dequeuing is now handled server-side via steering_queue_update events
 				break;
 
 			case "turn_end":
@@ -616,8 +613,7 @@ export class WsAgentAdapter {
 			? this._globalSessionStatus.get(this._sessionPath) === "running"
 			: false;
 		if (targetIsRunning && this._sessionPath) {
-			this.getQueue(this._sessionPath).push(text);
-			this.emitSteeringQueueChange();
+			// Queue is now managed server-side; just send the steer command
 			await this.send({
 				type: "steer",
 				sessionPath: this._sessionPath,
@@ -664,9 +660,43 @@ export class WsAgentAdapter {
 		return "";
 	}
 
+	private showHelpMessage() {
+		const helpText = [
+			"**Available commands:**",
+			"",
+			"| Command | Description |",
+			"|---------|-------------|",
+			"| `/help` | Show this help |",
+			"| `/new` | Start a new session |",
+			"| `/fork` | Fork session from a previous message |",
+			"| `/compact [instructions]` | Compact conversation history |",
+			"",
+			"**Keyboard shortcuts:**",
+			"",
+			"| Shortcut | Action |",
+			"|----------|--------|",
+			"| `Enter` | Send message (also works during streaming to steer) |",
+			"| `Cmd+Enter` | Fork session and send message in the fork |",
+			"| `Shift+Enter` | New line |",
+			"| `Escape` | Abort current turn |",
+		].join("\n");
+
+		const helpMessage = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: helpText }],
+		} as AgentMessage;
+		this._state.messages = [...this._state.messages, helpMessage];
+		this.emitContentChange();
+	}
+
 	private async handleSlashCommand(text: string): Promise<boolean> {
 		const trimmed = text.trim();
 		if (!trimmed.startsWith("/")) return false;
+
+		if (trimmed === "/help") {
+			this.showHelpMessage();
+			return true;
+		}
 
 		if (trimmed === "/new") {
 			await this.newSession();
@@ -702,9 +732,13 @@ export class WsAgentAdapter {
 		// Only steer if the current session is actually running (not some other session)
 		const isRunning = this._globalSessionStatus.get(this._sessionPath) === "running";
 		if (!isRunning) return;
-		this.getQueue(this._sessionPath).push(text);
-		this.emitSteeringQueueChange();
+		// Queue is managed server-side; just send the steer command
 		this.send({ type: "steer", sessionPath: this._sessionPath, message: text }).catch(console.error);
+	}
+
+	removeSteering(index: number) {
+		if (!this._sessionPath) return;
+		this.send({ type: "remove_steering", sessionPath: this._sessionPath, index }).catch(console.error);
 	}
 
 	followUp(_m: AgentMessage) {
@@ -780,6 +814,41 @@ export class WsAgentAdapter {
 			cancelled: data?.cancelled ?? false,
 			newSessionPath: data?.newSessionPath ?? null,
 		};
+	}
+
+	// ── Fork and prompt ────────────────────────────────────────────────────
+
+	/**
+	 * Fork the entire current session state into a new session and run a prompt there.
+	 * Used for Cmd+Enter: creates a branch of the conversation with the new input.
+	 */
+	async forkAndPrompt(text: string, images?: ImageContent[]): Promise<void> {
+		if (!this._sessionPath || this._sessionStatus === "virtual") {
+			// No session to fork — just do a regular prompt
+			await this.prompt(text, images);
+			return;
+		}
+
+		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
+
+		const data = await this.send({
+			type: "fork_prompt",
+			sessionPath: this._sessionPath,
+			message: text,
+			model: modelPayload,
+			thinkingLevel: this._state.thinkingLevel,
+			images,
+		});
+
+		// Switch to the new forked session
+		if (data?.newSessionPath) {
+			this._sessionPath = data.newSessionPath;
+			const filename = path.basename(data.newSessionPath, ".jsonl");
+			const parts = filename.split("_");
+			this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+			// The session_attached event from the server will set status to "attached"
+			this.emitSessionChange();
+		}
 	}
 
 	// ── Session management ─────────────────────────────────────────────────

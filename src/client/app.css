@@ -1,6 +1,13 @@
 @import "@mariozechner/pi-web-ui/app.css";
 @import "tailwindcss";
 
+/* ── Full-width conversation: remove max-w-3xl constraint on messages & input ── */
+
+agent-interface .overflow-y-auto > .max-w-3xl,
+agent-interface .shrink-0 > .max-w-3xl {
+	max-width: 100%;
+}
+
 /* ── Send button injected next to stop in message-editor during streaming ── */
 
 .injected-send-btn {
@@ -27,17 +34,15 @@
 
 .steering-queue {
 	position: absolute;
-	bottom: 0;
+	bottom: var(--input-area-height, 90px);
 	left: 50%;
 	transform: translateX(-50%);
 	width: 100%;
 	max-width: 48rem;
-	padding: 0 0.5rem;
+	padding: 0 1rem;
 	box-sizing: border-box;
 	z-index: 20;
 	pointer-events: none;
-	/* Dynamically set via ResizeObserver on the input area */
-	margin-bottom: var(--input-area-height, 90px);
 }
 
 .steering-queue-header {
@@ -88,6 +93,28 @@
 	word-break: break-word;
 }
 
+.steering-queue-remove {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.2rem;
+	height: 1.2rem;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	padding: 0;
+	transition: background 0.15s, color 0.15s;
+	margin-top: 0.05rem;
+}
+
+.steering-queue-remove:hover {
+	background: color-mix(in srgb, var(--destructive, #ef4444) 15%, transparent);
+	color: var(--destructive, #ef4444);
+}
+
 @keyframes steering-slide-in {
 	from {
 		opacity: 0;
@@ -97,4 +124,63 @@
 		opacity: 1;
 		transform: translateY(0);
 	}
+}
+
+/* ── Canvas side panel ─────────────────────────────────────────── */
+
+.canvas-container {
+	width: 45%;
+	min-width: 320px;
+	max-width: 700px;
+	flex-shrink: 0;
+	overflow: hidden;
+}
+
+.canvas-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	background: var(--background, #fff);
+}
+
+.canvas-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0.5rem 0.75rem;
+	border-bottom: 1px solid var(--border, #e5e7eb);
+	flex-shrink: 0;
+}
+
+.canvas-title {
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--foreground, #111);
+}
+
+.canvas-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	border: none;
+	border-radius: 0.25rem;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	font-size: 0.85rem;
+	line-height: 1;
+	transition: background 0.15s, color 0.15s;
+}
+
+.canvas-close:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
+.canvas-body {
+	flex: 1;
+	overflow-y: auto;
+	padding: 1rem;
 }

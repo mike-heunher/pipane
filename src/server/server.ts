@@ -17,7 +17,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { unlink } from "node:fs/promises";
+import { unlink, copyFile } from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync, watch, type FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
@@ -206,6 +206,28 @@ const pool: RpcProcess[] = [];
 /** Map from session path → attached RPC process */
 const attachedSessions = new Map<string, RpcProcess>();
 
+/** Server-side steering queue: queued messages per session. */
+const steeringQueues = new Map<string, string[]>();
+
+function getSteeringQueue(sessionPath: string): string[] {
+	let q = steeringQueues.get(sessionPath);
+	if (!q) {
+		q = [];
+		steeringQueues.set(sessionPath, q);
+	}
+	return q;
+}
+
+function broadcastSteeringQueue(sessionPath: string) {
+	if (!connectedWs || connectedWs.readyState !== WebSocket.OPEN) return;
+	const queue = steeringQueues.get(sessionPath) ?? [];
+	connectedWs.send(JSON.stringify({
+		type: "steering_queue_update",
+		sessionPath,
+		queue,
+	}));
+}
+
 /**
  * Persistent (for server lifetime) session status tracking.
  * "running" = pi process currently attached and executing a turn.
@@ -226,7 +248,14 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 	const useCwd = cwd || PI_CWD;
 	console.log(`[pool] Spawning pi process #${procId} (cwd: ${useCwd})...`);
 
-	const child = spawn("node", [PI_CLI, "--mode", "rpc"], {
+	// Resolve canvas extension relative to project root (2 dirs up from src/server or dist/server)
+	const canvasExtension = path.resolve(__dirname, "../../extensions/canvas.ts");
+
+	const child = spawn("node", [
+		PI_CLI,
+		"--mode", "rpc",
+		"-e", canvasExtension,
+	], {
 		cwd: useCwd,
 		env: { ...process.env },
 		stdio: ["pipe", "pipe", "pipe"],
@@ -252,12 +281,37 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 
 	child.on("exit", (code) => {
 		console.log(`[pool] pi#${proc.id} exited (code ${code})`);
-		// Remove from pool and attached map
+		// Remove from pool
 		const idx = pool.indexOf(proc);
 		if (idx !== -1) pool.splice(idx, 1);
+
+		// If the process was attached to a session, clean up properly:
+		// update sessionStatus and notify the WS client so the frontend
+		// doesn't show a permanently-wedged "running" badge.
 		if (proc.attachedSession) {
-			attachedSessions.delete(proc.attachedSession);
+			const sessionPath = proc.attachedSession;
+			attachedSessions.delete(sessionPath);
+			sessionStatus.set(sessionPath, "done");
+			console.log(`[pool] pi#${proc.id} crashed while attached to ${path.basename(sessionPath)} — marking done`);
+
+			// Notify connected WebSocket client
+			if (connectedWs && connectedWs.readyState === WebSocket.OPEN) {
+				connectedWs.send(JSON.stringify({ type: "session_detached", sessionPath }));
+			}
+
+			// Reject any pending RPC requests so callers don't hang
+			for (const [reqId, pending] of proc.pendingRequests) {
+				pending.reject(new Error(`pi process #${proc.id} exited unexpectedly (code ${code})`));
+			}
+			proc.pendingRequests.clear();
+
+			proc.attachedSession = null;
+			proc.eventTarget = null;
+			proc.sessionPath = null;
 		}
+
+		// Replenish the pool
+		ensurePoolSize();
 	});
 
 	rl.on("line", (line: string) => {
@@ -284,11 +338,33 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 			}));
 		}
 
-		// Detect agent_end to auto-release the process
-		if (data.type === "agent_end" && proc.onAgentEnd) {
-			const cb = proc.onAgentEnd;
-			proc.onAgentEnd = null;
-			cb();
+		// Dequeue steering messages when user message is confirmed by the agent
+		if (data.type === "message_end" && data.message?.role === "user" && proc.sessionPath) {
+			const queue = steeringQueues.get(proc.sessionPath);
+			if (queue && queue.length > 0) {
+				const text = typeof data.message.content === "string"
+					? data.message.content
+					: (data.message.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join(" ");
+				const idx = queue.indexOf(text);
+				if (idx !== -1) {
+					queue.splice(idx, 1);
+					if (queue.length === 0) steeringQueues.delete(proc.sessionPath);
+					broadcastSteeringQueue(proc.sessionPath);
+				}
+			}
+		}
+
+		// Clear steering queue on agent_end and auto-release the process
+		if (data.type === "agent_end") {
+			if (proc.sessionPath) {
+				steeringQueues.delete(proc.sessionPath);
+				broadcastSteeringQueue(proc.sessionPath);
+			}
+			if (proc.onAgentEnd) {
+				const cb = proc.onAgentEnd;
+				proc.onAgentEnd = null;
+				cb();
+			}
 		}
 	});
 
@@ -548,9 +624,15 @@ wss.on("connection", async (ws) => {
 	connectedWs = ws;
 
 	// Send initial state: all session statuses (running/done) tracked this server lifetime
+	// Include steering queues so client picks up any pending steers on reconnect
+	const steeringQueuesObj: Record<string, string[]> = {};
+	for (const [k, v] of steeringQueues) {
+		if (v.length > 0) steeringQueuesObj[k] = [...v];
+	}
 	ws.send(JSON.stringify({
 		type: "init",
 		sessionStatuses: getSessionStatuses(),
+		steeringQueues: steeringQueuesObj,
 	}));
 
 	ws.on("message", async (raw) => {
@@ -648,8 +730,27 @@ wss.on("connection", async (ws) => {
 					if (!sessionPath) throw new Error("Missing sessionPath");
 					const proc = attachedSessions.get(sessionPath);
 					if (!proc) throw new Error("Session is not attached (agent not running)");
+					// Track in server-side queue
+					getSteeringQueue(sessionPath).push(command.message);
+					broadcastSteeringQueue(sessionPath);
 					await sendRpc(proc, { type: "steer", message: command.message });
 					ws.send(JSON.stringify({ id, type: "response", command: "steer", success: true }));
+					break;
+				}
+
+				// ── Remove a queued steering message by index ──────────
+				case "remove_steering": {
+					const sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
+					const index = command.index as number;
+					if (typeof index !== "number") throw new Error("Missing index");
+					const queue = steeringQueues.get(sessionPath);
+					if (queue && index >= 0 && index < queue.length) {
+						queue.splice(index, 1);
+						if (queue.length === 0) steeringQueues.delete(sessionPath);
+						broadcastSteeringQueue(sessionPath);
+					}
+					ws.send(JSON.stringify({ id, type: "response", command: "remove_steering", success: true }));
 					break;
 				}
 
@@ -739,6 +840,67 @@ wss.on("connection", async (ws) => {
 							cancelled: response.data?.cancelled ?? false,
 							newSessionPath: newSessionPath ?? null,
 						},
+					}));
+					break;
+				}
+
+				// ── Fork entire session state and prompt in the fork ────
+				case "fork_prompt": {
+					const sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
+					const message = command.message as string;
+					if (!message) throw new Error("Missing message");
+
+					// 1. Copy the JSONL file to create a new session with full history
+					const sessionsDir = path.join(getAgentDir(), "sessions");
+					const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+					const newId = crypto.randomUUID().slice(0, 8);
+					const newFilename = `${timestamp}_${newId}.jsonl`;
+					const newSessionPath = path.join(sessionsDir, newFilename);
+					await copyFile(sessionPath, newSessionPath);
+
+					// 2. Acquire a pi process and switch to the new session
+					const proc = await acquirePi(newSessionPath, ws);
+
+					// 3. Apply model/thinking level if provided
+					if (command.model) {
+						await sendRpc(proc, {
+							type: "set_model",
+							provider: command.model.provider,
+							modelId: command.model.modelId,
+						});
+					}
+					if (command.thinkingLevel) {
+						await sendRpc(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+					}
+
+					// 4. Notify client that session is attached
+					ws.send(JSON.stringify({
+						type: "session_attached",
+						sessionPath: newSessionPath,
+						cwd: PI_CWD,
+						firstMessage: message,
+					}));
+
+					// 5. Set up agent_end callback to release pi after turn
+					proc.onAgentEnd = () => {
+						releasePi(proc);
+						if (ws.readyState === WebSocket.OPEN) {
+							ws.send(JSON.stringify({ type: "session_detached", sessionPath: newSessionPath }));
+						}
+					};
+
+					// 6. Send the prompt
+					const promptCmd2: any = { type: "prompt", message };
+					if (command.images && command.images.length > 0) {
+						promptCmd2.images = command.images;
+					}
+					const response2 = await sendRpc(proc, promptCmd2);
+
+					ws.send(JSON.stringify({
+						id, type: "response", command: "fork_prompt",
+						success: true,
+						data: { newSessionPath },
 					}));
 					break;
 				}

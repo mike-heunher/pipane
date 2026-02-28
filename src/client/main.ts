@@ -25,6 +25,7 @@ import "./thinking-block-patch.js";
 import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
+import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages } from "./canvas-panel.js";
 
 registerCodingAgentRenderers();
 
@@ -103,8 +104,18 @@ function patchMessageEditor(ai: any) {
 
 	// Override handleKeyDown to allow Enter to send even while streaming
 	// (original blocks Enter when isStreaming=true)
+	// Cmd+Enter (or Ctrl+Enter): fork session and prompt in the fork
 	editor.handleKeyDown = (e: KeyboardEvent) => {
-		if (e.key === "Enter" && !e.shiftKey) {
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+			e.preventDefault();
+			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
+				const value = editor.value;
+				const attachments = editor.attachments;
+				editor.value = "";
+				editor.attachments = [];
+				handleForkAndPrompt(value, attachments);
+			}
+		} else if (e.key === "Enter" && !e.shiftKey) {
 			e.preventDefault();
 			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
 				editor.onSend?.(editor.value, editor.attachments);
@@ -164,25 +175,49 @@ function patchMessageEditor(ai: any) {
 function observeInputAreaHeight() {
 	const ai = chatPanel?.agentInterface;
 	if (!ai) return;
-	// The input area is the last .shrink-0 child inside the agent interface
-	const inputArea = ai.querySelector(".shrink-0");
+
+	// Find the input area: try message-editor first, then fall back to last .shrink-0
+	let inputArea: Element | null = ai.querySelector("message-editor");
+	if (!inputArea) {
+		const shrinkElements = ai.querySelectorAll(".shrink-0");
+		inputArea = shrinkElements[shrinkElements.length - 1] ?? null;
+	}
+
 	if (!inputArea || inputArea === observedInputArea) return;
 
 	// Clean up previous observer
 	if (inputAreaObserver) inputAreaObserver.disconnect();
 
 	observedInputArea = inputArea;
-	inputAreaObserver = new ResizeObserver((entries) => {
-		for (const entry of entries) {
-			const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+
+	const syncHeight = () => {
+		if (!observedInputArea) return;
+		// Walk up to find the containing shrink-0 wrapper (the actual bottom bar)
+		let el: Element | null = observedInputArea;
+		while (el && !el.classList.contains("shrink-0")) {
+			el = el.parentElement;
+		}
+		const target = el || observedInputArea;
+		const height = target.getBoundingClientRect().height;
+		if (height > 0) {
 			document.documentElement.style.setProperty("--input-area-height", `${height}px`);
 		}
-	});
+	};
+
+	inputAreaObserver = new ResizeObserver(() => syncHeight());
 	inputAreaObserver.observe(inputArea);
 
+	// Also observe the parent shrink-0 if different
+	let wrapper: Element | null = inputArea;
+	while (wrapper && !wrapper.classList.contains("shrink-0")) {
+		wrapper = wrapper.parentElement;
+	}
+	if (wrapper && wrapper !== inputArea) {
+		inputAreaObserver.observe(wrapper);
+	}
+
 	// Set initial value
-	const rect = inputArea.getBoundingClientRect();
-	document.documentElement.style.setProperty("--input-area-height", `${rect.height}px`);
+	syncHeight();
 }
 
 function renderSteeringQueue() {
@@ -199,6 +234,12 @@ function renderSteeringQueue() {
 				<div class="steering-queue-item">
 					<span class="steering-queue-index">${i + 1}</span>
 					<span class="steering-queue-text">${msg.length > 120 ? msg.slice(0, 120) + "…" : msg}</span>
+					<button class="steering-queue-remove" onclick=${() => { agent.removeSteering(i); }} title="Remove from queue">
+						<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+							<line x1="18" y1="6" x2="6" y2="18"></line>
+							<line x1="6" y1="6" x2="18" y2="18"></line>
+						</svg>
+					</button>
 				</div>
 			`)}
 		</div>
@@ -250,9 +291,14 @@ const renderApp = () => {
 							</div>
 						`
 						: ""}
-					<div class="flex-1 overflow-hidden relative">
-						${chatPanel}
-						${renderSteeringQueue()}
+					<div class="flex-1 overflow-hidden flex">
+						<div class="flex-1 overflow-hidden relative">
+							${chatPanel}
+							${renderSteeringQueue()}
+						</div>
+						${isCanvasVisible()
+							? html`<div id="canvas-container" class="canvas-container border-l border-border"></div>`
+							: ""}
 					</div>
 				</div>
 			</div>
@@ -262,8 +308,39 @@ const renderApp = () => {
 	render(appHtml, app);
 
 	// Re-observe after render in case DOM changed
-	requestAnimationFrame(() => observeInputAreaHeight());
+	requestAnimationFrame(() => {
+		observeInputAreaHeight();
+		const canvasEl = document.getElementById("canvas-container");
+		if (canvasEl) {
+			initCanvas(canvasEl, renderApp);
+		}
+	});
 };
+
+/**
+ * Fork the current session and prompt in the new fork.
+ * Handles image/document attachments the same way as sendMessage.
+ */
+async function handleForkAndPrompt(input: string, attachments?: any[]) {
+	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+	const docTexts: string[] = [];
+
+	if (attachments && attachments.length > 0) {
+		for (const att of attachments) {
+			if (att.type === "image") {
+				images.push({ type: "image", data: att.content, mimeType: att.mimeType });
+			} else if (att.extractedText) {
+				docTexts.push(att.extractedText);
+			}
+		}
+	}
+
+	const fullInput = docTexts.length > 0
+		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
+		: input;
+
+	await agent.forkAndPrompt(fullInput, images.length > 0 ? images : undefined);
+}
 
 async function initApp() {
 	const app = document.getElementById("app");
@@ -332,6 +409,14 @@ async function initApp() {
 				}
 			}
 		}
+
+		// Canvas tool: show side panel when tool_execution_end fires for "canvas"
+		if (ev.type === "tool_execution_end" && (ev as any).toolName === "canvas") {
+			const details = (ev as any).result?.details;
+			if (details?.markdown) {
+				showCanvas(details.title || "Canvas", details.markdown);
+			}
+		}
 	});
 
 	// Session switch: full re-init of chat panel
@@ -340,6 +425,8 @@ async function initApp() {
 		patchAgentInterface();
 		// Refresh steering queue for the new session (it's per-session now)
 		steeringQueue = agent.steeringQueue;
+		// Restore canvas state from the new session's messages
+		restoreCanvasFromMessages(agent.state.messages);
 		renderApp();
 	});
 
@@ -350,6 +437,8 @@ async function initApp() {
 			ai.session = agent as any;
 			ai.requestUpdate();
 		}
+		// Restore canvas state from refreshed messages
+		restoreCanvasFromMessages(agent.state.messages);
 	});
 
 	// Status change (attached/detached): update header badge & abort button
