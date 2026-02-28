@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prod mode: build client with vite, compile server with bun, run in tmux
+# Prod mode: build client + server with npm scripts, run in tmux
 # Runs in tmux session "pi-web-prod"
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -18,16 +18,9 @@ echo "   → Rebuilding pi-web-ui (tsc)..."
 WEB_UI_DIR="$(node -e "const p=require.resolve('@mariozechner/pi-web-ui');const marker='node_modules/@mariozechner/pi-web-ui';console.log(p.substring(0,p.indexOf(marker)+marker.length))")"
 npx tsc -p "$WEB_UI_DIR/tsconfig.build.json"
 
-# 1. Build client (vite + tailwind)
-echo "   → Building client..."
-npx vite build
-
-# 2. Compile server with bun
-echo "   → Compiling server with bun..."
-bun build src/server/server.ts \
-  --target=bun \
-  --outdir="$BUILD_DIR/server" \
-  --entry-naming="server.js"
+# 1. Build client + server
+echo "   → Building client + server..."
+npm run build
 
 echo "✅ Build complete."
 
@@ -38,7 +31,7 @@ echo "🚀 Starting pi-web in production mode (tmux: $SESSION)..."
 echo "   http://localhost:$PORT"
 
 tmux new-session -d -s "$SESSION" -c "$(pwd)" \
-  "PORT=$PORT PI_CWD=$PI_CWD NODE_ENV=production bun run $BUILD_DIR/server/server.js"
+  "PORT=$PORT PI_CWD=$PI_CWD NODE_ENV=production node $BUILD_DIR/server/server.js"
 
 echo "✅ Running in tmux session '$SESSION'"
 echo "   Attach: tmux attach -t $SESSION"

@@ -20,6 +20,8 @@ npm install
 
 By default, pi-web launches `pi` from your `PATH`.
 
+Package manager: **npm** (same as `pi-mono`).
+
 ## Development
 
 ```bash

@@ -1,4 +1,11 @@
-node_modules
-dist
-e2e/screenshots/ui/*.png
-e2e/latest/*.png
+node_modules/
+dist/
+
+# Playwright / test artifacts (generated)
+test-results/
+playwright-report/
+e2e/latest/
+e2e/screenshots/
+
+# OS
+.DS_Store
