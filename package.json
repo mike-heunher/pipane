@@ -10,7 +10,9 @@
 		"build": "vite build && bun build src/server/server.ts --target=bun --outdir=dist/server --entry-naming=server.js",
 		"start": "NODE_ENV=production bun run dist/server/server.js",
 		"prod": "./prod.sh",
-		"check": "tsc --noEmit"
+		"check": "tsc --noEmit",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"dependencies": {
 		"@mariozechner/mini-lit": "^0.2.0",
@@ -28,8 +30,10 @@
 		"@types/express": "^5.0.0",
 		"@types/ws": "^8.5.10",
 		"concurrently": "^9.0.0",
+		"happy-dom": "^20.7.0",
 		"tsx": "^4.19.0",
 		"typescript": "^5.7.3",
-		"vite": "^7.1.6"
+		"vite": "^7.1.6",
+		"vitest": "^3.2.4"
 	}
 }
