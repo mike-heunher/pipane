@@ -22,6 +22,13 @@ By default, pi-web launches `pi` from your `PATH`.
 
 Package manager: **npm** (same as `pi-mono`).
 
+## Global install
+
+```bash
+npm install -g pi-web
+pi-web
+```
+
 ## Development
 
 ```bash

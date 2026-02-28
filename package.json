@@ -1,21 +1,32 @@
 {
 	"name": "pi-web",
 	"version": "0.1.0",
-	"private": true,
+	"private": false,
 	"type": "module",
+	"bin": {
+		"pi-web": "bin/pi-web.js"
+	},
+	"files": [
+		"dist/",
+		"bin/",
+		"extensions/",
+		"patches/",
+		"README.md"
+	],
 	"scripts": {
 		"postinstall": "npx patch-package",
 		"dev": "./dev.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
-		"build": "vite build && tsc -p tsconfig.server.json",
+		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && vite build && tsc -p tsconfig.server.json",
 		"start": "NODE_ENV=production node dist/server/server.js",
 		"prod": "./prod.sh",
 		"check": "tsc --noEmit",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"test:screenshots": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts",
-		"test:screenshots:update": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts --update-snapshots"
+		"test:screenshots:update": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts --update-snapshots",
+		"prepack": "npm run build"
 	},
 	"dependencies": {
 		"@mariozechner/mini-lit": "^0.2.0",
