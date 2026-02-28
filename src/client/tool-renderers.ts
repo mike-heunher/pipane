@@ -377,7 +377,7 @@ class BashRenderer implements ToolRenderer {
 								try {
 									await navigator.clipboard.writeText(copyText);
 									btn.setAttribute("data-copied", "true");
-									btn.requestUpdate?.();
+									(btn as any).requestUpdate?.();
 									setTimeout(() => btn.removeAttribute("data-copied"), 1500);
 								} catch {}
 							}}

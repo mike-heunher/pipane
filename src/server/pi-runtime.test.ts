@@ -8,7 +8,7 @@ describe("pi runtime checks", () => {
 	});
 
 	it("checks PATH commands with which", () => {
-		const spawnSync = vi.fn(() => ({ status: 0 }));
+		const spawnSync = vi.fn(() => ({ status: 0 })) as any;
 		expect(checkCommandAvailable("pi", { spawnSync })).toBe(true);
 		expect(spawnSync).toHaveBeenCalledWith("which", ["pi"], expect.any(Object));
 	});
@@ -20,7 +20,7 @@ describe("pi runtime checks", () => {
 	});
 
 	it("installs pi with npm i -g when requested", async () => {
-		const spawnSync = vi.fn(() => ({ status: 0 }));
+		const spawnSync = vi.fn(() => ({ status: 0 })) as any;
 		const ok = await installPiGlobal({ spawnSync });
 		expect(ok).toBe(true);
 		expect(spawnSync).toHaveBeenCalledWith(
