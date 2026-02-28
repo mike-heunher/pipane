@@ -4,6 +4,34 @@ export function getSessionJsonlFilename(sessionPath: string | undefined): string
 	return normalized.split("/").pop() || "";
 }
 
+async function copyWithFallback(text: string): Promise<boolean> {
+	try {
+		if (navigator.clipboard?.writeText) {
+			await navigator.clipboard.writeText(text);
+			return true;
+		}
+	} catch {
+		// fall through to legacy copy method
+	}
+
+	try {
+		const ta = document.createElement("textarea");
+		ta.value = text;
+		ta.setAttribute("readonly", "true");
+		ta.style.position = "fixed";
+		ta.style.opacity = "0";
+		ta.style.pointerEvents = "none";
+		document.body.appendChild(ta);
+		ta.select();
+		ta.setSelectionRange(0, text.length);
+		const ok = typeof document.execCommand === "function" && document.execCommand("copy");
+		ta.remove();
+		return !!ok;
+	} catch {
+		return false;
+	}
+}
+
 export function ensureInputMenuButton(editor: Element, getSessionPath: () => string | undefined) {
 	if (editor.querySelector(".injected-menu-wrap")) return;
 
@@ -34,6 +62,7 @@ export function ensureInputMenuButton(editor: Element, getSessionPath: () => str
 		const filename = getSessionJsonlFilename(getSessionPath());
 		copyBtn.disabled = !filename;
 		copyBtn.title = filename || "No saved session file yet";
+		if (filename) copyBtn.textContent = "Copy session file (.jsonl)";
 	};
 
 	btn.addEventListener("click", (e) => {
@@ -48,11 +77,12 @@ export function ensureInputMenuButton(editor: Element, getSessionPath: () => str
 		e.stopPropagation();
 		const filename = getSessionJsonlFilename(getSessionPath());
 		if (!filename) return;
-		try {
-			await navigator.clipboard.writeText(filename);
-		} catch {
-			// ignore clipboard errors
-		}
+
+		const copied = await copyWithFallback(filename);
+		copyBtn.textContent = copied ? "Copied ✓" : "Copy failed";
+		setTimeout(() => {
+			copyBtn.textContent = "Copy session file (.jsonl)";
+		}, 1200);
 		dropdown.hidden = true;
 	});
 
