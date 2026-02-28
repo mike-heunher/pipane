@@ -28,7 +28,8 @@ type WsCommand =
 	| { type: "abort"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
-	| { type: "set_session_name"; sessionPath: string; name: string };
+	| { type: "set_session_name"; sessionPath: string; name: string }
+	| { type: "fork"; sessionPath: string; entryId: string };
 
 export class WsAgentAdapter {
 	private ws: WebSocket | null = null;
@@ -61,6 +62,12 @@ export class WsAgentAdapter {
 	private _steeringQueueListeners = new Set<() => void>();
 	/** Whether the agent is actually running a turn (separate from state.isStreaming which we keep false for the editor) */
 	private _isReallyStreaming = false;
+
+	// ── Disk-fetch event buffering ─────────────────────────────────────────
+	/** True while fetchMessagesFromDisk is in-flight. Streaming events are buffered. */
+	private _fetchingDisk = false;
+	/** Buffered agent events received while the disk fetch was in-flight. */
+	private _diskFetchBuffer: AgentEvent[] = [];
 
 	// ── Session state ──────────────────────────────────────────────────────
 	private _sessionId: string = "";
@@ -340,6 +347,15 @@ export class WsAgentAdapter {
 		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
 
 		const event = data as AgentEvent;
+
+		// Buffer streaming events while a disk fetch is in-flight to prevent
+		// the race between JSONL loading and live WebSocket events which causes
+		// duplicate messages. Events are replayed (with dedup) after the fetch.
+		if (this._fetchingDisk) {
+			this._diskFetchBuffer.push(event);
+			return;
+		}
+
 		this.updateState(event);
 		this.emit(event);
 	}
@@ -516,6 +532,9 @@ export class WsAgentAdapter {
 	async fetchMessagesFromDisk(): Promise<void> {
 		if (!this._sessionPath) return;
 
+		this._fetchingDisk = true;
+		this._diskFetchBuffer = [];
+
 		try {
 			const res = await fetch(`/api/sessions/messages?path=${encodeURIComponent(this._sessionPath)}`);
 			if (!res.ok) return;
@@ -538,9 +557,24 @@ export class WsAgentAdapter {
 				this._state.thinkingLevel = data.thinkingLevel;
 			}
 
+			// Replay any streaming events that arrived while the fetch was in-flight.
+			// The JSONL is now the authoritative base; updateState's dedup will skip
+			// messages already present from the JSONL.
+			const buffered = this._diskFetchBuffer;
+			this._diskFetchBuffer = [];
+			this._fetchingDisk = false;
+
+			for (const event of buffered) {
+				this.updateState(event);
+				this.emit(event);
+			}
+
 			this.emitContentChange();
 		} catch (err) {
 			console.error("Failed to fetch session messages:", err);
+		} finally {
+			this._fetchingDisk = false;
+			this._diskFetchBuffer = [];
 		}
 	}
 
@@ -639,6 +673,12 @@ export class WsAgentAdapter {
 			return true;
 		}
 
+		if (trimmed === "/fork") {
+			// Handled by the UI layer (main.ts) — emit a custom event
+			window.dispatchEvent(new CustomEvent("pi-fork-request"));
+			return true;
+		}
+
 		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
 			if (!this._sessionPath) return true;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
@@ -714,6 +754,32 @@ export class WsAgentAdapter {
 		this._state.error = undefined;
 		this._steeringQueues.clear();
 		this.emitSteeringQueueChange();
+	}
+
+	// ── Fork ───────────────────────────────────────────────────────────────
+
+	/** Get user messages from the current session for the fork selector. */
+	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
+		if (!this._sessionPath) return [];
+		const res = await fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`);
+		if (!res.ok) throw new Error(`Failed to get fork messages: ${res.statusText}`);
+		const data = await res.json();
+		return data.messages ?? [];
+	}
+
+	/** Fork the current session from a specific entry. Returns the new session path. */
+	async fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }> {
+		if (!this._sessionPath) throw new Error("No session loaded");
+		const data = await this.send({
+			type: "fork",
+			sessionPath: this._sessionPath,
+			entryId,
+		});
+		return {
+			text: data?.text ?? "",
+			cancelled: data?.cancelled ?? false,
+			newSessionPath: data?.newSessionPath ?? null,
+		};
 	}
 
 	// ── Session management ─────────────────────────────────────────────────

@@ -404,6 +404,52 @@ async function getOrSpawnIdlePi(): Promise<RpcProcess> {
 	return proc;
 }
 
+/**
+ * Get user messages from a session JSONL file (for fork selector).
+ * Reads the file directly without needing a pi process.
+ */
+app.get("/api/sessions/fork-messages", (req, res) => {
+	try {
+		const sessionPath = req.query.path as string;
+		if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
+			res.status(400).json({ error: "Missing or invalid session path" });
+			return;
+		}
+		if (!existsSync(sessionPath)) {
+			res.status(404).json({ error: "Session file not found" });
+			return;
+		}
+
+		const content = readFileSync(sessionPath, "utf8");
+		const entries = parseSessionEntries(content);
+		const messages: Array<{ entryId: string; text: string }> = [];
+
+		for (const entry of entries) {
+			if ((entry as any).type !== "message") continue;
+			const msg = (entry as any).message;
+			if (!msg || msg.role !== "user") continue;
+
+			let text = "";
+			if (typeof msg.content === "string") {
+				text = msg.content;
+			} else if (Array.isArray(msg.content)) {
+				text = msg.content
+					.filter((c: any) => c.type === "text")
+					.map((c: any) => c.text)
+					.join("");
+			}
+
+			if (text && (entry as any).id) {
+				messages.push({ entryId: (entry as any).id, text });
+			}
+		}
+
+		res.json({ messages });
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
 // ============================================================================
 // Slash Command Handling
 // ============================================================================
@@ -663,6 +709,36 @@ wss.on("connection", async (ws) => {
 					ws.send(JSON.stringify({
 						id, type: "response", command: "get_session_statuses",
 						success: true, data: { statuses: getSessionStatuses() },
+					}));
+					break;
+				}
+
+				// ── Fork session (needs attached pi) ────────────────────
+				case "fork": {
+					const sessionPath = command.sessionPath as string;
+					if (!sessionPath) throw new Error("Missing sessionPath");
+					const entryId = command.entryId as string;
+					if (!entryId) throw new Error("Missing entryId");
+
+					const proc = await acquirePi(sessionPath, ws);
+
+					const response = await sendRpc(proc, { type: "fork", entryId });
+
+					// After fork, the pi process is now on a new session file.
+					// Get the new session path from state.
+					const stateResp = await sendRpc(proc, { type: "get_state" });
+					const newSessionPath = stateResp.data?.sessionFile;
+
+					releasePi(proc);
+
+					ws.send(JSON.stringify({
+						id, type: "response", command: "fork",
+						success: true,
+						data: {
+							text: response.data?.text ?? "",
+							cancelled: response.data?.cancelled ?? false,
+							newSessionPath: newSessionPath ?? null,
+						},
 					}));
 					break;
 				}

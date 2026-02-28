@@ -21,6 +21,9 @@ import { DummyStorageBackend } from "./dummy-storage.js";
 import "./session-picker.js";
 import { registerCodingAgentRenderers } from "./tool-renderers.js";
 import "./message-renderers.js";
+import "./thinking-block-patch.js";
+import "./fork-modal.js";
+import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 
 registerCodingAgentRenderers();
@@ -314,6 +317,23 @@ async function initApp() {
 	// Patch the AgentInterface to allow sending during streaming
 	patchAgentInterface();
 
+	// Fix: clear the streaming container on message_end to prevent the same
+	// assistant message from rendering in BOTH message-list AND the streaming
+	// container. The upstream AgentInterface only clears it on agent_end,
+	// but between message_end and agent_end (while tools are executing)
+	// the streaming container still holds the old streamMessage.
+	agent.subscribe((ev) => {
+		if (ev.type === "message_end") {
+			const ai = chatPanel.agentInterface;
+			if (ai) {
+				const sc = ai.querySelector("streaming-message-container") as any;
+				if (sc) {
+					sc.setMessage(null, true);
+				}
+			}
+		}
+	});
+
 	// Session switch: full re-init of chat panel
 	agent.onSessionChange(async () => {
 		await chatPanel.setAgent(agent as any);
@@ -342,6 +362,35 @@ async function initApp() {
 		steeringQueue = agent.steeringQueue;
 		renderApp();
 	});
+
+	// Fork request handler (triggered by /fork command or keyboard shortcut)
+	const handleForkRequest = async () => {
+		if (!agent.sessionFile || agent.sessionStatus === "virtual") return;
+
+		const modal = document.createElement("fork-modal") as ForkModal;
+		document.body.appendChild(modal);
+
+		const result = await modal.open(agent);
+		if (!result) return; // cancelled
+
+		// Switch to the new forked session
+		if (result.newSessionPath) {
+			await agent.switchSession(result.newSessionPath);
+		}
+
+		// Pre-fill the editor with the selected message text
+		if (result.text) {
+			const ai = chatPanel.agentInterface;
+			const editor = ai?.querySelector("message-editor") as any;
+			if (editor) {
+				editor.value = result.text;
+				editor.requestUpdate();
+				requestAnimationFrame(() => editor.focus?.());
+			}
+		}
+	};
+
+	window.addEventListener("pi-fork-request", handleForkRequest);
 
 	// Load models and start with a virtual new session
 	await agent.loadDefaultModel();
