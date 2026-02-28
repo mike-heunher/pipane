@@ -106,43 +106,56 @@ export class SessionPicker extends LitElement {
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
-			padding: 0.4rem 0.75rem 0.2rem;
+			padding: 0.35rem 0.75rem;
+			margin-top: 0.25rem;
+			background: color-mix(in srgb, var(--picker-text) 5%, transparent);
+			border-top: 1px solid var(--picker-border);
+			border-bottom: 1px solid color-mix(in srgb, var(--picker-border) 60%, transparent);
+		}
+
+		.group-header:first-child {
+			margin-top: 0;
+			border-top: none;
 		}
 
 		.group-label {
-			font-size: 0.7rem;
-			font-weight: 600;
-			color: var(--picker-muted);
+			font-size: 0.72rem;
+			font-weight: 700;
+			color: var(--picker-text);
 			text-transform: uppercase;
-			letter-spacing: 0.03em;
+			letter-spacing: 0.04em;
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			flex: 1;
 			min-width: 0;
+			opacity: 0.8;
 		}
 
 		.group-new-btn {
 			background: none;
-			border: none;
+			border: 1px solid var(--picker-border);
 			color: var(--picker-muted);
 			cursor: pointer;
-			padding: 0 0.25rem;
+			padding: 0.05rem 0.35rem;
 			font-size: 0.8rem;
-			line-height: 1;
-			border-radius: 3px;
-			opacity: 0;
+			font-weight: 600;
+			line-height: 1.2;
+			border-radius: 4px;
+			opacity: 0.7;
 			transition: all 0.15s;
 			flex-shrink: 0;
 		}
 
 		.group-header:hover .group-new-btn {
-			opacity: 0.6;
+			opacity: 1;
+			border-color: var(--picker-muted);
 		}
 
 		.group-new-btn:hover {
 			opacity: 1 !important;
 			color: var(--picker-active);
+			border-color: var(--picker-active);
 			background: var(--picker-active-bg);
 		}
 
@@ -172,10 +185,12 @@ export class SessionPicker extends LitElement {
 
 		.session-name {
 			font-weight: 500;
-			white-space: nowrap;
+			display: -webkit-box;
+			-webkit-line-clamp: 2;
+			-webkit-box-orient: vertical;
 			overflow: hidden;
 			text-overflow: ellipsis;
-			display: block;
+			word-break: break-word;
 		}
 
 		.session-meta {
@@ -184,8 +199,47 @@ export class SessionPicker extends LitElement {
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
-			display: block;
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
 			margin-top: 1px;
+		}
+
+		.status-badge {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.2rem;
+			font-size: 0.6rem;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			padding: 0.05rem 0.3rem;
+			border-radius: 3px;
+			white-space: nowrap;
+			flex-shrink: 0;
+		}
+
+		.status-badge.running {
+			color: #ef4444;
+			background: color-mix(in srgb, #ef4444 12%, transparent);
+		}
+
+		.status-badge.running .status-dot {
+			width: 5px;
+			height: 5px;
+			border-radius: 50%;
+			background: #ef4444;
+			animation: pulse-dot 1.5s ease-in-out infinite;
+		}
+
+		@keyframes pulse-dot {
+			0%, 100% { opacity: 1; }
+			50% { opacity: 0.3; }
+		}
+
+		.status-badge.done {
+			color: #22c55e;
+			background: color-mix(in srgb, #22c55e 12%, transparent);
 		}
 
 		.session-item-row {
@@ -220,6 +274,26 @@ export class SessionPicker extends LitElement {
 			opacity: 1 !important;
 			color: #ef4444;
 			background: color-mix(in srgb, #ef4444 10%, transparent);
+		}
+
+		.show-more-btn {
+			display: block;
+			width: 100%;
+			box-sizing: border-box;
+			padding: 0.3rem 0.75rem;
+			border: none;
+			background: none;
+			color: var(--picker-muted);
+			text-align: left;
+			cursor: pointer;
+			font-size: 0.72rem;
+			font-weight: 500;
+			transition: all 0.15s;
+		}
+
+		.show-more-btn:hover {
+			color: var(--picker-active);
+			background: var(--picker-hover);
 		}
 
 		.empty {
@@ -400,6 +474,7 @@ export class SessionPicker extends LitElement {
 	@state() private sessions: SessionInfoDTO[] = [];
 	@state() private loading = true;
 	@state() private searchQuery = "";
+	@state() private expandedGroups = new Set<string>();
 
 	// Folder picker state
 	@state() private showFolderPicker = false;
@@ -409,6 +484,7 @@ export class SessionPicker extends LitElement {
 
 	private unsubSessionChange?: () => void;
 	private unsubSessionsChanged?: () => void;
+	private unsubGlobalStatus?: () => void;
 
 	connectedCallback() {
 		super.connectedCallback();
@@ -419,7 +495,13 @@ export class SessionPicker extends LitElement {
 				this.loadSessions();
 			});
 			this.unsubSessionsChanged = this.agent.onSessionsChanged(() => {
+				// Immediately merge any optimistic sessions into the current list
+				// so they appear without waiting for the async REST call.
+				this.mergeOptimisticSessions();
 				this.loadSessions();
+			});
+			this.unsubGlobalStatus = this.agent.onGlobalStatusChange(() => {
+				this.requestUpdate();
 			});
 		}
 	}
@@ -428,6 +510,29 @@ export class SessionPicker extends LitElement {
 		super.disconnectedCallback();
 		this.unsubSessionChange?.();
 		this.unsubSessionsChanged?.();
+		this.unsubGlobalStatus?.();
+	}
+
+	/**
+	 * Immediately merge optimistic sessions into the current cached list.
+	 * This makes new sessions appear in the sidebar instantly (same frame)
+	 * without waiting for the async REST call to /api/sessions.
+	 */
+	private mergeOptimisticSessions() {
+		const optimistic = this.agent.optimisticSessions;
+		if (optimistic.length === 0) return;
+
+		const existingPaths = new Set(this.sessions.map((s) => s.path));
+		let changed = false;
+		for (const opt of optimistic) {
+			if (!existingPaths.has(opt.path)) {
+				this.sessions = [...this.sessions, opt];
+				changed = true;
+			}
+		}
+		if (changed) {
+			this.requestUpdate();
+		}
 	}
 
 	async loadSessions() {
@@ -477,15 +582,46 @@ export class SessionPicker extends LitElement {
 			groups.push({ cwd, label, sessions });
 		}
 
-		const activeSessionId = this.agent?.sessionId;
+		// Sort sessions within each group by the most recent user prompt time.
+		// Running sessions are pinned to top; among themselves sorted by name for stability.
+		for (const g of groups) {
+			g.sessions.sort((a, b) => {
+				const aRunning = this.agent.getSessionStatus(a.path) === "running";
+				const bRunning = this.agent.getSessionStatus(b.path) === "running";
+
+				if (aRunning && bRunning) {
+					// Both running: sort by display name for stable ordering
+					const aName = this.getSessionDisplayName(a);
+					const bName = this.getSessionDisplayName(b);
+					return aName.localeCompare(bName, undefined, { sensitivity: "base" });
+				}
+				if (aRunning) return -1;
+				if (bRunning) return 1;
+
+				// Neither running: sort by last user prompt time, most recent first.
+				// Fall back to modified time if no user prompts exist.
+				const aTime = a.lastUserPromptTime ? new Date(a.lastUserPromptTime).getTime() : new Date(a.modified).getTime();
+				const bTime = b.lastUserPromptTime ? new Date(b.lastUserPromptTime).getTime() : new Date(b.modified).getTime();
+				return bTime - aTime;
+			});
+		}
+
+		// Sort groups by the most recent user prompt across their sessions.
+		// Running sessions count as "now" (most recent possible).
 		groups.sort((a, b) => {
-			const aHasActive = a.sessions.some((s) => s.id === activeSessionId);
-			const bHasActive = b.sessions.some((s) => s.id === activeSessionId);
-			if (aHasActive && !bHasActive) return -1;
-			if (bHasActive && !aHasActive) return 1;
-			const aTime = Math.max(...a.sessions.map((s) => new Date(s.modified).getTime()));
-			const bTime = Math.max(...b.sessions.map((s) => new Date(s.modified).getTime()));
-			return bTime - aTime;
+			const groupRecency = (g: SessionGroup): number => {
+				let best = 0;
+				for (const s of g.sessions) {
+					if (this.agent.getSessionStatus(s.path) === "running") return Infinity;
+					const t = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
+					best = Math.max(best, t);
+				}
+				return best;
+			};
+			const diff = groupRecency(b) - groupRecency(a);
+			// If equal recency (e.g. both have running sessions), sort by label for stability
+			if (diff === 0) return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+			return diff;
 		});
 
 		return groups;
@@ -495,7 +631,7 @@ export class SessionPicker extends LitElement {
 		if (s.name) return s.name;
 		const msg = s.firstMessage;
 		if (!msg || msg === "(no messages)") return "New session";
-		return msg.length > 60 ? msg.slice(0, 60) + "…" : msg;
+		return msg.length > 100 ? msg.slice(0, 100) + "…" : msg;
 	}
 
 	private formatTime(isoString: string): string {
@@ -540,14 +676,19 @@ export class SessionPicker extends LitElement {
 		const name = session.name || session.firstMessage || "this session";
 		if (!confirm(`Delete "${name.slice(0, 60)}"?`)) return;
 
+		// Optimistically remove from UI immediately
+		this.sessions = this.sessions.filter((s) => s.path !== session.path);
+		if (isActive) {
+			this.agent.newSession();
+		}
+
+		// Delete in background — restore on failure
 		try {
 			await this.agent.deleteSession(session.path);
-			if (isActive) {
-				await this.agent.newSession();
-			}
-			await this.loadSessions();
 		} catch (err) {
 			console.error("Failed to delete session:", err);
+			// Restore the session on failure
+			await this.loadSessions();
 		}
 	}
 
@@ -644,6 +785,22 @@ export class SessionPicker extends LitElement {
 	}
 
 	private renderGroup(group: SessionGroup, activeId: string): TemplateResult {
+		const isExpanded = this.expandedGroups.has(group.cwd);
+
+		// Count running sessions in this group
+		const runningCount = group.sessions.filter(
+			(s) => this.agent.getSessionStatus(s.path) === "running"
+		).length;
+
+		// Show at least 5 or all running sessions, whichever is more
+		const defaultLimit = Math.max(5, runningCount);
+		const totalCount = group.sessions.length;
+		const needsTruncation = totalCount > defaultLimit;
+		const visibleSessions = isExpanded || !needsTruncation
+			? group.sessions
+			: group.sessions.slice(0, defaultLimit);
+		const hiddenCount = totalCount - visibleSessions.length;
+
 		return html`
 			<div class="group-header" title=${group.cwd}>
 				<span class="group-label">${group.label}</span>
@@ -654,9 +811,11 @@ export class SessionPicker extends LitElement {
 				>+</button>
 			</div>
 			${repeat(
-				group.sessions,
+				visibleSessions,
 				(s) => s.id,
-				(s) => html`
+				(s) => {
+					const status = this.agent.getSessionStatus(s.path);
+					return html`
 					<button
 						class="session-item ${s.id === activeId ? "active" : ""}"
 						@click=${() => this.handleSessionClick(s)}
@@ -665,7 +824,14 @@ export class SessionPicker extends LitElement {
 						<div class="session-item-row">
 							<div class="session-item-content">
 								<span class="session-name">${this.getSessionDisplayName(s)}</span>
-								<span class="session-meta">${this.formatTime(s.modified)} · ${s.messageCount} msgs</span>
+								<span class="session-meta">
+									${status === "running"
+										? html`<span class="status-badge running"><span class="status-dot"></span>running</span>`
+										: status === "done"
+											? html`<span class="status-badge done">done</span>`
+											: nothing}
+									${this.formatTime(s.lastUserPromptTime || s.modified)} · ${s.messageCount} msgs
+								</span>
 							</div>
 							<span
 								class="delete-btn"
@@ -679,9 +845,24 @@ export class SessionPicker extends LitElement {
 							</span>
 						</div>
 					</button>
-				`,
+				`;
+				},
 			)}
+			${needsTruncation
+				? isExpanded
+					? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.cwd)}>▴ Show less</button>`
+					: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.cwd)}>▾ Show ${hiddenCount} more…</button>`
+				: nothing}
 		`;
+	}
+
+	private toggleGroupExpansion(cwd: string) {
+		if (this.expandedGroups.has(cwd)) {
+			this.expandedGroups.delete(cwd);
+		} else {
+			this.expandedGroups.add(cwd);
+		}
+		this.requestUpdate();
 	}
 
 	private renderFolderPicker(): TemplateResult {
