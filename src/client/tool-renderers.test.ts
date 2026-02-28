@@ -8,12 +8,27 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { getToolRenderer } from "@mariozechner/pi-web-ui";
-import { registerCodingAgentRenderers } from "./tool-renderers.js";
+import { formatBashMainText, registerCodingAgentRenderers } from "./tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
 registerCodingAgentRenderers();
 
 describe("BashRenderer override", () => {
+	it("strips single-line bash command from main text", () => {
+		expect(formatBashMainText("echo hello")).toBe("");
+		expect(formatBashMainText("  ls -la  ")).toBe("");
+	});
+
+	it("keeps multiline bash command in main text for tool visualization", () => {
+		const multi = "npm run build\nnpm run test";
+		expect(formatBashMainText(multi)).toBe(multi);
+	});
+
+	it("keeps explicit visualization marker text", () => {
+		const cmd = "# tool visualization\necho hello";
+		expect(formatBashMainText(cmd)).toBe(cmd);
+	});
+
 	it("registers a custom bash renderer that overrides the built-in", () => {
 		const renderer = getToolRenderer("bash");
 		expect(renderer).toBeDefined();

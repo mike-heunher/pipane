@@ -17,6 +17,11 @@ function truncate(s: string, max: number): string {
 	return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
+export function formatBashMainText(command: string): string {
+	if (!command?.trim()) return "";
+	return command.includes("\n") ? command : "";
+}
+
 function resultText(result: ToolResultMessage | undefined): string {
 	if (!result) return "";
 	return (
@@ -243,7 +248,14 @@ class BashRenderer implements ToolRenderer {
 
 		const command = parsed.command || "";
 		const output = resultText(result);
-		const combined = output ? `> ${command}\n\n${output}` : command ? `> ${command}` : "";
+		const mainTextCommand = formatBashMainText(command);
+		const combined = output
+			? mainTextCommand
+				? `> ${mainTextCommand}\n\n${output}`
+				: output
+			: mainTextCommand
+				? `> ${mainTextCommand}`
+				: "";
 		const isError = result?.isError ?? false;
 
 		const iconColor = state === "complete"
@@ -261,16 +273,17 @@ class BashRenderer implements ToolRenderer {
 			content: html`
 				<div class="border border-border rounded-lg overflow-hidden">
 					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
-						<div class="flex items-center gap-2">
+						<div class="flex items-center gap-2 min-w-0">
 							${statusIcon}
-							<span class="text-xs text-muted-foreground font-mono">console</span>
+							<span class="text-xs text-muted-foreground font-mono truncate" title="${command}">${command || "console"}</span>
 							${spinner}
 						</div>
 						<button
 							@click=${async (e: Event) => {
 								const btn = (e.currentTarget as HTMLElement);
+								const copyText = output ? (command ? `> ${command}\n\n${output}` : output) : command;
 								try {
-									await navigator.clipboard.writeText(combined);
+									await navigator.clipboard.writeText(copyText);
 									btn.setAttribute("data-copied", "true");
 									btn.requestUpdate?.();
 									setTimeout(() => btn.removeAttribute("data-copied"), 1500);
