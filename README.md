@@ -14,11 +14,11 @@ Browser (Vite + Lit)          Backend (Express + WS)         pi coding-agent
 
 ## Setup
 
-Requires `pi-mono` at `../pi-mono` with packages built (`npm run build` in pi-mono).
-
 ```bash
 npm install
 ```
+
+By default, pi-web launches `pi` from your `PATH`.
 
 ## Development
 
@@ -35,6 +35,6 @@ Open http://localhost:5173.
 ## Configuration
 
 - `PI_CWD` — Working directory for the agent (default: current directory)
-- `PI_CLI` — Path to the pi CLI entry point (default: auto-resolved from pi-mono)
+- `PI_CLI` — Optional CLI override. If set to a `.js/.mjs/.cjs` file, pi-web runs `node <that-file>`. If set to a binary name/path, pi-web runs it directly. Default: `pi` from `PATH`.
 - `PORT` — Backend server port (default: 3001)
 - API keys are read from environment variables (e.g., `ANTHROPIC_API_KEY`)

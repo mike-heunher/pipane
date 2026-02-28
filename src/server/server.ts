@@ -28,13 +28,12 @@ import {
 	buildSessionContext,
 	parseSessionEntries,
 } from "@mariozechner/pi-coding-agent";
+import { resolvePiLaunch } from "./pi-launch";
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
-const PI_CLI = process.env.PI_CLI || path.resolve(
-	fileURLToPath(import.meta.url),
-	"../../../../pi-mono/packages/coding-agent/dist/cli.js",
-);
+const PI_CLI = process.env.PI_CLI;
+const PI_LAUNCH = resolvePiLaunch(PI_CLI);
 
 const app = express();
 const server = createServer(app);
@@ -180,6 +179,86 @@ app.get("/api/browse", (req, res) => {
 	}
 });
 
+/**
+ * Debug view of pi process pool and session attachments.
+ */
+app.get("/api/debug/pool", (_req, res) => {
+	try {
+		const attachedBySession: Record<string, number> = {};
+		for (const [sessionPath, proc] of attachedSessions) {
+			attachedBySession[sessionPath] = proc.id;
+		}
+
+		const processes = pool.map((p) => ({
+			id: p.id,
+			pid: p.process.pid ?? null,
+			alive: p.process.exitCode === null,
+			exitCode: p.process.exitCode,
+			attachedSession: p.attachedSession,
+			sessionStatus: p.attachedSession ? sessionStatus.get(p.attachedSession) ?? null : null,
+			pendingRequests: p.pendingRequests.size,
+		}));
+
+		res.json({
+			now: new Date().toISOString(),
+			poolSize: POOL_SIZE,
+			liveProcesses: processes.filter((p) => p.alive).length,
+			attachedSessionCount: attachedSessions.size,
+			sessionStatus: getSessionStatuses(),
+			attachedBySession,
+			connectedWsOpen: !!connectedWs && connectedWs.readyState === WebSocket.OPEN,
+			processes,
+		});
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.get("/debug/pool", (_req, res) => {
+	res.type("html").send(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>pi-web pool debug</title>
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 16px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; text-align: left; }
+    th { background: #f6f6f6; }
+    .ok { color: #0a7d22; }
+    .bad { color: #b42318; }
+  </style>
+</head>
+<body>
+  <h3>pi-web pool debug</h3>
+  <div id="meta">loading…</div>
+  <table>
+    <thead>
+      <tr>
+        <th>proc</th><th>pid</th><th>alive</th><th>attachedSession</th><th>sessionStatus</th><th>pendingRequests</th><th>exitCode</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <pre id="raw"></pre>
+<script>
+async function tick(){
+  const r = await fetch('/api/debug/pool');
+  const d = await r.json();
+  document.getElementById('meta').textContent =
+    'now=' + d.now + ' live=' + d.liveProcesses + '/' + d.poolSize + ' attached=' + d.attachedSessionCount + ' wsOpen=' + d.connectedWsOpen;
+  const rows = (d.processes || []).map(p =>
+    '<tr><td>' + p.id + '</td><td>' + (p.pid ?? '') + '</td><td class="' + (p.alive ? 'ok':'bad') + '">' + p.alive + '</td><td>' + (p.attachedSession ?? '') + '</td><td>' + (p.sessionStatus ?? '') + '</td><td>' + p.pendingRequests + '</td><td>' + (p.exitCode ?? '') + '</td></tr>'
+  ).join('');
+  document.getElementById('rows').innerHTML = rows;
+  document.getElementById('raw').textContent = JSON.stringify({ sessionStatus: d.sessionStatus, attachedBySession: d.attachedBySession }, null, 2);
+}
+setInterval(tick, 1000); tick();
+</script>
+</body>
+</html>`);
+});
+
 // ============================================================================
 // Pi Process Pool
 // ============================================================================
@@ -198,13 +277,24 @@ interface RpcProcess {
 	sessionPath: string | null;
 	/** Called when agent_end is received */
 	onAgentEnd: (() => void) | null;
+	/** Correlation id for the currently running prompt turn (debug logging) */
+	currentTurnId: string | null;
 }
 
 const POOL_SIZE = 3;
 let nextProcId = 0;
+let nextTurnId = 0;
 const pool: RpcProcess[] = [];
 /** Map from session path → attached RPC process */
 const attachedSessions = new Map<string, RpcProcess>();
+
+function makeTurnId(): string {
+	return `turn_${Date.now()}_${++nextTurnId}`;
+}
+
+function debugTurn(stage: string, data: Record<string, any>) {
+	console.log(`[turn] ${stage} ${JSON.stringify(data)}`);
+}
 
 /** Server-side steering queue: queued messages per session. */
 const steeringQueues = new Map<string, string[]>();
@@ -251,8 +341,8 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 	// Resolve canvas extension relative to project root (2 dirs up from src/server or dist/server)
 	const canvasExtension = path.resolve(__dirname, "../../extensions/canvas.ts");
 
-	const child = spawn("node", [
-		PI_CLI,
+	const child = spawn(PI_LAUNCH.command, [
+		...PI_LAUNCH.baseArgs,
 		"--mode", "rpc",
 		"-e", canvasExtension,
 	], {
@@ -277,6 +367,7 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 		eventTarget: null,
 		sessionPath: null,
 		onAgentEnd: null,
+		currentTurnId: null,
 	};
 
 	child.on("exit", (code) => {
@@ -292,11 +383,22 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 			const sessionPath = proc.attachedSession;
 			attachedSessions.delete(sessionPath);
 			sessionStatus.set(sessionPath, "done");
+			debugTurn("status_done_set_on_exit", {
+				turnId: proc.currentTurnId,
+				procId: proc.id,
+				sessionPath,
+				exitCode: code,
+			});
 			console.log(`[pool] pi#${proc.id} crashed while attached to ${path.basename(sessionPath)} — marking done`);
 
 			// Notify connected WebSocket client
 			if (connectedWs && connectedWs.readyState === WebSocket.OPEN) {
 				connectedWs.send(JSON.stringify({ type: "session_detached", sessionPath }));
+				debugTurn("session_detached_sent_on_exit", {
+					turnId: proc.currentTurnId,
+					procId: proc.id,
+					sessionPath,
+				});
 			}
 
 			// Reject any pending RPC requests so callers don't hang
@@ -308,6 +410,7 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 			proc.attachedSession = null;
 			proc.eventTarget = null;
 			proc.sessionPath = null;
+			proc.currentTurnId = null;
 		}
 
 		// Replenish the pool
@@ -356,6 +459,11 @@ function spawnRpcProcess(cwd?: string): RpcProcess {
 
 		// Clear steering queue on agent_end and auto-release the process
 		if (data.type === "agent_end") {
+			debugTurn("agent_end_received", {
+				turnId: proc.currentTurnId,
+				procId: proc.id,
+				sessionPath: proc.sessionPath,
+			});
 			if (proc.sessionPath) {
 				steeringQueues.delete(proc.sessionPath);
 				broadcastSteeringQueue(proc.sessionPath);
@@ -437,6 +545,12 @@ async function acquirePi(sessionPath: string, ws: WebSocket): Promise<RpcProcess
 	proc.sessionPath = sessionPath;
 	attachedSessions.set(sessionPath, proc);
 	sessionStatus.set(sessionPath, "running");
+	debugTurn("status_running_set", {
+		turnId: proc.currentTurnId,
+		procId: proc.id,
+		sessionPath,
+		reason: "acquire_existing_session",
+	});
 
 	await sendRpc(proc, { type: "switch_session", sessionPath });
 
@@ -449,14 +563,25 @@ async function acquirePi(sessionPath: string, ws: WebSocket): Promise<RpcProcess
  */
 function releasePi(proc: RpcProcess) {
 	const sessionPath = proc.attachedSession;
+	debugTurn("release_called", {
+		turnId: proc.currentTurnId,
+		procId: proc.id,
+		sessionPath,
+	});
 	console.log(`[pool] pi#${proc.id} released from ${sessionPath ? path.basename(sessionPath) : "?"}`);
 	if (sessionPath) {
 		attachedSessions.delete(sessionPath);
 		sessionStatus.set(sessionPath, "done");
+		debugTurn("status_done_set", {
+			turnId: proc.currentTurnId,
+			procId: proc.id,
+			sessionPath,
+		});
 	}
 	proc.attachedSession = null;
 	proc.eventTarget = null;
 	proc.sessionPath = null;
+	proc.currentTurnId = null;
 	// Replenish pool if a process died while attached
 	ensurePoolSize();
 }
@@ -661,6 +786,15 @@ wss.on("connection", async (ws) => {
 					let sessionPath = command.sessionPath as string;
 					if (!sessionPath) throw new Error("Missing sessionPath");
 
+					const turnId = makeTurnId();
+					debugTurn("prompt_start", {
+						turnId,
+						incomingSessionPath: sessionPath,
+						hasModel: !!command.model,
+						hasThinkingLevel: !!command.thinkingLevel,
+						hasImages: !!(command.images && command.images.length > 0),
+					});
+
 					let proc: RpcProcess;
 
 					if (sessionPath === "__new__") {
@@ -688,9 +822,22 @@ wss.on("connection", async (ws) => {
 						proc.sessionPath = sessionPath;
 						attachedSessions.set(sessionPath, proc);
 						sessionStatus.set(sessionPath, "running");
+						debugTurn("status_running_set", {
+							turnId,
+							procId: proc.id,
+							sessionPath,
+							reason: "new_session",
+						});
 					} else {
 						proc = await acquirePi(sessionPath, ws);
 					}
+
+					proc.currentTurnId = turnId;
+					debugTurn("prompt_proc_acquired", {
+						turnId,
+						procId: proc.id,
+						sessionPath,
+					});
 
 					// Apply model/thinking level if provided
 					if (command.model) {
@@ -720,21 +867,55 @@ wss.on("connection", async (ws) => {
 						cwd: command.cwd || PI_CWD,
 						firstMessage: command.message,
 					}));
+					debugTurn("session_attached_sent", {
+						turnId,
+						procId: proc.id,
+						sessionPath,
+						wsOpen: ws.readyState === WebSocket.OPEN,
+					});
 
 					// Set up agent_end callback to release pi after turn
 					proc.onAgentEnd = () => {
+						const endedTurnId = proc.currentTurnId;
+						debugTurn("on_agent_end_callback", {
+							turnId: endedTurnId,
+							procId: proc.id,
+							sessionPath,
+							wsOpen: ws.readyState === WebSocket.OPEN,
+						});
 						releasePi(proc);
 						if (ws.readyState === WebSocket.OPEN) {
 							ws.send(JSON.stringify({ type: "session_detached", sessionPath }));
+							debugTurn("session_detached_sent", {
+								turnId: endedTurnId,
+								procId: proc.id,
+								sessionPath,
+							});
 						}
 					};
+					debugTurn("on_agent_end_registered", {
+						turnId,
+						procId: proc.id,
+						sessionPath,
+					});
 
 					// Send the prompt (returns immediately, events stream async)
 					const promptCmd: any = { type: "prompt", message: command.message };
 					if (command.images && command.images.length > 0) {
 						promptCmd.images = command.images;
 					}
+					debugTurn("prompt_rpc_send", {
+						turnId,
+						procId: proc.id,
+						sessionPath,
+					});
 					const response = await sendRpc(proc, promptCmd);
+					debugTurn("prompt_rpc_response", {
+						turnId,
+						procId: proc.id,
+						sessionPath,
+						success: !!response?.success,
+					});
 					ws.send(JSON.stringify({ ...response, id, command: "prompt" }));
 					break;
 				}
@@ -944,6 +1125,11 @@ wss.on("connection", async (ws) => {
 					}));
 			}
 		} catch (err: any) {
+			debugTurn("command_error", {
+				commandType: command?.type,
+				requestId: id,
+				error: err?.message || String(err),
+			});
 			ws.send(JSON.stringify({
 				id, type: "response", command: command.type, success: false, error: err.message,
 			}));
