@@ -1,2 +1,100 @@
 @import "@mariozechner/pi-web-ui/app.css";
 @import "tailwindcss";
+
+/* ── Abort button in header ─────────────────────────────────────── */
+
+.abort-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.3rem;
+	padding: 0.2rem 0.6rem;
+	border-radius: 0.375rem;
+	border: 1px solid color-mix(in srgb, #ef4444 40%, transparent);
+	background: color-mix(in srgb, #ef4444 10%, transparent);
+	color: #ef4444;
+	font-size: 0.75rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: all 0.15s;
+}
+
+.abort-btn:hover {
+	background: color-mix(in srgb, #ef4444 20%, transparent);
+	border-color: #ef4444;
+}
+
+/* ── Steering queue overlay ─────────────────────────────────────── */
+
+.steering-queue {
+	position: absolute;
+	bottom: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	width: 100%;
+	max-width: 48rem;
+	padding: 0 0.5rem;
+	box-sizing: border-box;
+	z-index: 20;
+	pointer-events: none;
+	/* Sits above the message editor (which is ~80px tall) */
+	margin-bottom: 90px;
+}
+
+.steering-queue-header {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	padding: 0.3rem 0.65rem;
+	font-size: 0.7rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--muted-foreground, #6b7280);
+}
+
+.steering-queue-item {
+	display: flex;
+	align-items: flex-start;
+	gap: 0.5rem;
+	padding: 0.4rem 0.65rem;
+	margin-bottom: 0.25rem;
+	border-radius: 0.375rem;
+	background: color-mix(in srgb, var(--primary, #2563eb) 8%, var(--background, #fff));
+	border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 20%, transparent);
+	pointer-events: auto;
+	animation: steering-slide-in 0.2s ease-out;
+}
+
+.steering-queue-index {
+	flex-shrink: 0;
+	width: 1.2rem;
+	height: 1.2rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--primary, #2563eb) 15%, transparent);
+	color: var(--primary, #2563eb);
+	font-size: 0.65rem;
+	font-weight: 700;
+	line-height: 1;
+}
+
+.steering-queue-text {
+	flex: 1;
+	font-size: 0.8rem;
+	color: var(--foreground, #111);
+	line-height: 1.4;
+	word-break: break-word;
+}
+
+@keyframes steering-slide-in {
+	from {
+		opacity: 0;
+		transform: translateY(8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}

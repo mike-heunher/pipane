@@ -24,6 +24,7 @@ export type SessionStatus = "virtual" | "detached" | "attached";
 
 type WsCommand =
 	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel; images?: ImageContent[] }
+	| { type: "steer"; sessionPath: string; message: string }
 	| { type: "abort"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
@@ -54,11 +55,22 @@ export class WsAgentAdapter {
 		error: undefined,
 	};
 
+	// ── Steering queue ─────────────────────────────────────────────────────
+	private _steeringQueue: string[] = [];
+	private _steeringQueueListeners = new Set<() => void>();
+	/** Whether the agent is actually running a turn (separate from state.isStreaming which we keep false for the editor) */
+	private _isReallyStreaming = false;
+
 	// ── Session state ──────────────────────────────────────────────────────
 	private _sessionId: string = "";
 	private _sessionPath: string | undefined;
 	private _sessionName: string | undefined;
 	private _sessionStatus: SessionStatus = "virtual";
+
+	/** Tracks status of ALL sessions: "running" while attached, "done" briefly after detach */
+	private _globalSessionStatus = new Map<string, "running" | "done">();
+	private _globalStatusListeners = new Set<() => void>();
+	private _doneTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	private _sessionListeners = new Set<() => void>();
 	private _contentListeners = new Set<() => void>();
@@ -69,8 +81,58 @@ export class WsAgentAdapter {
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
+	get isReallyStreaming(): boolean { return this._isReallyStreaming; }
+	get steeringQueue(): readonly string[] { return this._steeringQueue; }
+
+	/** Get the global status of a session by path. Returns "running", "done", or undefined (idle). */
+	getSessionStatus(sessionPath: string): "running" | "done" | undefined {
+		return this._globalSessionStatus.get(sessionPath);
+	}
+
+	onGlobalStatusChange(fn: () => void): () => void {
+		this._globalStatusListeners.add(fn);
+		return () => this._globalStatusListeners.delete(fn);
+	}
+	private emitGlobalStatusChange() {
+		for (const fn of this._globalStatusListeners) fn();
+	}
+
+	private setGlobalSessionStatus(sessionPath: string, status: "running" | "done" | null) {
+		// Clear any existing done timer
+		const existingTimer = this._doneTimers.get(sessionPath);
+		if (existingTimer) {
+			clearTimeout(existingTimer);
+			this._doneTimers.delete(sessionPath);
+		}
+
+		if (status === null) {
+			this._globalSessionStatus.delete(sessionPath);
+		} else {
+			this._globalSessionStatus.set(sessionPath, status);
+		}
+
+		if (status === "done") {
+			// Auto-clear "done" after 10 seconds
+			const timer = setTimeout(() => {
+				this._doneTimers.delete(sessionPath);
+				this._globalSessionStatus.delete(sessionPath);
+				this.emitGlobalStatusChange();
+			}, 10000);
+			this._doneTimers.set(sessionPath, timer);
+		}
+
+		this.emitGlobalStatusChange();
+	}
 
 	// ── Event subscriptions ────────────────────────────────────────────────
+
+	onSteeringQueueChange(fn: () => void): () => void {
+		this._steeringQueueListeners.add(fn);
+		return () => this._steeringQueueListeners.delete(fn);
+	}
+	private emitSteeringQueueChange() {
+		for (const fn of this._steeringQueueListeners) fn();
+	}
 
 	onSessionChange(fn: () => void): () => void {
 		this._sessionListeners.add(fn);
@@ -112,7 +174,7 @@ export class WsAgentAdapter {
 	// ── Connection ─────────────────────────────────────────────────────────
 
 	async connect(url: string): Promise<void> {
-		return new Promise((resolve, reject) => {
+		await new Promise<void>((resolve, reject) => {
 			this.ws = new WebSocket(url);
 
 			this.ws.onopen = () => {
@@ -125,6 +187,33 @@ export class WsAgentAdapter {
 			this.ws.onclose = () => { this.ws = null; };
 			this.ws.onmessage = (ev) => this.handleMessage(ev.data);
 		});
+
+		// When the tab regains focus, sync state in case events were missed
+		// or updates didn't render while backgrounded.
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible") {
+				this.syncStateOnFocus();
+			}
+		});
+	}
+
+	/**
+	 * Called when the tab regains visibility. If the session is detached but
+	 * isStreaming is still true, it means we missed or didn't process agent_end
+	 * properly while backgrounded. Fix it up and re-fetch messages.
+	 */
+	private syncStateOnFocus() {
+		if (this._sessionStatus === "detached" && this._state.isStreaming) {
+			console.log("[ws-adapter] Tab regained focus: clearing stale streaming state");
+			this._state.isStreaming = false;
+			this._state.streamMessage = null;
+			this._state.pendingToolCalls = new Set();
+			this._resolveRunning?.();
+			this._runningPromise = undefined;
+			this._resolveRunning = undefined;
+			this.emitStatusChange();
+			this.fetchMessagesFromDisk();
+		}
 	}
 
 	private handleMessage(raw: string) {
@@ -145,12 +234,20 @@ export class WsAgentAdapter {
 
 		// Init message with attached sessions
 		if (data.type === "init") {
-			// Could update status of current session if it's in the attached list
+			// Mark all initially attached sessions as running
+			if (Array.isArray(data.attachedSessions)) {
+				for (const sp of data.attachedSessions) {
+					this.setGlobalSessionStatus(sp, "running");
+				}
+			}
 			return;
 		}
 
-		// Session attached/detached notifications
+		// Session attached/detached notifications — track globally for ALL sessions
 		if (data.type === "session_attached") {
+			if (data.sessionPath) {
+				this.setGlobalSessionStatus(data.sessionPath, "running");
+			}
 			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
 				// For virtual sessions, adopt the server-assigned path
 				if (this._sessionStatus === "virtual" && data.sessionPath) {
@@ -166,12 +263,34 @@ export class WsAgentAdapter {
 		}
 
 		if (data.type === "session_detached") {
+			if (data.sessionPath) {
+				this.setGlobalSessionStatus(data.sessionPath, "done");
+			}
 			if (data.sessionPath === this._sessionPath) {
 				this._sessionStatus = "detached";
+				// Definitively clear streaming state — the turn is over.
+				// This is the authoritative signal, even if agent_end was missed
+				// (e.g. tab was backgrounded, events filtered, or race condition).
+				this._state.isStreaming = false;
+				this._state.streamMessage = null;
+				this._state.pendingToolCalls = new Set();
+				this._resolveRunning?.();
+				this._runningPromise = undefined;
+				this._resolveRunning = undefined;
 				this.emitStatusChange();
 				// Re-fetch messages from JSONL to get final state
 				this.fetchMessagesFromDisk();
 			}
+			return;
+		}
+
+		// Auto-title notification — update session name and trigger sidebar refresh
+		if (data.type === "session_auto_titled") {
+			if (data.sessionPath === this._sessionPath) {
+				this._sessionName = data.title;
+			}
+			// Trigger sidebar refresh
+			for (const fn of this.sessionsChangedListeners) fn(data.sessionPath);
 			return;
 		}
 
@@ -198,21 +317,27 @@ export class WsAgentAdapter {
 	private updateState(event: AgentEvent) {
 		switch (event.type) {
 			case "agent_start":
+				this._isReallyStreaming = true;
 				this._state.isStreaming = true;
 				this._state.error = undefined;
 				this._state.streamMessage = null;
 				this._runningPromise = new Promise((resolve) => {
 					this._resolveRunning = resolve;
 				});
+				this.emitStatusChange();
 				break;
 
 			case "agent_end":
+				this._isReallyStreaming = false;
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
+				this._steeringQueue = [];
+				this.emitSteeringQueueChange();
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
+				this.emitStatusChange();
 				break;
 
 			case "message_start":
@@ -226,6 +351,17 @@ export class WsAgentAdapter {
 			case "message_end":
 				this._state.streamMessage = null;
 				this._state.messages = [...this._state.messages, event.message];
+				// When a user message appears during streaming, it was a steering message being delivered
+				if (event.message.role === "user" && this._steeringQueue.length > 0) {
+					const text = typeof event.message.content === "string"
+						? event.message.content
+						: event.message.content.filter((c: any) => c.type === "text").map((c: any) => c.text).join(" ");
+					const idx = this._steeringQueue.indexOf(text);
+					if (idx !== -1) {
+						this._steeringQueue.splice(idx, 1);
+						this.emitSteeringQueueChange();
+					}
+				}
 				break;
 
 			case "turn_end":
@@ -357,6 +493,18 @@ export class WsAgentAdapter {
 		const handled = await this.handleSlashCommand(text);
 		if (handled) return;
 
+		// If agent is currently running, route as a steering message
+		if (this._isReallyStreaming && this._sessionPath) {
+			this._steeringQueue.push(text);
+			this.emitSteeringQueueChange();
+			await this.send({
+				type: "steer",
+				sessionPath: this._sessionPath,
+				message: text,
+			});
+			return;
+		}
+
 		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
 
 		if (this._sessionStatus === "virtual") {
@@ -421,8 +569,12 @@ export class WsAgentAdapter {
 		}
 	}
 
-	steer(_m: AgentMessage) {
-		// TODO: implement steering for attached sessions
+	steer(m: AgentMessage) {
+		const text = this.extractText(m);
+		if (!text || !this._isReallyStreaming || !this._sessionPath) return;
+		this._steeringQueue.push(text);
+		this.emitSteeringQueueChange();
+		this.send({ type: "steer", sessionPath: this._sessionPath, message: text }).catch(console.error);
 	}
 
 	followUp(_m: AgentMessage) {
@@ -448,10 +600,10 @@ export class WsAgentAdapter {
 	replaceMessages(ms: AgentMessage[]) { this._state.messages = ms.slice(); }
 	appendMessage(m: AgentMessage) { this._state.messages = [...this._state.messages, m]; }
 	clearMessages() { this._state.messages = []; }
-	clearSteeringQueue() {}
+	clearSteeringQueue() { this._steeringQueue = []; this.emitSteeringQueueChange(); }
 	clearFollowUpQueue() {}
-	clearAllQueues() {}
-	hasQueuedMessages(): boolean { return false; }
+	clearAllQueues() { this._steeringQueue = []; this.emitSteeringQueueChange(); }
+	hasQueuedMessages(): boolean { return this._steeringQueue.length > 0; }
 	setSteeringMode(_mode: "all" | "one-at-a-time") {}
 	getSteeringMode(): "all" | "one-at-a-time" { return "one-at-a-time"; }
 	setFollowUpMode(_mode: "all" | "one-at-a-time") {}
@@ -460,9 +612,12 @@ export class WsAgentAdapter {
 	reset() {
 		this._state.messages = [];
 		this._state.isStreaming = false;
+		this._isReallyStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
+		this._steeringQueue = [];
+		this.emitSteeringQueueChange();
 	}
 
 	// ── Session management ─────────────────────────────────────────────────
@@ -491,8 +646,9 @@ export class WsAgentAdapter {
 		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 		this._sessionStatus = "detached";
 
-		// Clear current state
+		// Clear current state — including isStreaming since a detached session is never streaming
 		this._state.messages = [];
+		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
 		this._state.error = undefined;
