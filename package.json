@@ -1,0 +1,33 @@
+{
+	"name": "pi-web",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "concurrently --names \"server,client\" --prefix-colors \"cyan,green\" \"tsx watch src/server/server.ts\" \"vite\"",
+		"dev:server": "tsx watch src/server/server.ts",
+		"dev:client": "vite",
+		"build": "vite build && tsc -p tsconfig.server.json",
+		"start": "node dist/server/server.js",
+		"check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@mariozechner/mini-lit": "^0.2.0",
+		"@mariozechner/pi-agent-core": "file:../pi-mono/packages/agent",
+		"@mariozechner/pi-ai": "file:../pi-mono/packages/ai",
+		"@mariozechner/pi-web-ui": "file:../pi-mono/packages/web-ui",
+		"@tailwindcss/vite": "^4.1.17",
+		"express": "^5.1.0",
+		"lit": "^3.3.1",
+		"lucide": "^0.544.0",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.0",
+		"@types/ws": "^8.5.10",
+		"concurrently": "^9.0.0",
+		"tsx": "^4.19.0",
+		"typescript": "^5.7.3",
+		"vite": "^7.1.6"
+	}
+}
