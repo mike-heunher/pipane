@@ -514,6 +514,44 @@ agent-interface streaming-message-container markdown-block {
 	font-size: inherit;
 }
 
+/* Long string rendering */
+.jsonl-str-long {
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.jsonl-str-truncated {
+	opacity: 1;
+}
+
+.jsonl-str-newline {
+	color: var(--muted-foreground, #6b7280);
+	opacity: 0.5;
+	font-size: 0.65em;
+	user-select: none;
+}
+
+.jsonl-str-toggle {
+	display: inline-block;
+	margin-left: 0.35em;
+	padding: 0.05em 0.45em;
+	font-family: inherit;
+	font-size: 0.85em;
+	line-height: 1.4;
+	color: var(--primary, #2563eb);
+	background: color-mix(in srgb, var(--primary, #2563eb) 8%, transparent);
+	border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 20%, transparent);
+	border-radius: 0.25em;
+	cursor: pointer;
+	vertical-align: baseline;
+	transition: background 0.12s, color 0.12s;
+}
+
+.jsonl-str-toggle:hover {
+	background: color-mix(in srgb, var(--primary, #2563eb) 15%, transparent);
+	color: var(--primary, #1d4ed8);
+}
+
 /* Syntax highlighting */
 .jsonl-key {
 	color: #0550ae;

@@ -4,6 +4,9 @@
  * Shows the raw JSONL lines from the current session file, each line
  * pretty-printed with syntax highlighting and collapsible. Auto-scrolls
  * to the bottom unless the user has scrolled up.
+ *
+ * Long strings are truncated with an expand/collapse toggle, and
+ * embedded newlines are rendered as actual line breaks.
  */
 
 import { html, render } from "lit";
@@ -17,6 +20,16 @@ let collapsedLines = new Set<number>();
 let scrollContainer: HTMLElement | null = null;
 let userScrolledUp = false;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Track which long strings are expanded (by unique id) */
+let expandedStrings = new Set<string>();
+/** Auto-incrementing counter for generating unique string IDs per render */
+let stringIdCounter = 0;
+
+/** Truncation threshold in characters for string values */
+const STRING_TRUNCATE_THRESHOLD = 200;
+/** How many lines to show when truncated (for multi-line strings) */
+const STRING_TRUNCATE_LINES = 3;
 
 export function isJsonlPanelVisible(): boolean {
 	return visible;
@@ -51,6 +64,7 @@ export function setJsonlSessionPath(sessionPath: string | undefined) {
 	currentSessionPath = sessionPath;
 	jsonlLines = [];
 	collapsedLines.clear();
+	expandedStrings.clear();
 	userScrolledUp = false;
 	if (visible) {
 		fetchAndRender();
@@ -115,6 +129,15 @@ function toggleLine(index: number) {
 	renderPanel();
 }
 
+function toggleStringExpand(id: string) {
+	if (expandedStrings.has(id)) {
+		expandedStrings.delete(id);
+	} else {
+		expandedStrings.add(id);
+	}
+	renderPanel();
+}
+
 function handleScroll(e: Event) {
 	const el = e.target as HTMLElement;
 	if (!el) return;
@@ -131,11 +154,13 @@ function scrollToBottom() {
 
 /**
  * Syntax-highlight a JSON string as HTML. Returns HTML string.
+ * Resets the string ID counter so IDs are stable per render call.
  */
-function highlightJson(jsonStr: string): string {
+function highlightJson(jsonStr: string, lineIndex: number): string {
 	try {
 		const obj = JSON.parse(jsonStr);
-		return highlightValue(obj, 0);
+		stringIdCounter = 0;
+		return highlightValue(obj, 0, lineIndex);
 	} catch {
 		return escapeHtml(jsonStr);
 	}
@@ -145,19 +170,93 @@ function escapeHtml(s: string): string {
 	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-function highlightValue(value: any, depth: number): string {
+/**
+ * Render a string value with newline interpretation, text wrapping,
+ * and truncation with expand/collapse for long strings.
+ */
+function renderStringValue(value: string, lineIndex: number): string {
+	const id = `s-${lineIndex}-${stringIdCounter++}`;
+	const isExpanded = expandedStrings.has(id);
+
+	// Check if this string is "long" — either many chars or many lines
+	const lines = value.split("\n");
+	const isLong = value.length > STRING_TRUNCATE_THRESHOLD || lines.length > STRING_TRUNCATE_LINES;
+
+	if (!isLong) {
+		// Short string: render with newlines interpreted, fully visible
+		return `<span class="jsonl-str">"${formatStringContent(value)}"</span>`;
+	}
+
+	// Long string: show truncated or expanded
+	if (isExpanded) {
+		const formatted = formatStringContent(value);
+		const charCount = value.length;
+		const lineCount = lines.length;
+		const stats = lineCount > 1 ? `${charCount} chars, ${lineCount} lines` : `${charCount} chars`;
+		return (
+			`<span class="jsonl-str jsonl-str-long">"` +
+			`<span class="jsonl-str-content">${formatted}</span>` +
+			`"</span>` +
+			`<button class="jsonl-str-toggle" data-str-id="${id}" onclick="this.dispatchEvent(new CustomEvent('toggle-string', {bubbles:true, detail:'${id}'}))"` +
+			` title="Collapse string">▲ collapse (${stats})</button>`
+		);
+	}
+
+	// Truncated view
+	const truncated = truncateString(value, lines);
+	const charCount = value.length;
+	const lineCount = lines.length;
+	const stats = lineCount > 1 ? `${charCount} chars, ${lineCount} lines` : `${charCount} chars`;
+	return (
+		`<span class="jsonl-str jsonl-str-long jsonl-str-truncated">"` +
+		`<span class="jsonl-str-content">${formatStringContent(truncated)}</span>` +
+		`…"</span>` +
+		`<button class="jsonl-str-toggle" data-str-id="${id}" onclick="this.dispatchEvent(new CustomEvent('toggle-string', {bubbles:true, detail:'${id}'}))"` +
+		` title="Expand full string">▼ expand (${stats})</button>`
+	);
+}
+
+/**
+ * Format string content: escape HTML and render \n as actual line breaks.
+ * Preserves other escape sequences as-is.
+ */
+function formatStringContent(s: string): string {
+	// Escape HTML entities first
+	const escaped = escapeHtml(s);
+	// Convert newlines to <br> + indentation marker for visual clarity
+	return escaped.replace(/\n/g, '<span class="jsonl-str-newline">↵</span>\n');
+}
+
+/**
+ * Truncate a string for the collapsed view.
+ * Prefers truncating by lines if multi-line, otherwise by character count.
+ */
+function truncateString(value: string, lines: string[]): string {
+	if (lines.length > STRING_TRUNCATE_LINES) {
+		// Truncate by lines
+		const truncatedByLines = lines.slice(0, STRING_TRUNCATE_LINES).join("\n");
+		// Also cap by character count
+		if (truncatedByLines.length > STRING_TRUNCATE_THRESHOLD) {
+			return truncatedByLines.slice(0, STRING_TRUNCATE_THRESHOLD);
+		}
+		return truncatedByLines;
+	}
+	// Single long line — truncate by chars
+	return value.slice(0, STRING_TRUNCATE_THRESHOLD);
+}
+
+function highlightValue(value: any, depth: number, lineIndex: number): string {
 	if (value === null) return '<span class="jsonl-null">null</span>';
 	if (typeof value === "boolean") return `<span class="jsonl-bool">${value}</span>`;
 	if (typeof value === "number") return `<span class="jsonl-num">${value}</span>`;
 	if (typeof value === "string") {
-		const escaped = escapeHtml(JSON.stringify(value));
-		return `<span class="jsonl-str">${escaped}</span>`;
+		return renderStringValue(value, lineIndex);
 	}
 	if (Array.isArray(value)) {
 		if (value.length === 0) return '<span class="jsonl-bracket">[]</span>';
 		const indent = "  ".repeat(depth + 1);
 		const closingIndent = "  ".repeat(depth);
-		const items = value.map((v) => `${indent}${highlightValue(v, depth + 1)}`).join(",\n");
+		const items = value.map((v) => `${indent}${highlightValue(v, depth + 1, lineIndex)}`).join(",\n");
 		return `<span class="jsonl-bracket">[</span>\n${items}\n${closingIndent}<span class="jsonl-bracket">]</span>`;
 	}
 	if (typeof value === "object") {
@@ -168,7 +267,7 @@ function highlightValue(value: any, depth: number): string {
 		const entries = keys
 			.map((k) => {
 				const keyHtml = `<span class="jsonl-key">"${escapeHtml(k)}"</span>`;
-				const valHtml = highlightValue(value[k], depth + 1);
+				const valHtml = highlightValue(value[k], depth + 1, lineIndex);
 				return `${indent}${keyHtml}<span class="jsonl-colon">: </span>${valHtml}`;
 			})
 			.join(",\n");
@@ -204,7 +303,7 @@ function renderPanel() {
 	}
 
 	const tmpl = html`
-		<div class="jsonl-panel">
+		<div class="jsonl-panel" @toggle-string=${(e: CustomEvent) => toggleStringExpand(e.detail)}>
 			<div class="jsonl-header">
 				<span class="jsonl-title">Raw JSONL</span>
 				<div class="jsonl-header-actions">
@@ -240,6 +339,19 @@ function renderPanel() {
 						</svg>
 					</button>
 					<button
+						class="jsonl-action-btn"
+						@click=${() => {
+							expandedStrings.clear();
+							renderPanel();
+						}}
+						title="Collapse all strings"
+					>
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+							<line x1="9" y1="10" x2="15" y2="10"></line>
+						</svg>
+					</button>
+					<button
 						class="jsonl-close"
 						@click=${() => closeJsonlPanel()}
 						title="Close JSONL viewer"
@@ -259,7 +371,7 @@ function renderPanel() {
 									</div>
 									${collapsedLines.has(i)
 										? ""
-										: html`<pre class="jsonl-content"><code .innerHTML=${highlightJson(line)}></code></pre>`}
+										: html`<pre class="jsonl-content"><code .innerHTML=${highlightJson(line, i)}></code></pre>`}
 								</div>
 							`,
 						)}
