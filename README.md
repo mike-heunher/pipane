@@ -1,33 +1,118 @@
 # pi-web
 
-Web UI for the pi coding agent. Uses `@mariozechner/pi-web-ui` components with a backend that manages the agent via RPC mode.
+A clean web interface for the **pi coding agent**.
 
-## Architecture
+`pi-web` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
 
+---
+
+## What you get
+
+- Chat-style UI for `pi`
+- Real-time tool calls and streaming output
+- Session picker and model picker
+- Automatic `pi` install prompt if the CLI is missing
+
+---
+
+## Install from GitHub (recommended)
+
+### 1) Clone the repo
+
+```bash
+git clone https://github.com/mike-heunher/pi-web.git
+cd pi-web
 ```
-Browser (Vite + Lit)          Backend (Express + WS)         pi coding-agent
-┌─────────────────┐          ┌──────────────────┐          ┌───────────────┐
-│  web-ui comps   │◄──WS───►│  WebSocket relay  │◄──RPC──►│  --mode rpc   │
-│  (ChatPanel)    │          │                   │  stdin/  │  (subprocess) │
-└─────────────────┘          └──────────────────┘  stdout  └───────────────┘
-```
 
-## Setup
+### 2) Install dependencies
 
 ```bash
 npm install
 ```
 
-By default, pi-web launches `pi` from your `PATH`.
+### 3) Start in development mode
 
-Package manager: **npm** (same as `pi-mono`).
+```bash
+npm run dev
+```
 
-## Global install
+Then open:
+- Frontend: http://localhost:5173
+- Backend API/WS: http://localhost:3001
+
+> In dev mode, Vite proxies `/ws` to the backend automatically.
+
+---
+
+## Run in production locally
+
+```bash
+npm run build
+npm run start
+```
+
+Open http://localhost:3001.
+
+---
+
+## Install as a global CLI
+
+If you want to run `pi-web` directly as a command:
 
 ```bash
 npm install -g pi-web
 pi-web
 ```
+
+---
+
+## Requirements
+
+- Node.js 20+
+- npm 10+
+- `pi` CLI available on your `PATH` (default)
+
+If `pi` is missing, `pi-web` can prompt to install it via:
+
+```bash
+npm install -g @mariozechner/pi-coding-agent
+```
+
+---
+
+## Configuration
+
+Environment variables:
+
+- `PI_CWD` — Working directory for the agent (default: current directory)
+- `PI_CLI` — Override the CLI executable/path (default: `pi`)
+- `PORT` — Backend port (default: `3001`)
+
+LLM/API keys are read from standard environment variables (for example `ANTHROPIC_API_KEY`, etc.).
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Browser[Browser]
+    UI[Vite + Lit UI\n(ChatPanel / pi-web-ui)]
+  end
+
+  subgraph Server[pi-web backend]
+    WS[Express + WebSocket relay\n(port 3001)]
+  end
+
+  subgraph Agent[pi coding-agent process]
+    PI[pi --mode rpc\n(subprocess)]
+  end
+
+  UI <-->|WS (/ws)| WS
+  WS <-->|RPC over stdin/stdout| PI
+```
+
+---
 
 ## Development
 
@@ -35,16 +120,22 @@ pi-web
 npm run dev
 ```
 
-This starts:
-- Backend server on http://localhost:3001
-- Vite dev server on http://localhost:5173 (proxies `/ws` to backend)
+Starts both:
+- Backend server on `:3001`
+- Vite frontend on `:5173`
 
-Open http://localhost:5173.
+---
 
-## Configuration
+## Testing
 
-- `PI_CWD` — Working directory for the agent (default: current directory)
-- `PI_CLI` — Optional CLI override. If set to a `.js/.mjs/.cjs` file, pi-web runs `node <that-file>`. If set to a binary name/path, pi-web runs it directly. Default: `pi` from `PATH`.
-- If `pi` is missing, the app asks whether to install it automatically via `npm install -g @mariozechner/pi-coding-agent`.
-- `PORT` — Backend server port (default: 3001)
-- API keys are read from environment variables (e.g., `ANTHROPIC_API_KEY`)
+Run all tests:
+
+```bash
+npm run test && npx playwright test --timeout 60000
+```
+
+---
+
+## License
+
+See project license information in this repository.
