@@ -345,7 +345,7 @@ export class WsHandler {
 
 		if (sessionPath === "__new__") {
 			const cwd = command.cwd as string || this.defaultCwd;
-			proc = this.acquireProcess(cwd);
+			proc = await this.acquireProcess(cwd);
 			await this.pool.waitForReady(proc);
 
 			await this.pool.sendRpc(proc, { type: "new_session" });
@@ -516,7 +516,7 @@ export class WsHandler {
 		// Resolve cwd from the source session
 		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
 
-		const proc = this.acquireProcess(cwd);
+		const proc = await this.acquireProcess(cwd);
 		await this.pool.waitForReady(proc);
 
 		this.busyProcesses.add(proc);
@@ -581,6 +581,10 @@ export class WsHandler {
 
 	// ── Internal helpers ─────────────────────────────────────────────────
 
+	private sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+
 	/**
 	 * Acquire a process for an existing session. Resolves the session's cwd
 	 * from its JSONL header and gets a process from the matching pool.
@@ -591,7 +595,7 @@ export class WsHandler {
 		if (existing) return existing;
 
 		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
-		const proc = this.acquireProcess(cwd);
+		const proc = await this.acquireProcess(cwd);
 
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(sessionPath, proc);
@@ -610,17 +614,32 @@ export class WsHandler {
 	/**
 	 * Acquire a process for a given cwd. Spawns if needed.
 	 */
-	private acquireProcess(cwd: string): RpcProcess {
+	private async acquireProcess(cwd: string): Promise<RpcProcess> {
 		if (!this.piAvailable) {
 			throw new Error(makePiNotFoundMessage(this.piLaunch.command));
 		}
 
-		let proc = this.pool.acquire(cwd, this.busyProcesses);
-		if (!proc) {
-			// At capacity — spawn anyway (will be over limit temporarily)
-			proc = this.pool.spawn(cwd);
+		const timeoutMs = 60000;
+		const start = Date.now();
+
+		while (true) {
+			const proc = this.pool.acquire(cwd, this.busyProcesses);
+			if (proc) return proc;
+
+			// We're at capacity and have no process for this cwd.
+			// Try to evict one idle process from another cwd to free a slot.
+			const evicted = this.pool.evictIdleDifferentCwd(cwd, this.busyProcesses);
+			if (evicted) {
+				await this.sleep(50);
+				continue;
+			}
+
+			if (Date.now() - start >= timeoutMs) {
+				throw new Error(`Timed out waiting for available pi process for cwd: ${cwd}`);
+			}
+
+			await this.sleep(100);
 		}
-		return proc;
 	}
 
 	/**

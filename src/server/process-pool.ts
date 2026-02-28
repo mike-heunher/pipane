@@ -221,6 +221,24 @@ export class ProcessPool {
 	}
 
 	/**
+	 * Evict one idle process from a different cwd to free capacity.
+	 * Returns the evicted process, or null if none can be evicted.
+	 */
+	evictIdleDifferentCwd(targetCwd: string, busySet: Set<RpcProcess>): RpcProcess | null {
+		for (const [cwd, procs] of this.pools) {
+			if (cwd === targetCwd) continue;
+
+			const victim = procs.find((p) => p.process.exitCode === null && !busySet.has(p));
+			if (!victim) continue;
+
+			console.log(`[pool] Evicting idle pi#${victim.id} from cwd ${cwd} to make room for ${targetCwd}`);
+			victim.process.kill("SIGTERM");
+			return victim;
+		}
+		return null;
+	}
+
+	/**
 	 * Pre-warm the pool with processes for the given cwd.
 	 */
 	prewarm(cwd: string): void {

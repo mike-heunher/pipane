@@ -30,7 +30,7 @@ function createPoolWithMocks(options?: { maxProcesses?: number }) {
 		const proc = {
 			id,
 			cwd,
-			process: { exitCode: alive ? null : 1, stdin: { write: vi.fn() } } as any,
+			process: { exitCode: alive ? null : 1, stdin: { write: vi.fn() }, kill: vi.fn(() => true) } as any,
 			rl: {} as any,
 			pendingRequests: new Map(),
 			requestId: 0,
@@ -229,6 +229,28 @@ describe("ProcessPool", () => {
 
 			const result = pool.acquire("/project-c", new Set());
 			expect(result).toBeNull();
+		});
+	});
+
+	describe("evictIdleDifferentCwd", () => {
+		it("evicts an idle process from another cwd", () => {
+			const { pool, injectProc } = createPoolWithMocks();
+			const victim = injectProc("/project-a", 1);
+			injectProc("/project-b", 2);
+
+			const evicted = pool.evictIdleDifferentCwd("/project-b", new Set());
+			expect(evicted).toBe(victim);
+			expect(victim.process.kill).toHaveBeenCalledWith("SIGTERM");
+		});
+
+		it("does not evict busy processes", () => {
+			const { pool, injectProc } = createPoolWithMocks();
+			const victim = injectProc("/project-a", 1);
+			injectProc("/project-b", 2);
+
+			const evicted = pool.evictIdleDifferentCwd("/project-b", new Set([victim]));
+			expect(evicted).toBeNull();
+			expect(victim.process.kill).not.toHaveBeenCalled();
 		});
 	});
 });

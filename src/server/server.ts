@@ -35,6 +35,8 @@ const PI_CWD = process.env.PI_CWD || process.cwd();
 const PI_CLI = process.env.PI_CLI;
 const PI_LAUNCH = resolvePiLaunch(PI_CLI);
 const PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
+const PI_MAX_PROCESSES = parseInt(process.env.PI_MAX_PROCESSES || "24", 10);
+const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -69,8 +71,8 @@ const pool = new ProcessPool(
 		baseArgs: [...PI_LAUNCH.baseArgs, "--mode", "rpc", "-e", canvasExtension],
 	},
 	{
-		maxProcesses: 6,
-		prewarmCount: 2,
+		maxProcesses: PI_MAX_PROCESSES,
+		prewarmCount: PI_PREWARM_COUNT,
 		onProcessExit: (proc) => {
 			// If the process was attached to a session, handle the crash
 			const sessionPath = lifecycle.getAttachedSessionForProcess(proc);
