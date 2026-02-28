@@ -26,6 +26,7 @@ import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages } from "./canvas-panel.js";
+import { selectModelFromAvailable } from "./model-picker.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
 registerCodingAgentRenderers();
@@ -62,31 +63,36 @@ function patchAgentInterface() {
 			editor.attachments = [];
 		}
 
-		// Extract images and document text from attachments
-		if (attachments && attachments.length > 0) {
-			const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-			const docTexts: string[] = [];
+		try {
+			// Extract images and document text from attachments
+			if (attachments && attachments.length > 0) {
+				const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+				const docTexts: string[] = [];
 
-			for (const att of attachments) {
-				if (att.type === "image") {
-					images.push({ type: "image", data: att.content, mimeType: att.mimeType });
-				} else if (att.extractedText) {
-					docTexts.push(att.extractedText);
+				for (const att of attachments) {
+					if (att.type === "image") {
+						images.push({ type: "image", data: att.content, mimeType: att.mimeType });
+					} else if (att.extractedText) {
+						docTexts.push(att.extractedText);
+					}
 				}
-			}
 
-			// Append document text to the user message
-			const fullInput = docTexts.length > 0
-				? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
-				: input;
+				// Append document text to the user message
+				const fullInput = docTexts.length > 0
+					? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
+					: input;
 
-			if (images.length > 0) {
-				await session.prompt(fullInput, images);
+				if (images.length > 0) {
+					await session.prompt(fullInput, images);
+				} else {
+					await session.prompt(fullInput);
+				}
 			} else {
-				await session.prompt(fullInput);
+				await session.prompt(input);
 			}
-		} else {
-			await session.prompt(input);
+		} catch (err) {
+			console.error("Failed to send message:", err);
+			alert(err instanceof Error ? err.message : String(err));
 		}
 	};
 
@@ -129,6 +135,17 @@ function patchMessageEditor(ai: any) {
 
 	// After every Lit render, ensure the input controls are present.
 	const injectInputControls = () => {
+		// Re-apply on every render because AgentInterface rebinds callbacks.
+		editor.onModelSelect = async () => {
+			try {
+				const models = await agent.fetchAvailableModels();
+				const selected = await selectModelFromAvailable(models as any, agent.state.model as any, (msg) => Promise.resolve(window.prompt(msg)));
+				if (selected) agent.setModel(selected as any);
+			} catch (err) {
+				console.error("Failed to open model picker:", err);
+			}
+		};
+
 		ensureInputMenuButton(editor, () => agent?.sessionFile);
 
 		if (!editor.isStreaming) {
