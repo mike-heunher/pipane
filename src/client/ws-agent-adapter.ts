@@ -344,6 +344,45 @@ export class WsAgentAdapter {
 		this.emit(event);
 	}
 
+	/**
+	 * Check if a message is already present in the messages array.
+	 * This prevents duplicates when switching to a running session (messages
+	 * loaded from disk overlap with streaming events).
+	 *
+	 * For assistant messages: compares tool_use block IDs.
+	 * For tool result messages: compares tool_use_id.
+	 * Fallback: compares role + timestamp.
+	 */
+	private isMessageAlreadyPresent(msg: AgentMessage): boolean {
+		const messages = this._state.messages;
+		// Only check the last few messages for performance
+		const start = Math.max(0, messages.length - 10);
+		for (let i = start; i < messages.length; i++) {
+			const existing = messages[i];
+			if (existing.role !== msg.role) continue;
+
+			// Compare tool_use IDs for assistant messages
+			if (msg.role === "assistant" && Array.isArray(msg.content) && Array.isArray(existing.content)) {
+				const msgToolIds = msg.content.filter((c: any) => c.type === "tool_use").map((c: any) => c.id);
+				const existToolIds = existing.content.filter((c: any) => c.type === "tool_use").map((c: any) => c.id);
+				if (msgToolIds.length > 0 && existToolIds.length > 0 && msgToolIds[0] === existToolIds[0]) {
+					return true;
+				}
+			}
+
+			// Compare tool_use_id for tool result messages
+			if (msg.role === "tool" && (msg as any).tool_use_id && (msg as any).tool_use_id === (existing as any).tool_use_id) {
+				return true;
+			}
+
+			// Fallback: compare timestamps (if both have them)
+			if (msg.timestamp && existing.timestamp && msg.timestamp === existing.timestamp) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private updateState(event: AgentEvent) {
 		switch (event.type) {
 			case "agent_start":
@@ -382,7 +421,9 @@ export class WsAgentAdapter {
 
 			case "message_end":
 				this._state.streamMessage = null;
-				this._state.messages = [...this._state.messages, event.message];
+				if (!this.isMessageAlreadyPresent(event.message)) {
+					this._state.messages = [...this._state.messages, event.message];
+				}
 				// When a user message appears during streaming, it was a steering message being delivered
 				if (event.message.role === "user" && this._sessionPath) {
 					const queue = this._steeringQueues.get(this._sessionPath);
@@ -406,7 +447,9 @@ export class WsAgentAdapter {
 				}
 				if (event.toolResults) {
 					for (const tr of event.toolResults) {
-						this._state.messages = [...this._state.messages, tr];
+						if (!this.isMessageAlreadyPresent(tr)) {
+							this._state.messages = [...this._state.messages, tr];
+						}
 					}
 				}
 				break;
@@ -729,8 +772,10 @@ export class WsAgentAdapter {
 		await this.fetchMessagesFromDisk();
 
 		// If the session is currently running on the server, restore streaming state
-		// so the stop button is visible.
+		// so the stop button is visible, and mark as "attached" to prevent file-watcher
+		// re-fetches from racing with streaming events.
 		if (this._globalSessionStatus.get(sessionPath) === "running") {
+			this._sessionStatus = "attached";
 			this._state.isStreaming = true;
 			this._isReallyStreaming = true;
 		}

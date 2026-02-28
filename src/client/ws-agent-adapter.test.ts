@@ -512,6 +512,117 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
+	describe("message de-duplication when switching to running session", () => {
+		it("does not duplicate assistant messages loaded from disk when message_end arrives", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+
+			// Simulate messages loaded from disk (as if fetchMessagesFromDisk ran)
+			const toolCallId = "tool_abc123";
+			const assistantMsg = {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "" },
+					{ type: "tool_use", id: toolCallId, name: "bash", input: { command: "sleep 150" } },
+				],
+				timestamp: 1000,
+			};
+			const toolResult = {
+				role: "tool",
+				tool_use_id: toolCallId,
+				content: [{ type: "text", text: "done" }],
+				timestamp: 1001,
+			};
+			(adapter as any)._state.messages = [
+				{ role: "user", content: "do it again", timestamp: 999 },
+				assistantMsg,
+				toolResult,
+			];
+
+			// Mark as running (switched to a running session)
+			(adapter as any)._globalSessionStatus.set(sessionPath, "running");
+			(adapter as any)._state.isStreaming = true;
+
+			// Now simulate message_end arriving for the same assistant message
+			(adapter as any).updateState({
+				type: "message_end",
+				message: { ...assistantMsg },
+			});
+
+			// The assistant message should NOT be duplicated
+			const assistantMsgs = adapter.state.messages.filter(
+				(m: any) => m.role === "assistant",
+			);
+			expect(assistantMsgs).toHaveLength(1);
+		});
+
+		it("does not duplicate tool results loaded from disk when turn_end arrives", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			const toolCallId = "tool_abc123";
+			const toolResult = {
+				role: "tool",
+				tool_use_id: toolCallId,
+				content: [{ type: "text", text: "done" }],
+				timestamp: 1001,
+			};
+			(adapter as any)._state.messages = [
+				{ role: "user", content: "test", timestamp: 999 },
+				{
+					role: "assistant",
+					content: [{ type: "tool_use", id: toolCallId, name: "bash", input: { command: "sleep 150" } }],
+					timestamp: 1000,
+				},
+				toolResult,
+			];
+
+			// Simulate turn_end arriving with the same tool result
+			(adapter as any).updateState({
+				type: "turn_end",
+				message: { role: "assistant", content: [], timestamp: 1000 },
+				toolResults: [{ ...toolResult }],
+			});
+
+			// Tool result should NOT be duplicated
+			const toolMsgs = adapter.state.messages.filter((m: any) => m.role === "tool");
+			expect(toolMsgs).toHaveLength(1);
+		});
+
+		it("still appends genuinely new messages", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			(adapter as any)._state.messages = [
+				{ role: "user", content: "test", timestamp: 999 },
+			];
+
+			// New assistant message (not loaded from disk)
+			(adapter as any).updateState({
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "tool_use", id: "new_tool_456", name: "bash", input: { command: "ls" } }],
+					timestamp: 2000,
+				},
+			});
+
+			expect(adapter.state.messages).toHaveLength(2);
+			expect(adapter.state.messages[1].role).toBe("assistant");
+		});
+
+		it("sets sessionStatus to attached when switching to a running session", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			(adapter as any)._globalSessionStatus.set(sessionPath, "running");
+
+			await adapter.switchSession(sessionPath);
+
+			expect(adapter.sessionStatus).toBe("attached");
+		});
+	});
+
 	describe("stop button visibility (isStreaming) for running sessions", () => {
 		it("sets isStreaming=true when switching to a session that is running", async () => {
 			const sessionA = "/tmp/sessions/session-a.jsonl";
