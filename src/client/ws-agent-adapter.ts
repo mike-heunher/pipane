@@ -362,7 +362,24 @@ export class WsAgentAdapter {
 		if (data.type === "session_attached") {
 			if (data.sessionPath) {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
-
+			}
+			// Update session status BEFORE creating optimistic entries,
+			// so virtualSessionInfo returns undefined and the sidebar
+			// doesn't briefly show both the virtual and real entries.
+			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
+				// For virtual sessions, adopt the server-assigned path
+				if (this._sessionStatus === "virtual" && data.sessionPath) {
+					this._sessionPath = data.sessionPath;
+					const filename = path.basename(data.sessionPath, ".jsonl");
+					const parts = filename.split("_");
+					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+				}
+				this._sessionStatus = "attached";
+				// Ensure isStreaming is true so the stop button is visible
+				this._state.isStreaming = true;
+				this.emitStatusChange();
+			}
+			if (data.sessionPath) {
 				// Create an optimistic session entry so the sidebar shows it instantly
 				// instead of waiting for the filesystem scan (~2s).
 				if (!this._optimisticSessions.has(data.sessionPath)) {
@@ -383,19 +400,6 @@ export class WsAgentAdapter {
 					// Immediately notify sidebar to refresh
 					for (const fn of this.sessionsChangedListeners) fn(data.sessionPath);
 				}
-			}
-			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
-				// For virtual sessions, adopt the server-assigned path
-				if (this._sessionStatus === "virtual" && data.sessionPath) {
-					this._sessionPath = data.sessionPath;
-					const filename = path.basename(data.sessionPath, ".jsonl");
-					const parts = filename.split("_");
-					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
-				}
-				this._sessionStatus = "attached";
-				// Ensure isStreaming is true so the stop button is visible
-				this._state.isStreaming = true;
-				this.emitStatusChange();
 			}
 			return;
 		}
@@ -612,7 +616,9 @@ export class WsAgentAdapter {
 				thinkingLevel: this._state.thinkingLevel,
 				images,
 			});
-			this._pendingCwd = undefined;
+			// Don't clear _pendingCwd here — virtualSessionInfo needs it
+			// to keep showing the session in the correct sidebar group until
+			// session_attached arrives and transitions status to "attached".
 			return;
 		}
 
@@ -806,16 +812,33 @@ export class WsAgentAdapter {
 		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
 		const sessions: SessionInfoDTO[] = await res.json();
 
-		// Merge optimistic sessions: add any that aren't yet in the real list
+		// Merge optimistic sessions: add any that aren't yet in the real list.
+		// When a real session exists but has an empty cwd (JSONL header not yet
+		// flushed), keep using the optimistic entry so the session doesn't
+		// briefly jump to "(unknown)" in the sidebar.
 		const realPaths = new Set(sessions.map((s) => s.path));
 		for (const [optPath, optSession] of this._optimisticSessions) {
 			if (realPaths.has(optPath)) {
-				// Real session caught up — remove the optimistic entry
-				this._optimisticSessions.delete(optPath);
+				const real = sessions.find((s) => s.path === optPath);
+				if (real && !real.cwd && optSession.cwd) {
+					// Real session has no cwd yet — use optimistic cwd
+					real.cwd = optSession.cwd;
+					// Keep the optimistic entry for next time
+				} else {
+					// Real session has a proper cwd — optimistic no longer needed
+					this._optimisticSessions.delete(optPath);
+				}
 			} else {
 				// Still not on disk — include the optimistic entry
 				sessions.push(optSession);
 			}
+		}
+
+		// Include the current virtual session so it shows in the sidebar
+		// in the correct cwd group before any message is sent.
+		const virtual = this.virtualSessionInfo;
+		if (virtual && !realPaths.has(virtual.path)) {
+			sessions.push(virtual);
 		}
 
 		return sessions;
@@ -887,6 +910,27 @@ export class WsAgentAdapter {
 
 		this.emitSessionChange();
 		this.emitStatusChange();
+		// Notify sidebar so the virtual session appears immediately in the correct group
+		for (const fn of this.sessionsChangedListeners) fn("");
+	}
+
+	/**
+	 * Get a SessionInfoDTO for the current virtual session (if any).
+	 * This allows the sidebar to show new sessions before any message is sent.
+	 */
+	get virtualSessionInfo(): SessionInfoDTO | undefined {
+		if (this._sessionStatus !== "virtual" || !this._pendingCwd) return undefined;
+		const now = new Date().toISOString();
+		return {
+			id: this._sessionId,
+			path: `__virtual__${this._sessionId}`,
+			cwd: this._pendingCwd,
+			created: now,
+			modified: now,
+			lastUserPromptTime: now,
+			messageCount: 0,
+			firstMessage: "(new session)",
+		};
 	}
 }
 

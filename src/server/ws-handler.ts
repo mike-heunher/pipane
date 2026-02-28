@@ -354,16 +354,19 @@ export class WsHandler {
 			if (!sessionPath) throw new Error("Failed to get session path from new session");
 
 			this.busyProcesses.add(proc);
-			this.lifecycle.attach(sessionPath, proc);
 			this.messageCache.setStreaming(sessionPath, true);
 
-			// Send enriched session_attached with cwd + firstMessage for optimistic sidebar
+			// Send enriched session_attached with cwd + firstMessage for optimistic sidebar.
+			// Must be sent BEFORE lifecycle.attach() which emits a bare session_attached
+			// via the lifecycle subscriber (without cwd/firstMessage). The client
+			// deduplicates by sessionPath, so the first one wins.
 			ws.send(JSON.stringify({
 				type: "session_attached",
 				sessionPath,
 				cwd,
 				firstMessage: command.message,
 			}));
+			this.lifecycle.attach(sessionPath, proc);
 		} else {
 			proc = this.acquireForSession(sessionPath, ws);
 		}
@@ -517,8 +520,17 @@ export class WsHandler {
 		await this.pool.waitForReady(proc);
 
 		this.busyProcesses.add(proc);
-		this.lifecycle.attach(newSessionPath, proc);
 		this.messageCache.setStreaming(newSessionPath, true);
+
+		// Send enriched session_attached BEFORE lifecycle.attach() so the client
+		// receives cwd + firstMessage before the bare lifecycle event.
+		ws.send(JSON.stringify({
+			type: "session_attached",
+			sessionPath: newSessionPath,
+			cwd,
+			firstMessage: message,
+		}));
+		this.lifecycle.attach(newSessionPath, proc);
 
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
 
@@ -538,14 +550,6 @@ export class WsHandler {
 		if (command.thinkingLevel) {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}
-
-		// Notify client
-		ws.send(JSON.stringify({
-			type: "session_attached",
-			sessionPath: newSessionPath,
-			cwd,
-			firstMessage: message,
-		}));
 
 		// Set up event forwarding
 		this.setupTurnEventForwarding(proc, newSessionPath, ws, makeTurnId());

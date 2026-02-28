@@ -571,23 +571,44 @@ export class SessionPicker extends LitElement {
 	}
 
 	/**
-	 * Immediately merge optimistic sessions into the current cached list.
+	 * Immediately merge optimistic and virtual sessions into the current cached list.
 	 * This makes new sessions appear in the sidebar instantly (same frame)
 	 * without waiting for the async REST call to /api/sessions.
 	 */
 	private mergeOptimisticSessions() {
 		const optimistic = this.agent.optimisticSessions;
-		if (optimistic.length === 0) return;
+		const virtual = this.agent.virtualSessionInfo;
 
-		const existingPaths = new Set(this.sessions.map((s) => s.path));
-		let changed = false;
-		for (const opt of optimistic) {
-			if (!existingPaths.has(opt.path)) {
-				this.sessions = [...this.sessions, opt];
+		// Collect all entries to merge
+		const toMerge = [...optimistic];
+		if (virtual) toMerge.push(virtual);
+		if (toMerge.length === 0) return;
+
+		// Remove any stale virtual entries before merging
+		let sessions = this.sessions.filter((s) => !s.path.startsWith("__virtual__"));
+		const existingPaths = new Set(sessions.map((s) => s.path));
+		let changed = sessions.length !== this.sessions.length;
+
+		for (const opt of toMerge) {
+			if (existingPaths.has(opt.path)) {
+				// Path exists — backfill cwd if the cached entry has none.
+				// This happens when a file watcher notification arrives before
+				// session_attached, and the REST API returns the session with
+				// an empty cwd (JSONL header not yet fully written).
+				if (opt.cwd) {
+					const existing = sessions.find((s) => s.path === opt.path);
+					if (existing && !existing.cwd) {
+						existing.cwd = opt.cwd;
+						changed = true;
+					}
+				}
+			} else {
+				sessions = [...sessions, opt];
 				changed = true;
 			}
 		}
 		if (changed) {
+			this.sessions = sessions;
 			this.requestUpdate();
 		}
 	}
@@ -714,6 +735,7 @@ export class SessionPicker extends LitElement {
 
 	private async handleSessionClick(session: SessionInfoDTO) {
 		if (session.id === this.agent?.sessionId) return;
+		if (session.path.startsWith("__virtual__")) return; // Can't switch to another virtual session
 		// Collapse all expanded groups when picking a session
 		if (this.expandedGroups.size > 0) {
 			this.expandedGroups = new Set();
@@ -750,6 +772,12 @@ export class SessionPicker extends LitElement {
 	private async handleDeleteSession(e: Event, session: SessionInfoDTO) {
 		e.stopPropagation();
 		e.preventDefault();
+
+		// Virtual sessions have no file to delete — just create a fresh session
+		if (session.path.startsWith("__virtual__")) {
+			this.agent.newSession();
+			return;
+		}
 
 		const isActive = session.id === this.agent?.sessionId;
 		const name = session.name || session.firstMessage || "this session";
