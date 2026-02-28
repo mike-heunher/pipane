@@ -511,4 +511,81 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.steeringQueue).toHaveLength(0);
 		});
 	});
+
+	describe("stop button visibility (isStreaming) for running sessions", () => {
+		it("sets isStreaming=true when switching to a session that is running", async () => {
+			const sessionA = "/tmp/sessions/session-a.jsonl";
+			const sessionB = "/tmp/sessions/session-b.jsonl";
+			const { adapter } = setupWithSession(sessionA);
+
+			// Session A starts streaming
+			(adapter as any).updateState({ type: "agent_start" });
+			expect(adapter.state.isStreaming).toBe(true);
+
+			// Switch to idle session B — isStreaming should be false
+			(adapter as any)._sessionPath = sessionB;
+			(adapter as any)._sessionId = "session-b";
+			(adapter as any)._sessionStatus = "detached";
+			(adapter as any)._state.isStreaming = false;
+			(adapter as any)._state.streamMessage = null;
+			(adapter as any)._state.pendingToolCalls = new Set();
+
+			expect(adapter.state.isStreaming).toBe(false);
+
+			// Now switch back to session A, which is still running on the server
+			(adapter as any)._globalSessionStatus.set(sessionA, "running");
+
+			// Simulate switchSession behavior (clear state then check running status)
+			await adapter.switchSession(sessionA);
+
+			// BUG: isStreaming should be true because session A is running,
+			// but switchSession always sets it to false
+			expect(adapter.state.isStreaming).toBe(true);
+		});
+
+		it("keeps isStreaming=false when switching to a session that is not running", async () => {
+			const sessionA = "/tmp/sessions/session-a.jsonl";
+			const sessionB = "/tmp/sessions/session-b.jsonl";
+			const { adapter } = setupWithSession(sessionA);
+
+			// Session A is running
+			(adapter as any)._globalSessionStatus.set(sessionA, "running");
+
+			// Session B is idle (not in the map or "done")
+			(adapter as any)._globalSessionStatus.set(sessionB, "done");
+
+			await adapter.switchSession(sessionB);
+
+			expect(adapter.state.isStreaming).toBe(false);
+		});
+
+		it("sets isStreaming=true when session_attached arrives for current session", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+
+			expect(adapter.state.isStreaming).toBe(false);
+
+			// Server notifies that our session is now attached (running)
+			simulateServerMessage({ type: "session_attached", sessionPath });
+
+			// isStreaming should be true so the stop button shows
+			expect(adapter.state.isStreaming).toBe(true);
+		});
+
+		it("emits statusChange when isStreaming changes on switchSession", async () => {
+			const sessionA = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionA);
+
+			(adapter as any)._globalSessionStatus.set(sessionA, "running");
+
+			let statusChanges = 0;
+			adapter.onStatusChange(() => { statusChanges++; });
+
+			await adapter.switchSession(sessionA);
+
+			// Should have emitted at least one status change
+			expect(statusChanges).toBeGreaterThan(0);
+			expect(adapter.state.isStreaming).toBe(true);
+		});
+	});
 });

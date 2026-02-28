@@ -294,6 +294,9 @@ export class WsAgentAdapter {
 					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 				}
 				this._sessionStatus = "attached";
+				// Ensure isStreaming is true so the stop button is visible
+				this._state.isStreaming = true;
+				this._isReallyStreaming = true;
 				this.emitStatusChange();
 			}
 			return;
@@ -724,6 +727,13 @@ export class WsAgentAdapter {
 
 		// Load messages from JSONL
 		await this.fetchMessagesFromDisk();
+
+		// If the session is currently running on the server, restore streaming state
+		// so the stop button is visible.
+		if (this._globalSessionStatus.get(sessionPath) === "running") {
+			this._state.isStreaming = true;
+			this._isReallyStreaming = true;
+		}
 
 		this.emitSessionChange();
 		this.emitStatusChange();
