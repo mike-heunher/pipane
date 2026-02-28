@@ -36,5 +36,6 @@ Open http://localhost:5173.
 
 - `PI_CWD` — Working directory for the agent (default: current directory)
 - `PI_CLI` — Optional CLI override. If set to a `.js/.mjs/.cjs` file, pi-web runs `node <that-file>`. If set to a binary name/path, pi-web runs it directly. Default: `pi` from `PATH`.
+- If `pi` is missing, the app asks whether to install it automatically via `npm install -g @mariozechner/pi-coding-agent`.
 - `PORT` — Backend server port (default: 3001)
 - API keys are read from environment variables (e.g., `ANTHROPIC_API_KEY`)

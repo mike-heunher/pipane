@@ -35,6 +35,7 @@ let chatPanel: ChatPanel;
 let agent: WsAgentAdapter;
 let sidebarOpen = true;
 let steeringQueue: readonly string[] = [];
+let piInstallPromptOpen = false;
 let inputAreaObserver: ResizeObserver | null = null;
 let observedInputArea: Element | null = null;
 
@@ -475,6 +476,26 @@ async function initApp() {
 	agent.onSteeringQueueChange(() => {
 		steeringQueue = agent.steeringQueue;
 		renderApp();
+	});
+
+	agent.onPiInstallRequired(async (info) => {
+		if (piInstallPromptOpen) return;
+		piInstallPromptOpen = true;
+		try {
+			if (!info.installable) {
+				alert(`${info.message}\n\nPlease install pi manually or set PI_CLI.`);
+				return;
+			}
+			if (info.installing) return;
+			const yes = window.confirm(`${info.message}\n\nInstall pi now? (npm install -g @mariozechner/pi-coding-agent)`);
+			if (!yes) return;
+			await agent.installPi();
+			alert("pi installed. You can retry your action now.");
+		} catch (err) {
+			alert(err instanceof Error ? err.message : String(err));
+		} finally {
+			piInstallPromptOpen = false;
+		}
 	});
 
 	// Fork request handler (triggered by /fork command or keyboard shortcut)

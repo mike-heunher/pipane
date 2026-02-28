@@ -29,11 +29,14 @@ import {
 	parseSessionEntries,
 } from "@mariozechner/pi-coding-agent";
 import { resolvePiLaunch } from "./pi-launch";
+import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime";
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
 const PI_CLI = process.env.PI_CLI;
 const PI_LAUNCH = resolvePiLaunch(PI_CLI);
+let PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
+let PI_INSTALLING = false;
 
 const app = express();
 const server = createServer(app);
@@ -334,6 +337,9 @@ function getSessionStatuses(): Record<string, "running" | "done"> {
 }
 
 function spawnRpcProcess(cwd?: string): RpcProcess {
+	if (!PI_AVAILABLE) {
+		throw new Error(makePiNotFoundMessage(PI_LAUNCH.command));
+	}
 	const procId = ++nextProcId;
 	const useCwd = cwd || PI_CWD;
 	console.log(`[pool] Spawning pi process #${procId} (cwd: ${useCwd})...`);
@@ -591,6 +597,7 @@ function releasePi(proc: RpcProcess) {
  * Spawns new ones if needed (non-blocking).
  */
 function ensurePoolSize() {
+	if (!PI_AVAILABLE) return;
 	const alive = pool.filter((p) => p.process.exitCode === null).length;
 	const needed = POOL_SIZE - alive;
 	for (let i = 0; i < needed; i++) {
@@ -768,6 +775,16 @@ wss.on("connection", async (ws) => {
 		steeringQueues: steeringQueuesObj,
 	}));
 
+	if (!PI_AVAILABLE) {
+		ws.send(JSON.stringify({
+			type: "pi_install_required",
+			command: PI_LAUNCH.command,
+			installable: isPiInstallable(PI_LAUNCH.command, PI_LAUNCH.baseArgs),
+			installing: PI_INSTALLING,
+			message: makePiNotFoundMessage(PI_LAUNCH.command),
+		}));
+	}
+
 	ws.on("message", async (raw) => {
 		let command: any;
 		try {
@@ -780,7 +797,53 @@ wss.on("connection", async (ws) => {
 		const id = command.id;
 
 		try {
+			if (!PI_AVAILABLE && command.type !== "install_pi" && command.type !== "get_session_statuses") {
+				ws.send(JSON.stringify({
+					type: "pi_install_required",
+					command: PI_LAUNCH.command,
+					installable: isPiInstallable(PI_LAUNCH.command, PI_LAUNCH.baseArgs),
+					installing: PI_INSTALLING,
+					message: makePiNotFoundMessage(PI_LAUNCH.command),
+				}));
+				if (id) {
+					ws.send(JSON.stringify({
+						id, type: "response", command: command.type, success: false,
+						error: makePiNotFoundMessage(PI_LAUNCH.command),
+					}));
+				}
+				return;
+			}
+
 			switch (command.type) {
+				case "install_pi": {
+					const installable = isPiInstallable(PI_LAUNCH.command, PI_LAUNCH.baseArgs);
+					if (!installable) {
+						throw new Error(`Automatic install not supported for command '${PI_LAUNCH.command}'. Set PI_CLI or install manually.`);
+					}
+					if (!PI_INSTALLING) {
+						PI_INSTALLING = true;
+						if (connectedWs && connectedWs.readyState === WebSocket.OPEN) {
+							connectedWs.send(JSON.stringify({
+								type: "pi_install_required",
+								command: PI_LAUNCH.command,
+								installable: true,
+								installing: true,
+								message: "Installing pi...",
+							}));
+						}
+						const ok = await installPiGlobal();
+						PI_INSTALLING = false;
+						PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
+						if (!ok || !PI_AVAILABLE) {
+							throw new Error("pi installation failed. Please install manually and restart the server.");
+						}
+						console.log("[pi] pi installed successfully");
+						console.log(`[pool] Starting ${POOL_SIZE} pi processes...`);
+						ensurePoolSize();
+					}
+					ws.send(JSON.stringify({ id, type: "response", command: "install_pi", success: true, data: {} }));
+					break;
+				}
 				// ── Prompt: attach pi, run one turn ──────────────────────
 				case "prompt": {
 					let sessionPath = command.sessionPath as string;
@@ -1181,9 +1244,13 @@ function startSessionsWatcher(): FSWatcher | null {
 
 startSessionsWatcher();
 
-// Eagerly start pi process pool
-console.log(`[pool] Starting ${POOL_SIZE} pi processes...`);
-ensurePoolSize();
+// Eagerly start pi process pool if pi is available
+if (PI_AVAILABLE) {
+	console.log(`[pool] Starting ${POOL_SIZE} pi processes...`);
+	ensurePoolSize();
+} else {
+	console.log(`[pi] ${makePiNotFoundMessage(PI_LAUNCH.command)}`);
+}
 
 server.listen(PORT, () => {
 	console.log(`pi-web server listening on http://localhost:${PORT}`);

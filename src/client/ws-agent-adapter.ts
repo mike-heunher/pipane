@@ -29,12 +29,21 @@ type WsCommand =
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
 	| { type: "set_session_name"; sessionPath: string; name: string }
-	| { type: "fork"; sessionPath: string; entryId: string };
+	| { type: "fork"; sessionPath: string; entryId: string }
+	| { type: "install_pi" };
+
+export interface PiInstallRequiredInfo {
+	command: string;
+	installable: boolean;
+	installing: boolean;
+	message: string;
+}
 
 export class WsAgentAdapter {
 	private ws: WebSocket | null = null;
 	private listeners = new Set<(e: AgentEvent) => void>();
 	private sessionsChangedListeners = new Set<(file: string) => void>();
+	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
 	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>();
 	private requestId = 0;
 	private _runningPromise: Promise<void> | undefined;
@@ -174,6 +183,15 @@ export class WsAgentAdapter {
 		return () => this.sessionsChangedListeners.delete(fn);
 	}
 
+	onPiInstallRequired(fn: (info: PiInstallRequiredInfo) => void): () => void {
+		this.piInstallRequiredListeners.add(fn);
+		return () => this.piInstallRequiredListeners.delete(fn);
+	}
+
+	private emitPiInstallRequired(info: PiInstallRequiredInfo) {
+		for (const fn of this.piInstallRequiredListeners) fn(info);
+	}
+
 	subscribe(fn: (e: AgentEvent) => void): () => void {
 		this.listeners.add(fn);
 		return () => this.listeners.delete(fn);
@@ -255,6 +273,16 @@ export class WsAgentAdapter {
 			} else {
 				pending.reject(new Error(data.error || "Unknown error"));
 			}
+			return;
+		}
+
+		if (data.type === "pi_install_required") {
+			this.emitPiInstallRequired({
+				command: data.command || "pi",
+				installable: !!data.installable,
+				installing: !!data.installing,
+				message: data.message || "pi is not available",
+			});
 			return;
 		}
 
@@ -518,6 +546,10 @@ export class WsAgentAdapter {
 	async fetchAvailableModels(): Promise<any[]> {
 		const data = await this.send({ type: "get_available_models" });
 		return data?.models ?? [];
+	}
+
+	async installPi(): Promise<void> {
+		await this.send({ type: "install_pi" });
 	}
 
 	/** Load the default model from the pi process (respects user's settings) */
