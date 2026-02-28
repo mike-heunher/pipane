@@ -757,11 +757,15 @@ export class WsAgentAdapter {
 	setModel(m: Model<any>) {
 		// Client-side only until a prompt is sent
 		this._state.model = m;
+		// Notify UI immediately so the selected model label updates.
+		this.emitContentChange();
 	}
 
 	setThinkingLevel(l: ThinkingLevel) {
 		// Client-side only until a prompt is sent
 		this._state.thinkingLevel = l;
+		// Notify UI immediately so the selector reflects the change.
+		this.emitContentChange();
 	}
 
 	setSystemPrompt(v: string) { this._state.systemPrompt = v; }

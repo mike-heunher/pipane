@@ -700,6 +700,30 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
+	describe("local model/thinking updates notify UI", () => {
+		it("emits content change when setModel is called", () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			let changes = 0;
+			adapter.onContentChange(() => { changes++; });
+
+			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
+
+			expect((adapter as any)._state.model).toEqual({ provider: "openai", id: "gpt-5" });
+			expect(changes).toBe(1);
+		});
+
+		it("emits content change when setThinkingLevel is called", () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			let changes = 0;
+			adapter.onContentChange(() => { changes++; });
+
+			adapter.setThinkingLevel("high");
+
+			expect(adapter.state.thinkingLevel).toBe("high");
+			expect(changes).toBe(1);
+		});
+	});
+
 	describe("model persistence across disk refreshes", () => {
 		it("does not overwrite a locally selected model during background fetchMessagesFromDisk", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
