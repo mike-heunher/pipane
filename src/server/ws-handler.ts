@@ -8,6 +8,7 @@
  */
 
 import { WebSocket, type WebSocketServer } from "ws";
+import type { IncomingMessage } from "node:http";
 import { copyFile } from "node:fs/promises";
 import path from "node:path";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
@@ -24,6 +25,7 @@ export interface WsHandlerOptions {
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
+	isRequestAuthorized: (req: IncomingMessage) => boolean;
 }
 
 interface TurnState {
@@ -55,6 +57,7 @@ export class WsHandler {
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
+	private isRequestAuthorized: (req: IncomingMessage) => boolean;
 
 	private clients = new Map<WebSocket, ClientState>();
 	private busyProcesses = new Set<RpcProcess>();
@@ -71,6 +74,7 @@ export class WsHandler {
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
+		this.isRequestAuthorized = options.isRequestAuthorized;
 		this.piAvailable = checkCommandAvailable(this.piLaunch.command);
 
 		this.lifecycle.subscribe((event) => {
@@ -155,10 +159,14 @@ export class WsHandler {
 	}
 
 	register(wss: WebSocketServer): void {
-		wss.on("connection", (ws) => this.handleConnection(ws));
+		wss.on("connection", (ws, req) => this.handleConnection(ws, req));
 	}
 
-	private handleConnection(ws: WebSocket): void {
+	private handleConnection(ws: WebSocket, req: IncomingMessage): void {
+		if (!this.isRequestAuthorized(req)) {
+			ws.close(1008, "Unauthorized");
+			return;
+		}
 		console.log("WebSocket client connected");
 		this.clients.set(ws, {
 			subscribedSession: null,

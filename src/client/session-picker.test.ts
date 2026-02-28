@@ -65,6 +65,11 @@ function hasDoneBadge(item: HTMLElement): boolean {
 	return getStatusBadges(item).some((b) => b.classList.contains("done"));
 }
 
+/** Check if a session item has an "idle" badge. */
+function hasIdleBadge(item: HTMLElement): boolean {
+	return getStatusBadges(item).some((b) => b.classList.contains("idle"));
+}
+
 /** Get the search input element. */
 function getSearchInput(el: SessionPicker): HTMLInputElement | null {
 	return el.shadowRoot!.querySelector(".search input");
@@ -211,7 +216,7 @@ describe("session-picker", () => {
 	});
 
 	describe("status badges", () => {
-		it("shows running badge with pulsing dot for running sessions", async () => {
+		it("shows running badge for running sessions", async () => {
 			const agent = new MockAgent();
 			const sessions = [
 				createSession({
@@ -229,9 +234,7 @@ describe("session-picker", () => {
 			expect(hasRunningBadge(items[0])).toBe(true);
 			expect(hasDoneBadge(items[0])).toBe(false);
 
-			// Check the pulsing dot is present
 			const badge = items[0].querySelector(".status-badge.running")!;
-			expect(badge.querySelector(".status-dot")).not.toBeNull();
 			expect(badge.textContent?.trim()).toBe("running");
 		});
 
@@ -257,7 +260,7 @@ describe("session-picker", () => {
 			expect(badge.textContent?.trim()).toBe("done");
 		});
 
-		it("shows no badge for sessions without status", async () => {
+		it("shows idle badge for sessions without status", async () => {
 			const agent = new MockAgent();
 			const sessions = [
 				createSession({
@@ -272,9 +275,11 @@ describe("session-picker", () => {
 			const items = getSessionItems(el);
 
 			expect(items).toHaveLength(1);
+			expect(hasIdleBadge(items[0])).toBe(true);
 			expect(hasRunningBadge(items[0])).toBe(false);
 			expect(hasDoneBadge(items[0])).toBe(false);
-			expect(getStatusBadges(items[0])).toHaveLength(0);
+			const badge = items[0].querySelector(".status-badge.idle")!;
+			expect(badge.textContent?.trim()).toBe("");
 		});
 
 		it("updates badges when global status changes", async () => {
@@ -289,9 +294,9 @@ describe("session-picker", () => {
 
 			const el = await createPicker(agent);
 
-			// Initially no badge
+			// Initially idle badge
 			let items = getSessionItems(el);
-			expect(getStatusBadges(items[0])).toHaveLength(0);
+			expect(hasIdleBadge(items[0])).toBe(true);
 
 			// Set to running and emit change
 			agent.setSessionStatus(sessions[0].path, "running");

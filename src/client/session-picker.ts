@@ -224,43 +224,47 @@ export class SessionPicker extends LitElement {
 		.status-badge {
 			display: inline-flex;
 			align-items: center;
-			gap: 0.2rem;
-			font-size: 0.6rem;
-			font-weight: 600;
+			justify-content: center;
+			align-self: stretch;
+			width: 1rem;
+			margin-left: -0.75rem;
+			margin-top: -0.4rem;
+			margin-bottom: -0.4rem;
+			margin-right: 0.45rem;
+			font-size: 0.55rem;
+			font-weight: 700;
 			text-transform: uppercase;
-			letter-spacing: 0.04em;
-			padding: 0.05rem 0.3rem;
-			border-radius: 3px;
+			letter-spacing: 0.05em;
+			border-radius: 0;
 			white-space: nowrap;
 			flex-shrink: 0;
+			overflow: hidden;
+		}
+
+		.status-badge .status-text {
+			display: inline-block;
+			transform: rotate(-90deg);
+			transform-origin: center;
 		}
 
 		.status-badge.running {
 			color: #ef4444;
-			background: color-mix(in srgb, #ef4444 12%, transparent);
-		}
-
-		.status-badge.running .status-dot {
-			width: 5px;
-			height: 5px;
-			border-radius: 50%;
-			background: #ef4444;
-			animation: pulse-dot 1.5s ease-in-out infinite;
-		}
-
-		@keyframes pulse-dot {
-			0%, 100% { opacity: 1; }
-			50% { opacity: 0.3; }
+			background: color-mix(in srgb, #ef4444 16%, transparent);
 		}
 
 		.status-badge.done {
 			color: #22c55e;
-			background: color-mix(in srgb, #22c55e 12%, transparent);
+			background: color-mix(in srgb, #22c55e 16%, transparent);
+		}
+
+		.status-badge.idle {
+			color: #9ca3af;
+			background: color-mix(in srgb, #9ca3af 18%, transparent);
 		}
 
 		.session-item-row {
 			display: flex;
-			align-items: flex-start;
+			align-items: stretch;
 			gap: 0;
 		}
 
@@ -936,6 +940,7 @@ export class SessionPicker extends LitElement {
 				(s) => s.id,
 				(s) => {
 					const status = this.agent.getSessionStatus(s.path);
+					const effectiveStatus = status ?? "idle";
 					const isPinned = this.pinnedSessions.has(s.path);
 					return html`
 					<button
@@ -944,14 +949,10 @@ export class SessionPicker extends LitElement {
 						title="${s.cwd}\n${s.firstMessage}"
 					>
 						<div class="session-item-row">
+							<span class="status-badge ${effectiveStatus}">${effectiveStatus === "idle" ? nothing : html`<span class="status-text">${effectiveStatus}</span>`}</span>
 							<div class="session-item-content">
 								<span class="session-name">${isPinned ? html`<span class="pin-indicator">📌</span> ` : nothing}${this.getSessionDisplayName(s)}</span>
 								<span class="session-meta">
-									${status === "running"
-										? html`<span class="status-badge running"><span class="status-dot"></span>running</span>`
-										: status === "done"
-											? html`<span class="status-badge done">done</span>`
-											: nothing}
 									${this.formatTime(s.lastUserPromptTime || s.modified)} · ${s.messageCount} msgs
 								</span>
 							</div>

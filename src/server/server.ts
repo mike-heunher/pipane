@@ -15,10 +15,12 @@
  * these modules.
  */
 
-import express from "express";
-import { createServer } from "node:http";
+import express, { type Request, type Response, type NextFunction } from "express";
+import { createServer, type IncomingMessage } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { hostname } from "node:os";
+import { randomBytes } from "node:crypto";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
@@ -40,6 +42,48 @@ const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const AUTH_COOKIE_NAME = "pi_web_auth";
+const AUTH_TOKEN = process.env.PI_WEB_AUTH_TOKEN || randomBytes(24).toString("base64url");
+const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
+const AUTH_URL = `http://${PUBLIC_HOSTNAME}:${PORT}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
+
+function parseCookies(header: string | undefined): Record<string, string> {
+	const out: Record<string, string> = {};
+	if (!header) return out;
+	for (const part of header.split(";")) {
+		const idx = part.indexOf("=");
+		if (idx <= 0) continue;
+		const k = part.slice(0, idx).trim();
+		const v = part.slice(idx + 1).trim();
+		out[k] = decodeURIComponent(v);
+	}
+	return out;
+}
+
+function isLocalAddress(addr: string | undefined | null): boolean {
+	if (!addr) return false;
+	return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+function isLocalRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
+	if (process.env.PI_WEB_DISABLE_LOCAL_BYPASS === "1") return false;
+	if (isLocalAddress(req.socket.remoteAddress)) return true;
+	const host = (req.headers.host || "").split(":")[0].toLowerCase();
+	return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+function setAuthCookie(res: Response): void {
+	const secure = process.env.PI_WEB_SECURE_COOKIE === "1" ? "; Secure" : "";
+	const maxAgeSeconds = 60 * 60 * 24 * 30;
+	res.setHeader("Set-Cookie", `${AUTH_COOKIE_NAME}=${encodeURIComponent(AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`);
+}
+
+function isAuthorizedRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
+	if (isLocalRequest(req)) return true;
+	const cookies = parseCookies(req.headers.cookie);
+	return cookies[AUTH_COOKIE_NAME] === AUTH_TOKEN;
+}
+
 // ============================================================================
 // Express + HTTP server
 // ============================================================================
@@ -47,6 +91,27 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+app.get("/auth", (req: Request, res: Response) => {
+	const token = typeof req.query.token === "string" ? req.query.token : undefined;
+	if (isLocalRequest(req) || token === AUTH_TOKEN) {
+		setAuthCookie(res);
+		res.type("html").send("<h3>pi-web: access granted</h3><p>You can close this tab.</p>");
+		return;
+	}
+	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Invalid auth token.</p>");
+});
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+	if (isAuthorizedRequest(req)) {
+		if (isLocalRequest(req)) {
+			setAuthCookie(res);
+		}
+		next();
+		return;
+	}
+	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pi-web terminal.</p>");
+});
 
 // Serve static files in production
 const clientDist = path.resolve(__dirname, "../client");
@@ -99,6 +164,7 @@ const wsHandler = new WsHandler({
 			pool.prewarm(PI_CWD);
 		}
 	},
+	isRequestAuthorized: (req) => isAuthorizedRequest(req),
 });
 
 // Register WS handler
@@ -220,4 +286,6 @@ if (PI_AVAILABLE) {
 
 server.listen(PORT, () => {
 	console.log(`pi-web server listening on http://localhost:${PORT}`);
+	console.log(`[auth] Localhost is always allowed and will auto-set auth cookie.`);
+	console.log(`[auth] Remote browser auth URL: ${AUTH_URL}`);
 });
