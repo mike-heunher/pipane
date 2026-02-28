@@ -2,6 +2,13 @@
 @import "./themes/gruvbox.css";
 @import "tailwindcss";
 
+/* ── Hide token usage when toggled off ──────────────────────────── */
+
+/* Per-message usage line (↑X ↓Y) — the mt-2 text-xs div after tool blocks */
+.hide-token-usage assistant-message > div > .px-4.mt-2.text-xs.text-muted-foreground {
+	display: none !important;
+}
+
 /* ── Full-width conversation: remove max-w-3xl constraint on messages & input ── */
 
 agent-interface .overflow-y-auto > .max-w-3xl,

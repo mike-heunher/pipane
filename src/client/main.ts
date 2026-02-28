@@ -42,6 +42,20 @@ let piInstallPromptOpen = false;
 let inputAreaObserver: ResizeObserver | null = null;
 let observedInputArea: Element | null = null;
 
+// Token usage visibility toggle
+const TOKEN_USAGE_KEY = "pi-web-hide-token-usage";
+function isTokenUsageHidden(): boolean {
+	return localStorage.getItem(TOKEN_USAGE_KEY) === "true";
+}
+function setTokenUsageHidden(hidden: boolean) {
+	localStorage.setItem(TOKEN_USAGE_KEY, String(hidden));
+	document.documentElement.classList.toggle("hide-token-usage", hidden);
+}
+// Apply saved preference immediately
+if (isTokenUsageHidden()) {
+	document.documentElement.classList.add("hide-token-usage");
+}
+
 /**
  * Patch the AgentInterface to allow sending messages during streaming.
  * The upstream component blocks input when isStreaming=true. We override
@@ -297,6 +311,15 @@ const renderApp = () => {
 					<span class="text-base font-semibold text-foreground">pi web</span>
 				</div>
 				<div class="flex items-center gap-1 px-2">
+					<button
+						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${!isTokenUsageHidden() ? 'text-foreground bg-accent' : ''}"
+						@click=${() => { setTokenUsageHidden(!isTokenUsageHidden()); renderApp(); }}
+						title="Toggle token usage display"
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+						</svg>
+					</button>
 					<button
 						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${isJsonlPanelVisible() ? 'text-foreground bg-accent' : ''}"
 						@click=${() => { toggleJsonlPanel(); }}
