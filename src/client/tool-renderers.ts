@@ -96,10 +96,17 @@ class WriteRenderer implements ToolRenderer {
 
 		const path = parsed.path || "";
 		const filename = path ? path.split("/").pop() : "";
-		const headerLabel = filename ? `write(${filename})` : "write";
+		const contentBytes = parsed.content ? new TextEncoder().encode(parsed.content).length : 0;
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
-		const content = parsed.content ? truncate(parsed.content, 4000) : "";
+
+		// Build header: write(filename) — N bytes | error message
+		let headerLabel = filename ? `write(${filename})` : "write";
+		if (state === "error" && output) {
+			headerLabel += ` — ${truncate(output, 80)}`;
+		} else if (state === "complete" && contentBytes > 0) {
+			headerLabel += ` — ${contentBytes.toLocaleString()} bytes`;
+		}
 
 		const iconColor = state === "complete"
 			? "text-green-600 dark:text-green-500"
@@ -112,28 +119,16 @@ class WriteRenderer implements ToolRenderer {
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
 
-		const displayContent = output || content;
-
 		return {
 			content: html`
 				<div class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
-						<div class="flex items-center gap-2">
+					<div class="flex items-center px-3 py-1.5 bg-muted">
+						<div class="flex items-center gap-2 min-w-0">
 							${statusIcon}
-							<span class="text-xs text-muted-foreground font-mono">${headerLabel}</span>
+							<span class="text-xs ${isError ? "text-destructive" : "text-muted-foreground"} font-mono truncate">${headerLabel}</span>
 							${spinner}
 						</div>
-						${displayContent ? html`<button
-							@click=${async (e: Event) => {
-								try { await navigator.clipboard.writeText(displayContent); } catch {}
-							}}
-							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
-							title="Copy output"
-						>${icon(Copy, "sm")}</button>` : ""}
 					</div>
-					${displayContent ? html`<div class="overflow-auto max-h-64">
-						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${displayContent}</pre>
-					</div>` : ""}
 				</div>
 			`,
 			isCustom: true,

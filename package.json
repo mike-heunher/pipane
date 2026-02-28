@@ -34,11 +34,11 @@
 		"@mariozechner/pi-ai": "0.55.3",
 		"@mariozechner/pi-coding-agent": "0.55.3",
 		"@mariozechner/pi-web-ui": "0.55.3",
-		"patch-package": "^8.0.1",
 		"@tailwindcss/vite": "^4.1.17",
 		"express": "^5.1.0",
 		"lit": "^3.3.1",
 		"lucide": "^0.544.0",
+		"patch-package": "^8.0.1",
 		"ws": "^8.18.0"
 	},
 	"devDependencies": {
