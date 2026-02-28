@@ -26,7 +26,7 @@ import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages } from "./canvas-panel.js";
-import { selectModelFromAvailable } from "./model-picker.js";
+import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
 registerCodingAgentRenderers();
@@ -136,7 +136,7 @@ function patchMessageEditor(ai: any) {
 	const customModelSelect = async () => {
 		try {
 			const models = await agent.fetchAvailableModels();
-			const selected = await selectModelFromAvailable(models as any, agent.state.model as any, (msg) => Promise.resolve(window.prompt(msg)));
+			const selected = await openModelPickerDialog(models as any, agent.state.model as any);
 			if (selected) agent.setModel(selected as any);
 		} catch (err) {
 			console.error("Failed to open model picker:", err);

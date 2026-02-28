@@ -246,3 +246,107 @@ agent-interface .shrink-0 > .max-w-3xl {
 	overflow-y: auto;
 	padding: 1rem;
 }
+
+/* ── Clickable model picker (server-scoped models only) ────────── */
+
+.model-picker-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+	background: rgba(0, 0, 0, 0.45);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1rem;
+}
+
+.model-picker-panel {
+	width: min(720px, 96vw);
+	max-height: min(82vh, 900px);
+	display: flex;
+	flex-direction: column;
+	border-radius: 0.75rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: var(--background, #fff);
+	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.model-picker-header {
+	padding: 0.85rem 1rem 0.65rem;
+	font-size: 0.95rem;
+	font-weight: 650;
+	border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.model-picker-search {
+	margin: 0.75rem 1rem;
+	padding: 0.55rem 0.7rem;
+	border-radius: 0.45rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: var(--background, #fff);
+	color: var(--foreground, #111);
+}
+
+.model-picker-list {
+	margin: 0 1rem 0.75rem;
+	overflow-y: auto;
+	min-height: 160px;
+	max-height: 50vh;
+	display: flex;
+	flex-direction: column;
+	gap: 0.4rem;
+}
+
+.model-picker-item {
+	width: 100%;
+	text-align: left;
+	padding: 0.55rem 0.65rem;
+	border-radius: 0.5rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: transparent;
+	color: var(--foreground, #111);
+	cursor: pointer;
+}
+
+.model-picker-item:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+}
+
+.model-picker-item.is-current {
+	border-color: color-mix(in srgb, var(--primary, #2563eb) 40%, var(--border, #e5e7eb));
+	background: color-mix(in srgb, var(--primary, #2563eb) 8%, transparent);
+}
+
+.model-picker-item-label {
+	font-size: 0.82rem;
+	font-weight: 600;
+}
+
+.model-picker-item-meta {
+	font-size: 0.72rem;
+	color: var(--muted-foreground, #6b7280);
+	margin-top: 0.18rem;
+}
+
+.model-picker-empty {
+	padding: 1rem;
+	font-size: 0.8rem;
+	color: var(--muted-foreground, #6b7280);
+	text-align: center;
+}
+
+.model-picker-footer {
+	padding: 0.75rem 1rem 0.9rem;
+	display: flex;
+	justify-content: flex-end;
+	border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.model-picker-cancel {
+	padding: 0.45rem 0.75rem;
+	border-radius: 0.45rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: transparent;
+	cursor: pointer;
+	color: var(--foreground, #111);
+}
