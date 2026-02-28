@@ -13,7 +13,8 @@
 		"prod": "./prod.sh",
 		"check": "tsc --noEmit",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"test:screenshots": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts"
 	},
 	"dependencies": {
 		"@mariozechner/mini-lit": "^0.2.0",
