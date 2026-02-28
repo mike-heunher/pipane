@@ -63,6 +63,16 @@ export default defineConfig({
 			},
 		},
 	},
+	optimizeDeps: {
+		esbuildOptions: {
+			tsconfigRaw: {
+				compilerOptions: {
+					experimentalDecorators: true,
+					useDefineForClassFields: false,
+				},
+			},
+		},
+	},
 	server: {
 		port: devPort,
 		hmr: {
