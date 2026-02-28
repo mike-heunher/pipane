@@ -27,7 +27,7 @@ import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool } from "./process-pool.js";
-import { SessionMessageCache } from "./session-message-cache.js";
+import { CompiledSessionStore } from "./compiled-session.js";
 import { WsHandler } from "./ws-handler.js";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
@@ -60,7 +60,7 @@ registerRestApi(app);
 // ============================================================================
 
 const lifecycle = new SessionLifecycle();
-const messageCache = new SessionMessageCache();
+const compiledStore = new CompiledSessionStore();
 
 // Resolve canvas extension path relative to project root
 const canvasExtension = path.resolve(__dirname, "../../extensions/canvas.ts");
@@ -91,7 +91,7 @@ const pool = new ProcessPool(
 const wsHandler = new WsHandler({
 	lifecycle,
 	pool,
-	messageCache,
+	compiledStore,
 	defaultCwd: PI_CWD,
 	piLaunch: PI_LAUNCH,
 	ensurePool: () => {

@@ -320,7 +320,23 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Server-authoritative steering queue update
+		// Session status updates for all sessions (sidebar badges)
+		if (data.type === "session_status_change") {
+			if (data.sessionPath && data.status) {
+				this.setGlobalSessionStatus(data.sessionPath, data.status);
+			}
+			return;
+		}
+
+		// Unified state update op from server (authoritative)
+		if (data.type === "session_update") {
+			const sp = data.sessionPath as string;
+			if (sp !== this._sessionPath) return;
+			this.applySessionUpdate(data);
+			return;
+		}
+
+		// Backward compatibility: old steering queue event
 		if (data.type === "steering_queue_update") {
 			const sp = data.sessionPath as string;
 			if (sp) {
@@ -334,16 +350,11 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Server-pushed full message state for the subscribed session
+		// Backward compatibility: old full snapshot event
 		if (data.type === "session_messages") {
 			const sp = data.sessionPath as string;
 			if (sp === this._sessionPath) {
 				this._state.messages = data.messages ?? [];
-				// Only restore model/thinkingLevel when explicitly switching
-				// sessions (switchSession sets _restoreModelFromServer=true).
-				// Otherwise, model/thinkingLevel are client-local state and
-				// session_messages pushes (from detach, file watcher, etc.)
-				// must not clobber the user's selection.
 				if (this._restoreModelFromServer) {
 					if (data.model) {
 						this._state.model = this.findModelMatch(data.model) ?? this._state.model;
@@ -363,11 +374,7 @@ export class WsAgentAdapter {
 			if (data.sessionPath) {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
 			}
-			// Update session status BEFORE creating optimistic entries,
-			// so virtualSessionInfo returns undefined and the sidebar
-			// doesn't briefly show both the virtual and real entries.
 			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
-				// For virtual sessions, adopt the server-assigned path
 				if (this._sessionStatus === "virtual" && data.sessionPath) {
 					this._sessionPath = data.sessionPath;
 					const filename = path.basename(data.sessionPath, ".jsonl");
@@ -375,8 +382,10 @@ export class WsAgentAdapter {
 					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 				}
 				this._sessionStatus = "attached";
-				// Ensure isStreaming is true so the stop button is visible
 				this._state.isStreaming = true;
+				if (data.sessionPath) {
+					this.subscribeToSession(data.sessionPath);
+				}
 				this.emitStatusChange();
 			}
 			if (data.sessionPath) {
@@ -429,17 +438,89 @@ export class WsAgentAdapter {
 		// Sessions directory change notification
 		if (data.type === "sessions_changed") {
 			const file = data.file as string;
-			// Server handles message refresh via cache — we just notify sidebar
 			for (const fn of this.sessionsChangedListeners) fn(file);
 			return;
 		}
 
-		// Agent event — only process if it's for our current session
-		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
+		// Side-channel raw event from server (used by UI hooks like canvas/jsonl)
+		if (data.type === "agent_event") {
+			if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
+			const event = data.event as AgentEvent;
+			this.emit(event);
+			return;
+		}
 
+		// Legacy: raw agent event stream
+		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
 		const event = data as AgentEvent;
 		this.updateState(event);
 		this.emit(event);
+	}
+
+	private applySessionUpdate(update: any) {
+		switch (update.op) {
+			case "snapshot": {
+				const state = update.state ?? {};
+				this._state.messages = state.messages ?? [];
+				this._state.streamMessage = state.streamMessage ?? null;
+				this._state.isStreaming = state.status === "streaming";
+				if (this._sessionStatus !== "virtual") {
+					this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
+				}
+				this._state.pendingToolCalls = new Set(state.pendingToolCalls ?? []);
+				if (this._restoreModelFromServer) {
+					if (state.model) {
+						this._state.model = this.findModelMatch(state.model) ?? this._state.model;
+					}
+					if (state.thinkingLevel) {
+						this._state.thinkingLevel = state.thinkingLevel;
+					}
+					this._restoreModelFromServer = false;
+				}
+				if (Array.isArray(state.steeringQueue) && this._sessionPath) {
+					if (state.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...state.steeringQueue]);
+					else this._steeringQueues.delete(this._sessionPath);
+					this.emitSteeringQueueChange();
+				}
+				if (state.error) this._state.error = state.error;
+				break;
+			}
+			case "stream_delta":
+				this._state.streamMessage = update.streamMessage ?? null;
+				if (Array.isArray(update.pendingToolCalls)) {
+					this._state.pendingToolCalls = new Set(update.pendingToolCalls);
+				}
+				break;
+			case "append_messages":
+				this._state.streamMessage = null;
+				this._state.messages = [...this._state.messages, ...(update.messages ?? [])];
+				break;
+			case "patch": {
+				const changes = update.changes ?? {};
+				if ("streamMessage" in changes) this._state.streamMessage = changes.streamMessage ?? null;
+				if ("status" in changes) {
+					this._state.isStreaming = changes.status === "streaming";
+					this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
+				}
+				if (Array.isArray(changes.pendingToolCalls)) {
+					this._state.pendingToolCalls = new Set(changes.pendingToolCalls);
+				}
+				if (Array.isArray(changes.steeringQueue) && this._sessionPath) {
+					if (changes.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...changes.steeringQueue]);
+					else this._steeringQueues.delete(this._sessionPath);
+					this.emitSteeringQueueChange();
+				}
+				if ("error" in changes) this._state.error = changes.error;
+				if (this._restoreModelFromServer) {
+					if (changes.model) this._state.model = this.findModelMatch(changes.model) ?? this._state.model;
+					if (changes.thinkingLevel) this._state.thinkingLevel = changes.thinkingLevel;
+					this._restoreModelFromServer = false;
+				}
+				break;
+			}
+		}
+		this.emitContentChange();
+		this.emitStatusChange();
 	}
 
 	private updateState(event: AgentEvent) {
@@ -607,7 +688,7 @@ export class WsAgentAdapter {
 		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
 
 		if (this._sessionStatus === "virtual") {
-			await this.send({
+			const res = await this.send({
 				type: "prompt",
 				sessionPath: "__new__",
 				cwd: this._pendingCwd,
@@ -616,9 +697,17 @@ export class WsAgentAdapter {
 				thinkingLevel: this._state.thinkingLevel,
 				images,
 			});
-			// Don't clear _pendingCwd here — virtualSessionInfo needs it
-			// to keep showing the session in the correct sidebar group until
-			// session_attached arrives and transitions status to "attached".
+			const newSessionPath = res?.newSessionPath;
+			if (newSessionPath && !this._sessionPath) {
+				this._sessionPath = newSessionPath;
+				const filename = path.basename(newSessionPath, ".jsonl");
+				const parts = filename.split("_");
+				this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+				this._sessionStatus = "attached";
+				this.subscribeToSession(newSessionPath);
+				this.emitSessionChange();
+				this.emitStatusChange();
+			}
 			return;
 		}
 

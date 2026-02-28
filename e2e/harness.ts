@@ -11,6 +11,7 @@ import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createMockLlmServer, type MockLlmServer, type Scenario } from "./mock-llm-server.js";
+import { createServer } from "node:net";
 
 export interface E2EHarness {
 	/** The port the real pi-web server is listening on */
@@ -42,6 +43,26 @@ async function waitForPort(port: number, timeoutMs = 15000): Promise<void> {
 		await new Promise((r) => setTimeout(r, 200));
 	}
 	throw new Error(`Timed out waiting for port ${port} after ${timeoutMs}ms`);
+}
+
+async function getFreePort(): Promise<number> {
+	return await new Promise<number>((resolve, reject) => {
+		const server = createServer();
+		server.listen(0, "127.0.0.1", () => {
+			const addr = server.address();
+			if (!addr || typeof addr === "string") {
+				server.close();
+				reject(new Error("Failed to allocate free port"));
+				return;
+			}
+			const port = addr.port;
+			server.close((err) => {
+				if (err) reject(err);
+				else resolve(port);
+			});
+		});
+		server.on("error", reject);
+	});
 }
 
 export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> {
@@ -102,8 +123,8 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 		}, null, 2),
 	);
 
-	// 4. Find a free port for pi-web
-	const piWebPort = 18200 + Math.floor(Math.random() * 800);
+	// 4. Find a guaranteed free port for pi-web
+	const piWebPort = await getFreePort();
 
 	// 5. Build server path
 	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server.js");

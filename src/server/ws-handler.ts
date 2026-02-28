@@ -1,8 +1,10 @@
 /**
  * WebSocket handler for pi-web.
  *
- * Routes incoming WS commands to the session lifecycle and process pool.
- * Subscribes to lifecycle events and forwards them to the connected client.
+ * Multi-client model:
+ * - Any number of clients can connect simultaneously
+ * - Each client can subscribe to one session at a time
+ * - Server compiles JSONL + streaming into canonical state and sends deltas
  */
 
 import { WebSocket, type WebSocketServer } from "ws";
@@ -12,27 +14,29 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
 import { getSessionCwd } from "./session-cwd.js";
-import { SessionMessageCache } from "./session-message-cache.js";
+import { CompiledSessionStore } from "./compiled-session.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 
 export interface WsHandlerOptions {
 	lifecycle: SessionLifecycle;
 	pool: ProcessPool;
-	messageCache: SessionMessageCache;
+	compiledStore: CompiledSessionStore;
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
 }
 
 interface TurnState {
-	/** The process handling this turn */
 	proc: RpcProcess;
-	/** The session path */
 	sessionPath: string;
-	/** WebSocket to forward events to */
 	ws: WebSocket;
-	/** Correlation id for debug logging */
 	turnId: string;
+}
+
+interface ClientState {
+	subscribedSession: string | null;
+	lastVersion: number;
+	lastMessageCount: number;
 }
 
 let nextTurnId = 0;
@@ -47,25 +51,15 @@ function debugTurn(stage: string, data: Record<string, any>) {
 export class WsHandler {
 	private lifecycle: SessionLifecycle;
 	private pool: ProcessPool;
-	private messageCache: SessionMessageCache;
+	private compiledStore: CompiledSessionStore;
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
 
-	/** Currently connected WS client (single-client model) */
-	private connectedWs: WebSocket | null = null;
-
-	/** Set of processes currently busy with a turn */
+	private clients = new Map<WebSocket, ClientState>();
 	private busyProcesses = new Set<RpcProcess>();
-
-	/** Active turns: sessionPath → TurnState */
 	private activeTurns = new Map<string, TurnState>();
-
-	/** Per-process event listener cleanup */
 	private procEventCleanup = new Map<RpcProcess, () => void>();
-
-	/** Session the connected client is subscribed to (for push updates) */
-	private subscribedSession: string | null = null;
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -73,52 +67,59 @@ export class WsHandler {
 	constructor(options: WsHandlerOptions) {
 		this.lifecycle = options.lifecycle;
 		this.pool = options.pool;
-		this.messageCache = options.messageCache;
+		this.compiledStore = options.compiledStore;
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
 		this.piAvailable = checkCommandAvailable(this.piLaunch.command);
 
-		// Subscribe to lifecycle events and forward to WS client
 		this.lifecycle.subscribe((event) => {
-			if (!this.connectedWs || this.connectedWs.readyState !== WebSocket.OPEN) return;
-
 			switch (event.type) {
 				case "session_attached":
-					this.connectedWs.send(JSON.stringify({
-						type: "session_attached",
+					this.compiledStore.setStreaming(event.sessionPath, true);
+					this.broadcast({
+						type: "session_status_change",
 						sessionPath: event.sessionPath,
-					}));
+						status: "running",
+					});
 					break;
 				case "session_detached":
-					this.connectedWs.send(JSON.stringify({
-						type: "session_detached",
+					this.compiledStore.setStreaming(event.sessionPath, false);
+					this.broadcast({
+						type: "session_status_change",
 						sessionPath: event.sessionPath,
-					}));
+						status: "done",
+					});
 					break;
 				case "steering_queue_update":
-					this.connectedWs.send(JSON.stringify({
-						type: "steering_queue_update",
-						sessionPath: event.sessionPath,
-						queue: event.queue,
-					}));
+					this.compiledStore.setSteeringQueue(event.sessionPath, event.queue);
 					break;
 			}
 		});
 
-		// Subscribe to cache events and forward to WS client
-		this.messageCache.subscribe((event) => {
-			if (!this.connectedWs || this.connectedWs.readyState !== WebSocket.OPEN) return;
+		this.compiledStore.subscribe(({ sessionPath }) => {
+			for (const [ws, client] of this.clients) {
+				if (client.subscribedSession !== sessionPath) continue;
+				if (ws.readyState !== WebSocket.OPEN) continue;
 
-			// Only push session_messages if the client is subscribed to this session
-			if (event.type === "session_messages" && event.sessionPath === this.subscribedSession) {
-				this.connectedWs.send(JSON.stringify({
-					type: "session_messages",
-					sessionPath: event.sessionPath,
-					messages: event.messages,
-					model: event.model,
-					thinkingLevel: event.thinkingLevel,
+				const op = this.compiledStore.computeUpdateOp(
+					sessionPath,
+					client.lastVersion,
+					client.lastMessageCount,
+				);
+				if (!op) continue;
+
+				ws.send(JSON.stringify({
+					type: "session_update",
+					sessionPath,
+					...op,
 				}));
+
+				const latest = this.compiledStore.get(sessionPath);
+				if (latest) {
+					client.lastVersion = latest.version;
+					client.lastMessageCount = latest.messages.length;
+				}
 			}
 		});
 	}
@@ -127,9 +128,8 @@ export class WsHandler {
 		return this.piAvailable;
 	}
 
-	/** Notify the cache that a session file changed on disk (from file watcher). */
 	notifySessionFileChanged(sessionPath: string): void {
-		this.messageCache.refreshIfChanged(sessionPath);
+		this.compiledStore.refreshIfChanged(sessionPath);
 	}
 
 	getDebugState() {
@@ -149,27 +149,23 @@ export class WsHandler {
 			totalProcesses: this.pool.totalProcesses,
 			attachedSessionCount: this.lifecycle.attachedCount,
 			sessionStatuses: this.lifecycle.getAllStatuses(),
-			connectedWsOpen: !!this.connectedWs && this.connectedWs.readyState === WebSocket.OPEN,
+			connectedWsOpen: Array.from(this.clients.keys()).filter((ws) => ws.readyState === WebSocket.OPEN).length,
 			processes,
 		};
 	}
 
-	/**
-	 * Register the WS handler on a WebSocketServer.
-	 */
 	register(wss: WebSocketServer): void {
 		wss.on("connection", (ws) => this.handleConnection(ws));
 	}
 
 	private handleConnection(ws: WebSocket): void {
 		console.log("WebSocket client connected");
+		this.clients.set(ws, {
+			subscribedSession: null,
+			lastVersion: 0,
+			lastMessageCount: 0,
+		});
 
-		if (this.connectedWs && this.connectedWs.readyState === WebSocket.OPEN) {
-			this.connectedWs.close(1000, "Replaced by new connection");
-		}
-		this.connectedWs = ws;
-
-		// Send initial state
 		ws.send(JSON.stringify({
 			type: "init",
 			sessionStatuses: this.lifecycle.getAllStatuses(),
@@ -187,11 +183,18 @@ export class WsHandler {
 		}
 
 		ws.on("message", (raw) => this.handleMessage(ws, raw.toString()));
-
 		ws.on("close", () => {
 			console.log("WebSocket client disconnected");
-			if (this.connectedWs === ws) this.connectedWs = null;
+			this.clients.delete(ws);
 		});
+	}
+
+	private broadcast(payload: any) {
+		for (const ws of this.clients.keys()) {
+			if (ws.readyState === WebSocket.OPEN) {
+				ws.send(JSON.stringify(payload));
+			}
+		}
 	}
 
 	private async handleMessage(ws: WebSocket, raw: string): Promise<void> {
@@ -204,7 +207,6 @@ export class WsHandler {
 		}
 
 		const id = command.id;
-
 		try {
 			if (!this.piAvailable && command.type !== "install_pi" && command.type !== "get_session_statuses") {
 				ws.send(JSON.stringify({
@@ -271,13 +273,9 @@ export class WsHandler {
 			}
 		} catch (err: any) {
 			debugTurn("command_error", { commandType: command?.type, requestId: id, error: err?.message });
-			ws.send(JSON.stringify({
-				id, type: "response", command: command.type, success: false, error: err.message,
-			}));
+			ws.send(JSON.stringify({ id, type: "response", command: command.type, success: false, error: err.message }));
 		}
 	}
-
-	// ── Command handlers ─────────────────────────────────────────────────
 
 	private async handleInstallPi(ws: WebSocket, id: string): Promise<void> {
 		const installable = isPiInstallable(this.piLaunch.command, this.piLaunch.baseArgs);
@@ -286,15 +284,13 @@ export class WsHandler {
 		}
 		if (!this.piInstalling) {
 			this.piInstalling = true;
-			if (this.connectedWs && this.connectedWs.readyState === WebSocket.OPEN) {
-				this.connectedWs.send(JSON.stringify({
-					type: "pi_install_required",
-					command: this.piLaunch.command,
-					installable: true,
-					installing: true,
-					message: "Installing pi...",
-				}));
-			}
+			this.broadcast({
+				type: "pi_install_required",
+				command: this.piLaunch.command,
+				installable: true,
+				installing: true,
+				message: "Installing pi...",
+			});
 			const ok = await installPiGlobal();
 			this.piInstalling = false;
 			this.piAvailable = checkCommandAvailable(this.piLaunch.command);
@@ -308,29 +304,29 @@ export class WsHandler {
 	}
 
 	private handleSubscribeSession(ws: WebSocket, id: string, command: any): void {
+		const client = this.clients.get(ws);
+		if (!client) return;
 		const sessionPath = command.sessionPath as string;
 
 		if (!sessionPath) {
-			// Unsubscribe (e.g., new virtual session)
-			this.subscribedSession = null;
+			client.subscribedSession = null;
+			client.lastVersion = 0;
+			client.lastMessageCount = 0;
 			ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
 			return;
 		}
 
-		this.subscribedSession = sessionPath;
+		client.subscribedSession = sessionPath;
+		const state = this.compiledStore.load(sessionPath);
+		client.lastVersion = state.version;
+		client.lastMessageCount = state.messages.length;
 
-		// Load from cache (reads from disk if not cached)
-		const cached = this.messageCache.load(sessionPath);
-
-		// Push the full message state to the client
 		ws.send(JSON.stringify({
-			type: "session_messages",
+			type: "session_update",
 			sessionPath,
-			messages: cached.messages,
-			model: cached.model,
-			thinkingLevel: cached.thinkingLevel,
+			op: "snapshot",
+			state,
 		}));
-
 		ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
 	}
 
@@ -342,7 +338,6 @@ export class WsHandler {
 		debugTurn("prompt_start", { turnId, sessionPath, hasModel: !!command.model });
 
 		let proc: RpcProcess;
-
 		if (sessionPath === "__new__") {
 			const cwd = command.cwd as string || this.defaultCwd;
 			proc = await this.acquireProcess(cwd);
@@ -354,12 +349,8 @@ export class WsHandler {
 			if (!sessionPath) throw new Error("Failed to get session path from new session");
 
 			this.busyProcesses.add(proc);
-			this.messageCache.setStreaming(sessionPath, true);
+			this.compiledStore.setStreaming(sessionPath, true);
 
-			// Send enriched session_attached with cwd + firstMessage for optimistic sidebar.
-			// Must be sent BEFORE lifecycle.attach() which emits a bare session_attached
-			// via the lifecycle subscriber (without cwd/firstMessage). The client
-			// deduplicates by sessionPath, so the first one wins.
 			ws.send(JSON.stringify({
 				type: "session_attached",
 				sessionPath,
@@ -368,10 +359,9 @@ export class WsHandler {
 			}));
 			this.lifecycle.attach(sessionPath, proc);
 		} else {
-			proc = await this.acquireForSession(sessionPath, ws);
+			proc = await this.acquireForSession(sessionPath);
 		}
 
-		// Apply model/thinking level
 		if (command.model) {
 			await this.pool.sendRpcChecked(proc, {
 				type: "set_model",
@@ -388,20 +378,18 @@ export class WsHandler {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}
 
-		// Set up event forwarding for this turn
 		this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
-
-		// Register turn
 		this.activeTurns.set(sessionPath, { proc, sessionPath, ws, turnId });
 
-		debugTurn("prompt_rpc_send", { turnId, procId: proc.id, sessionPath });
 		const promptCmd: any = { type: "prompt", message: command.message };
-		if (command.images && command.images.length > 0) {
+		if (command.images?.length > 0) {
 			promptCmd.images = command.images;
 		}
 		const response = await this.pool.sendRpc(proc, promptCmd);
-		debugTurn("prompt_rpc_response", { turnId, procId: proc.id, sessionPath, success: !!response?.success });
-		ws.send(JSON.stringify({ ...response, id, command: "prompt" }));
+		const enriched = { ...response };
+		if (!enriched.data) enriched.data = {};
+		enriched.data.newSessionPath = sessionPath;
+		ws.send(JSON.stringify({ ...enriched, id, command: "prompt" }));
 	}
 
 	private async handleSteer(ws: WebSocket, id: string, command: any): Promise<void> {
@@ -437,15 +425,8 @@ export class WsHandler {
 	private async handleCompact(ws: WebSocket, id: string, command: any): Promise<void> {
 		const sessionPath = command.sessionPath as string;
 		if (!sessionPath) throw new Error("Missing sessionPath");
-
-		const proc = await this.acquireForSession(sessionPath, ws);
-
-		// Compact sends its own session_attached — the lifecycle already emitted it
-		const response = await this.pool.sendRpc(proc, {
-			type: "compact",
-			customInstructions: command.customInstructions,
-		});
-
+		const proc = await this.acquireForSession(sessionPath);
+		const response = await this.pool.sendRpc(proc, { type: "compact", customInstructions: command.customInstructions });
 		this.releaseProcess(sessionPath);
 		ws.send(JSON.stringify({ ...response, id, command: "compact" }));
 	}
@@ -461,17 +442,11 @@ export class WsHandler {
 		const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
 		const model = stateResp.data?.model ?? null;
 		const thinkingLevel = stateResp.data?.thinkingLevel ?? "off";
-		ws.send(JSON.stringify({
-			id, type: "response", command: "get_default_model",
-			success: true, data: { model, thinkingLevel },
-		}));
+		ws.send(JSON.stringify({ id, type: "response", command: "get_default_model", success: true, data: { model, thinkingLevel } }));
 	}
 
 	private handleGetSessionStatuses(ws: WebSocket, id: string): void {
-		ws.send(JSON.stringify({
-			id, type: "response", command: "get_session_statuses",
-			success: true, data: { statuses: this.lifecycle.getAllStatuses() },
-		}));
+		ws.send(JSON.stringify({ id, type: "response", command: "get_session_statuses", success: true, data: { statuses: this.lifecycle.getAllStatuses() } }));
 	}
 
 	private async handleFork(ws: WebSocket, id: string, command: any): Promise<void> {
@@ -480,17 +455,14 @@ export class WsHandler {
 		const entryId = command.entryId as string;
 		if (!entryId) throw new Error("Missing entryId");
 
-		const proc = await this.acquireForSession(sessionPath, ws);
+		const proc = await this.acquireForSession(sessionPath);
 		const response = await this.pool.sendRpc(proc, { type: "fork", entryId });
-
 		const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
 		const newSessionPath = stateResp.data?.sessionFile;
-
 		this.releaseProcess(sessionPath);
 
 		ws.send(JSON.stringify({
-			id, type: "response", command: "fork",
-			success: true,
+			id, type: "response", command: "fork", success: true,
 			data: {
 				text: response.data?.text ?? "",
 				cancelled: response.data?.cancelled ?? false,
@@ -505,7 +477,6 @@ export class WsHandler {
 		const message = command.message as string;
 		if (!message) throw new Error("Missing message");
 
-		// Copy the JSONL file to create a new session
 		const sessionsDir = path.join(getAgentDir(), "sessions");
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const newId = crypto.randomUUID().slice(0, 8);
@@ -513,28 +484,16 @@ export class WsHandler {
 		const newSessionPath = path.join(sessionsDir, newFilename);
 		await copyFile(sessionPath, newSessionPath);
 
-		// Resolve cwd from the source session
 		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
-
 		const proc = await this.acquireProcess(cwd);
 		await this.pool.waitForReady(proc);
-
 		this.busyProcesses.add(proc);
-		this.messageCache.setStreaming(newSessionPath, true);
+		this.compiledStore.setStreaming(newSessionPath, true);
 
-		// Send enriched session_attached BEFORE lifecycle.attach() so the client
-		// receives cwd + firstMessage before the bare lifecycle event.
-		ws.send(JSON.stringify({
-			type: "session_attached",
-			sessionPath: newSessionPath,
-			cwd,
-			firstMessage: message,
-		}));
+		ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
 		this.lifecycle.attach(newSessionPath, proc);
-
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
 
-		// Apply model/thinking level
 		if (command.model) {
 			await this.pool.sendRpcChecked(proc, {
 				type: "set_model",
@@ -551,29 +510,22 @@ export class WsHandler {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}
 
-		// Set up event forwarding
 		this.setupTurnEventForwarding(proc, newSessionPath, ws, makeTurnId());
 		this.activeTurns.set(newSessionPath, { proc, sessionPath: newSessionPath, ws, turnId: makeTurnId() });
 
-		// Send the prompt
 		const promptCmd: any = { type: "prompt", message };
-		if (command.images && command.images.length > 0) {
+		if (command.images?.length > 0) {
 			promptCmd.images = command.images;
 		}
 		await this.pool.sendRpc(proc, promptCmd);
 
-		ws.send(JSON.stringify({
-			id, type: "response", command: "fork_prompt",
-			success: true,
-			data: { newSessionPath },
-		}));
+		ws.send(JSON.stringify({ id, type: "response", command: "fork_prompt", success: true, data: { newSessionPath } }));
 	}
 
 	private async handleSetSessionName(ws: WebSocket, id: string, command: any): Promise<void> {
 		const sessionPath = command.sessionPath as string;
 		if (!sessionPath) throw new Error("Missing sessionPath");
-
-		const proc = await this.acquireForSession(sessionPath, ws);
+		const proc = await this.acquireForSession(sessionPath);
 		const response = await this.pool.sendRpc(proc, { type: "set_session_name", name: command.name });
 		this.releaseProcess(sessionPath);
 		ws.send(JSON.stringify({ ...response, id, command: "set_session_name" }));
@@ -589,24 +541,16 @@ export class WsHandler {
 	 * Acquire a process for an existing session. Resolves the session's cwd
 	 * from its JSONL header and gets a process from the matching pool.
 	 */
-	private async acquireForSession(sessionPath: string, ws: WebSocket): Promise<RpcProcess> {
-		// Already attached?
+	private async acquireForSession(sessionPath: string): Promise<RpcProcess> {
 		const existing = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
 		if (existing) return existing;
 
 		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
 		const proc = await this.acquireProcess(cwd);
-
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(sessionPath, proc);
-
-		// Mark session as streaming in the cache
-		this.messageCache.setStreaming(sessionPath, true);
-
-		// Switch to the target session — must await to ensure subsequent RPCs
-		// (prompt, compact, fork, etc.) operate on the correct session.
+		this.compiledStore.setStreaming(sessionPath, true);
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath });
-
 		console.log(`[ws] pi#${proc.id} attached to ${path.basename(sessionPath)} (cwd: ${cwd})`);
 		return proc;
 	}
@@ -642,40 +586,22 @@ export class WsHandler {
 		}
 	}
 
-	/**
-	 * Release a process from a session.
-	 */
 	private releaseProcess(sessionPath: string): void {
 		const proc = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
 		if (proc) {
 			this.busyProcesses.delete(proc);
-			// Clean up event listener
 			const cleanup = this.procEventCleanup.get(proc);
 			if (cleanup) {
 				cleanup();
 				this.procEventCleanup.delete(proc);
 			}
 		}
-		this.messageCache.setStreaming(sessionPath, false);
+		this.compiledStore.setStreaming(sessionPath, false);
 		this.lifecycle.detach(sessionPath);
 		this.activeTurns.delete(sessionPath);
-
-		// Push final messages to client after detach (authoritative disk state)
-		if (this.connectedWs && this.connectedWs.readyState === WebSocket.OPEN && this.subscribedSession === sessionPath) {
-			const cached = this.messageCache.load(sessionPath);
-			this.connectedWs.send(JSON.stringify({
-				type: "session_messages",
-				sessionPath,
-				messages: cached.messages,
-				model: cached.model,
-				thinkingLevel: cached.thinkingLevel,
-			}));
-		}
+		this.pushSnapshotToSubscribers(sessionPath);
 	}
 
-	/**
-	 * Get any live process for read-only operations (model queries, etc).
-	 */
 	private getAnyProcess(): RpcProcess {
 		let proc = this.pool.getAny(this.busyProcesses);
 		if (!proc) {
@@ -684,17 +610,23 @@ export class WsHandler {
 		return proc;
 	}
 
-	/**
-	 * Set up event forwarding from a pi process to a WS client for a turn.
-	 * Also handles agent_end to release the process.
-	 */
-	private setupTurnEventForwarding(
-		proc: RpcProcess,
-		sessionPath: string,
-		ws: WebSocket,
-		turnId: string,
-	): void {
-		// Clean up any existing listener for this process
+	private pushSnapshotToSubscribers(sessionPath: string) {
+		const state = this.compiledStore.load(sessionPath);
+		for (const [ws, client] of this.clients) {
+			if (client.subscribedSession !== sessionPath) continue;
+			if (ws.readyState !== WebSocket.OPEN) continue;
+			ws.send(JSON.stringify({
+				type: "session_update",
+				sessionPath,
+				op: "snapshot",
+				state,
+			}));
+			client.lastVersion = state.version;
+			client.lastMessageCount = state.messages.length;
+		}
+	}
+
+	private setupTurnEventForwarding(proc: RpcProcess, sessionPath: string, ws: WebSocket, turnId: string): void {
 		const existingCleanup = this.procEventCleanup.get(proc);
 		if (existingCleanup) {
 			existingCleanup();
@@ -708,19 +640,15 @@ export class WsHandler {
 			} catch {
 				return;
 			}
-
-			// Skip RPC responses — those are handled by the pool's pendingRequests
 			if (data.type === "response" && data.id) return;
 
-			// Update the server-side message cache
-			this.messageCache.applyEvent(sessionPath, data);
+			this.compiledStore.applyEvent(sessionPath, data);
 
-			// Forward agent event to WS client, tagged with session path
+			// Side-channel raw event for UI hooks (canvas/jsonl), not state updates
 			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ ...data, sessionPath }));
+				ws.send(JSON.stringify({ type: "agent_event", sessionPath, event: data }));
 			}
 
-			// Dequeue steering on user message confirmation
 			if (data.type === "message_end" && data.message?.role === "user") {
 				const text = typeof data.message.content === "string"
 					? data.message.content
@@ -728,7 +656,6 @@ export class WsHandler {
 				this.lifecycle.dequeueSteering(sessionPath, text);
 			}
 
-			// On agent_end: release process
 			if (data.type === "agent_end") {
 				debugTurn("agent_end_received", { turnId, procId: proc.id, sessionPath });
 				this.lifecycle.clearSteering(sessionPath);
@@ -737,10 +664,7 @@ export class WsHandler {
 		};
 
 		proc.rl.on("line", lineHandler);
-
-		const cleanup = () => {
-			proc.rl.removeListener("line", lineHandler);
-		};
+		const cleanup = () => proc.rl.removeListener("line", lineHandler);
 		this.procEventCleanup.set(proc, cleanup);
 	}
 }
