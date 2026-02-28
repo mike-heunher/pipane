@@ -394,6 +394,16 @@ export class WsAgentAdapter {
 		return res.json();
 	}
 
+	/** Delete a session file */
+	async deleteSession(sessionPath: string): Promise<void> {
+		const res = await fetch("/api/sessions", {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: sessionPath }),
+		});
+		if (!res.ok) throw new Error(`Failed to delete session: ${res.statusText}`);
+	}
+
 	/** Switch to a different session */
 	async switchSession(sessionPath: string): Promise<void> {
 		const response = await this.send({ type: "switch_session", sessionPath });

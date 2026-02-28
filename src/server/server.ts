@@ -9,6 +9,8 @@ import express from "express";
 import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { WebSocketServer, WebSocket } from "ws";
@@ -50,6 +52,24 @@ app.get("/api/sessions", async (_req, res) => {
 			firstMessage: s.firstMessage,
 		}));
 		res.json(result);
+	} catch (err: any) {
+		res.status(500).json({ error: err.message });
+	}
+});
+
+app.delete("/api/sessions", express.json(), async (req, res) => {
+	try {
+		const { path: sessionPath } = req.body;
+		if (!sessionPath || typeof sessionPath !== "string") {
+			res.status(400).json({ error: "Missing session path" });
+			return;
+		}
+		if (!sessionPath.endsWith(".jsonl") || !existsSync(sessionPath)) {
+			res.status(404).json({ error: "Session not found" });
+			return;
+		}
+		await unlink(sessionPath);
+		res.json({ success: true });
 	} catch (err: any) {
 		res.status(500).json({ error: err.message });
 	}
