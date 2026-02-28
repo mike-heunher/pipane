@@ -25,7 +25,7 @@ import "./thinking-block-patch.js";
 import "./fork-modal.js";
 import type { ForkModal, ForkResult } from "./fork-modal.js";
 import "./app.css";
-import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages } from "./canvas-panel.js";
+import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened, resetCanvasTracking } from "./canvas-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 
@@ -441,6 +441,18 @@ async function initApp() {
 			const details = (ev as any).result?.details;
 			if (details?.markdown) {
 				showCanvas(details.title || "Canvas", details.markdown);
+				// Mark this canvas as opened so restoreCanvasFromMessages won't reopen it
+				if (agent.sessionFile) {
+					const msgs = agent.state.messages;
+					// The tool result was just appended — find its index (last canvas toolResult)
+					for (let i = msgs.length - 1; i >= 0; i--) {
+						const m = msgs[i] as any;
+						if (m.role === "toolResult" && m.toolName === "canvas") {
+							markCanvasOpened(canvasKey(agent.sessionFile, i));
+							break;
+						}
+					}
+				}
 			}
 		}
 	});
@@ -451,8 +463,9 @@ async function initApp() {
 		patchAgentInterface();
 		// Refresh steering queue for the new session (it's per-session now)
 		steeringQueue = agent.steeringQueue;
-		// Restore canvas state from the new session's messages
-		restoreCanvasFromMessages(agent.state.messages);
+		// Reset canvas tracking for the new session, then restore
+		resetCanvasTracking();
+		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		renderApp();
 	});
 
@@ -463,8 +476,8 @@ async function initApp() {
 			ai.session = agent as any;
 			ai.requestUpdate();
 		}
-		// Restore canvas state from refreshed messages
-		restoreCanvasFromMessages(agent.state.messages);
+		// Restore canvas state from refreshed messages (won't reopen if already shown)
+		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 	});
 
 	// Status change (attached/detached): update header badge & abort button

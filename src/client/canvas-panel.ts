@@ -16,6 +16,13 @@ let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
 
 /**
+ * Tracks canvas tool calls that have already been auto-opened.
+ * Keys are `${jsonlBasename}:${messageIndex}`.
+ * Prevents re-opening the canvas panel on every re-render / content refresh.
+ */
+const openedCanvasKeys = new Set<string>();
+
+/**
  * Show markdown content in the canvas side panel.
  */
 export function showCanvas(title: string, markdown: string) {
@@ -63,16 +70,55 @@ export function extractCanvasFromToolResult(msg: any): { title: string; markdown
 }
 
 /**
- * Scan messages for the last canvas tool result and show it.
+ * Build a canvas tracking key from a session file path and message index.
+ */
+export function canvasKey(sessionFile: string, messageIndex: number): string {
+	const basename = sessionFile.split("/").pop() || sessionFile;
+	return `${basename}:${messageIndex}`;
+}
+
+/**
+ * Mark a canvas tool call as already auto-opened so it won't reopen on re-render.
+ */
+export function markCanvasOpened(key: string) {
+	openedCanvasKeys.add(key);
+}
+
+/**
+ * Check whether a canvas tool call has already been auto-opened.
+ */
+export function hasCanvasBeenOpened(key: string): boolean {
+	return openedCanvasKeys.has(key);
+}
+
+/**
+ * Reset opened-canvas tracking (call on session switch).
+ */
+export function resetCanvasTracking() {
+	openedCanvasKeys.clear();
+}
+
+/**
+ * Scan messages for the last canvas tool result and show it — but only if it
+ * hasn't been auto-opened before (keyed by JSONL filename + message index).
  * Used on session load to restore canvas state.
  */
-export function restoreCanvasFromMessages(messages: any[]) {
+export function restoreCanvasFromMessages(messages: any[], sessionFile?: string) {
+	let lastIndex = -1;
 	let last: { title: string; markdown: string } | null = null;
-	for (const msg of messages) {
-		const data = extractCanvasFromToolResult(msg);
-		if (data) last = data;
+	for (let i = 0; i < messages.length; i++) {
+		const data = extractCanvasFromToolResult(messages[i]);
+		if (data) {
+			last = data;
+			lastIndex = i;
+		}
 	}
-	if (last) {
+	if (last && lastIndex >= 0) {
+		if (sessionFile) {
+			const key = canvasKey(sessionFile, lastIndex);
+			if (hasCanvasBeenOpened(key)) return; // already shown once, don't reopen
+			markCanvasOpened(key);
+		}
 		showCanvas(last.title, last.markdown);
 	} else {
 		if (visible) closeCanvas();
