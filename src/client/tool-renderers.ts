@@ -10,8 +10,53 @@ import type { ToolRenderer, ToolRenderResult } from "@mariozechner/pi-web-ui";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import { icon } from "@mariozechner/mini-lit";
 import { html } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import python from "highlight.js/lib/languages/python";
+import sql from "highlight.js/lib/languages/sql";
+import typescript from "highlight.js/lib/languages/typescript";
+import xmlLang from "highlight.js/lib/languages/xml";
+import markdown from "highlight.js/lib/languages/markdown";
+import yaml from "highlight.js/lib/languages/yaml";
+import go from "highlight.js/lib/languages/go";
+import rust from "highlight.js/lib/languages/rust";
+import java from "highlight.js/lib/languages/java";
+import cpp from "highlight.js/lib/languages/cpp";
+import c from "highlight.js/lib/languages/c";
+import ruby from "highlight.js/lib/languages/ruby";
+import php from "highlight.js/lib/languages/php";
+import swift from "highlight.js/lib/languages/swift";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import scss from "highlight.js/lib/languages/scss";
 import { FileText, FilePen, FilePlus, SquareTerminal, Loader, Copy, PanelRight } from "lucide";
 import { showCanvas } from "./canvas-panel.js";
+
+// Register highlight.js languages
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("html", xmlLang);
+hljs.registerLanguage("xml", xmlLang);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("sql", sql);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("go", go);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("java", java);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("c", c);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("php", php);
+hljs.registerLanguage("swift", swift);
+hljs.registerLanguage("kotlin", kotlin);
+hljs.registerLanguage("scss", scss);
 
 function truncate(s: string, max: number): string {
 	return s.length > max ? s.slice(0, max) + "…" : s;
@@ -20,6 +65,41 @@ function truncate(s: string, max: number): string {
 export function formatBashMainText(command: string): string {
 	if (!command?.trim()) return "";
 	return command.includes("\n") ? command : "";
+}
+
+const extToLanguage: Record<string, string> = {
+	js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+	ts: "typescript", tsx: "typescript", mts: "typescript", cts: "typescript",
+	html: "html", htm: "html", svg: "xml", xml: "xml",
+	css: "css", scss: "scss",
+	json: "json", jsonl: "json",
+	py: "python", pyw: "python",
+	md: "markdown", mdx: "markdown",
+	yaml: "yaml", yml: "yaml",
+	sh: "bash", bash: "bash", zsh: "bash",
+	sql: "sql",
+	java: "java",
+	c: "c", h: "c",
+	cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp",
+	go: "go",
+	rs: "rust",
+	php: "php",
+	rb: "ruby",
+	swift: "swift",
+	kt: "kotlin", kts: "kotlin",
+};
+
+function getLanguageFromPath(path: string): string {
+	if (!path) return "";
+	const ext = path.split(".").pop()?.toLowerCase() || "";
+	return extToLanguage[ext] || "";
+}
+
+function highlightCode(code: string, language: string): string {
+	if (language && hljs.getLanguage(language)) {
+		return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+	}
+	return "";
 }
 
 function resultText(result: ToolResultMessage | undefined): string {
@@ -60,6 +140,8 @@ class ReadRenderer implements ToolRenderer {
 			: "";
 
 		const content = output ? truncate(output, 4000) : "";
+		const language = getLanguageFromPath(path);
+		const highlighted = content && !isError ? highlightCode(content, language) : "";
 
 		return {
 			content: html`
@@ -79,7 +161,7 @@ class ReadRenderer implements ToolRenderer {
 						>${icon(Copy, "sm")}</button>` : ""}
 					</div>
 					${content ? html`<div class="overflow-auto max-h-64">
-						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${content}</pre>
+						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
 					</div>` : ""}
 				</div>
 			`,
@@ -96,7 +178,8 @@ class WriteRenderer implements ToolRenderer {
 
 		const path = parsed.path || "";
 		const filename = path ? path.split("/").pop() : "";
-		const contentBytes = parsed.content ? new TextEncoder().encode(parsed.content).length : 0;
+		const fileContent = parsed.content || "";
+		const contentBytes = fileContent ? new TextEncoder().encode(fileContent).length : 0;
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
 
@@ -119,16 +202,30 @@ class WriteRenderer implements ToolRenderer {
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
 
+		const language = getLanguageFromPath(path);
+		const displayContent = fileContent ? truncate(fileContent, 4000) : "";
+		const highlighted = displayContent && !isError ? highlightCode(displayContent, language) : "";
+
 		return {
 			content: html`
 				<div class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center px-3 py-1.5 bg-muted">
+					<div class="flex items-center justify-between px-3 py-1.5 bg-muted ${displayContent ? "border-b border-border" : ""}">
 						<div class="flex items-center gap-2 min-w-0">
 							${statusIcon}
 							<span class="text-xs ${isError ? "text-destructive" : "text-muted-foreground"} font-mono truncate">${headerLabel}</span>
 							${spinner}
 						</div>
+						${displayContent ? html`<button
+							@click=${async (e: Event) => {
+								try { await navigator.clipboard.writeText(fileContent); } catch {}
+							}}
+							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
+							title="Copy content"
+						>${icon(Copy, "sm")}</button>` : ""}
 					</div>
+					${displayContent ? html`<div class="overflow-auto max-h-64">
+						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
+					</div>` : ""}
 				</div>
 			`,
 			isCustom: true,
