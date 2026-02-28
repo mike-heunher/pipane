@@ -7,6 +7,7 @@
 
 import { html, css, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { WsAgentAdapter, SessionInfoDTO } from "./ws-agent-adapter.js";
 
 interface SessionGroup {
@@ -233,7 +234,9 @@ export class SessionPicker extends LitElement {
 	}
 
 	async loadSessions() {
-		this.loading = true;
+		// Only show loading spinner on first load to avoid DOM thrashing
+		const isInitial = this.sessions.length === 0;
+		if (isInitial) this.loading = true;
 		try {
 			this.sessions = await this.agent.listSessions();
 		} catch (err) {
@@ -371,7 +374,7 @@ export class SessionPicker extends LitElement {
 					? html`<div class="loading">Loading sessions…</div>`
 					: groups.length === 0
 						? html`<div class="empty">No sessions found</div>`
-						: groups.map((group) => this.renderGroup(group, activeId))}
+						: repeat(groups, (g) => g.cwd, (group) => this.renderGroup(group, activeId))}
 			</div>
 		`;
 	}
@@ -379,7 +382,9 @@ export class SessionPicker extends LitElement {
 	private renderGroup(group: SessionGroup, activeId: string): TemplateResult {
 		return html`
 			<div class="group-header" title=${group.cwd}>${group.label}</div>
-			${group.sessions.map(
+			${repeat(
+				group.sessions,
+				(s) => s.id,
 				(s) => html`
 					<button
 						class="session-item ${s.id === activeId ? "active" : ""}"
