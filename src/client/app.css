@@ -11,15 +11,14 @@
 
 /* ── Full-width conversation: remove max-w-3xl constraint on messages & input ── */
 
-agent-interface .overflow-y-auto > .max-w-3xl,
-agent-interface .shrink-0 > .max-w-3xl {
+#chat-scroll-area > .max-w-3xl,
+.shrink-0 > .max-w-3xl {
 	max-width: 100%;
 }
 
 /* ── Conversation text slightly smaller (-1pt) ─────────────────────────── */
 
-agent-interface message-list markdown-block,
-agent-interface streaming-message-container markdown-block {
+pi-message-list markdown-block {
 	font-size: 0.9167rem; /* 16px - 1pt (≈1.333px) */
 }
 
