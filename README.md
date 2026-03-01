@@ -128,6 +128,12 @@ Starts both:
 - Backend server on `:3001`
 - Vite frontend on `:5173`
 
+Session listing/jsonl parsing benchmark:
+
+```bash
+npm run bench:sessions -- --sessions 250 --messages 120 --iterations 15
+```
+
 ---
 
 ## Testing

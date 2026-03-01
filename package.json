@@ -26,6 +26,7 @@
 		"test:watch": "vitest",
 		"test:screenshots": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts",
 		"test:screenshots:update": "node node_modules/@playwright/test/cli.js test -c playwright.config.ts e2e/ui-screenshots.e2e.ts --update-snapshots",
+		"bench:sessions": "tsx scripts/bench-sessions.ts",
 		"prepack": "npm run build"
 	},
 	"dependencies": {
