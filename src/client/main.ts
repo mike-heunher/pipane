@@ -6,7 +6,7 @@ if ("serviceWorker" in navigator) {
 }
 
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { initThemes, createThemeSelector } from "./theme-selector.js";
+import { initThemes } from "./theme-selector.js";
 import {
 	AppStorage,
 	CustomProvidersStore,
@@ -39,7 +39,8 @@ registerCodingAgentRenderers();
 initThemes();
 
 let agent: WsAgentAdapter;
-let sidebarOpen = true;
+const isMobile = () => window.innerWidth <= 768;
+let sidebarOpen = !isMobile();
 let steeringQueue: readonly string[] = [];
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
@@ -338,66 +339,42 @@ const renderApp = () => {
 	const messages = state?.messages ?? [];
 	const isStreaming = state?.isStreaming ?? false;
 
+	const burgerMenuCallbacks = {
+		onToggleTokenUsage: () => { setTokenUsageHidden(!isTokenUsageHidden()); renderApp(); },
+		onOpenSettings: () => { void openLocalSettingsModal(); },
+		onToggleJsonl: () => { toggleJsonlPanel(); renderApp(); },
+		onCloseSidebar: () => { sidebarOpen = false; renderApp(); },
+		isTokenUsageHidden: isTokenUsageHidden(),
+		isJsonlVisible: isJsonlPanelVisible(),
+		isDevMode,
+	};
+
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
-			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-border shrink-0 ${isDevMode ? 'dev-header' : ''}">
-				<div class="flex items-center gap-2 px-4 py-2">
-					<button
-						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-						@click=${() => { sidebarOpen = !sidebarOpen; renderApp(); }}
-						title="Toggle sidebar"
-					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-							<line x1="9" y1="3" x2="9" y2="21"></line>
-						</svg>
-					</button>
-					<span class="text-base font-semibold text-foreground">${isDevMode ? "pi web · dev" : "pi web"}</span>
-				</div>
-				<div class="flex items-center gap-1 px-2">
-					<button
-						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${!isTokenUsageHidden() ? 'text-foreground bg-accent' : ''}"
-						@click=${() => { setTokenUsageHidden(!isTokenUsageHidden()); renderApp(); }}
-						title="Toggle token usage display"
-					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-						</svg>
-					</button>
-					<button
-						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
-						@click=${() => { void openLocalSettingsModal(); }}
-						title="Open local settings (~/.piweb/settings.json)"
-					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<circle cx="12" cy="12" r="3"></circle>
-							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-						</svg>
-					</button>
-					<button
-						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors ${isJsonlPanelVisible() ? 'text-foreground bg-accent' : ''}"
-						@click=${() => { toggleJsonlPanel(); renderApp(); }}
-						title="Toggle raw JSONL viewer"
-					>
-						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<polyline points="16 18 22 12 16 6"></polyline>
-							<polyline points="8 6 2 12 8 18"></polyline>
-						</svg>
-					</button>
-					${createThemeSelector()}
-				</div>
-			</div>
 			<!-- Main content: sidebar + chat -->
 			<div class="flex flex-1 overflow-hidden">
-				${sidebarOpen
+				${sidebarOpen && !isMobile()
 					? html`
 						<div class="shrink-0 border-r border-border bg-background overflow-hidden" style="width: 280px;">
-							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions}></session-picker>
+							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
 						</div>
 					`
 					: ""}
 				<div class="flex-1 overflow-hidden flex flex-col">
+					${!sidebarOpen
+						? html`
+							<button
+								class="sidebar-reopen-btn"
+								@click=${() => { sidebarOpen = true; renderApp(); }}
+								title="Show sidebar"
+							>
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+									<line x1="9" y1="3" x2="9" y2="21"></line>
+								</svg>
+							</button>
+						`
+						: ""}
 					${agent && !agent.isConnected
 						? html`
 							<div class="flex items-center justify-center gap-2 px-4 py-1.5 bg-yellow-500/15 border-b border-yellow-500/30 text-sm text-yellow-700 dark:text-yellow-400">
@@ -463,7 +440,20 @@ const renderApp = () => {
 		</div>
 	`;
 
-	render(appHtml, app);
+	// Mobile sidebar overlay (rendered outside main flex to avoid layout issues)
+	if (sidebarOpen && isMobile()) {
+		const mobileOverlay = html`
+			<div class="sidebar-mobile-overlay">
+				<div class="sidebar-panel shrink-0 border-r border-border bg-background overflow-hidden">
+					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
+				</div>
+				<div class="sidebar-mobile-backdrop" @click=${() => { sidebarOpen = false; renderApp(); }}></div>
+			</div>
+		`;
+		render(html`${appHtml}${mobileOverlay}`, app);
+	} else {
+		render(appHtml, app);
+	}
 
 	// Post-render setup
 	requestAnimationFrame(() => {
@@ -600,6 +590,8 @@ async function initApp() {
 		autoScroll = true;
 		lastScrollTop = 0;
 		ignoreScrollEvents = false;
+		// Auto-close sidebar on mobile after session switch
+		if (isMobile()) sidebarOpen = false;
 		renderApp();
 		requestAnimationFrame(() => {
 			const editor = document.querySelector("message-editor") as any;

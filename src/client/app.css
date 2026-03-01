@@ -2,6 +2,29 @@
 @import "./themes/gruvbox.css";
 @import "tailwindcss";
 
+/* ── User message: plain text + label + faint primary tint ──────── */
+
+.user-message-container {
+	background: color-mix(in srgb, var(--primary, #83a598) 6%, transparent) !important;
+	border: none !important;
+	border-radius: 0.35rem !important;
+	backdrop-filter: none !important;
+	padding: 0.5rem 0.75rem !important;
+	color: var(--foreground, #fbf1c7);
+	font-weight: 500;
+}
+
+.user-message-container::before {
+	content: "you";
+	display: block;
+	font-size: 0.6rem;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--primary, #83a598);
+	margin-bottom: 0.15rem;
+}
+
 /* ── Hide token usage when toggled off ──────────────────────────── */
 
 /* Per-message usage line (↑X ↓Y) — the mt-2 text-xs div after tool blocks */
@@ -27,6 +50,86 @@ message-editor > div > .px-2.pb-2 {
 	padding-bottom: 0.35rem;
 }
 
+/* ── Burger menu dropdown (portalled to document.body) ──────────────── */
+
+.burger-dropdown-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 9999;
+}
+
+.burger-dropdown {
+	position: fixed;
+	z-index: 10000;
+	min-width: 13rem;
+	padding: 0.3rem;
+	border: 1px solid var(--border, #e5e7eb);
+	border-radius: 0.5rem;
+	background: var(--background, #fff);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+	font-family: inherit;
+}
+
+.burger-item {
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	padding: 0.4rem 0.55rem;
+	border: none;
+	border-radius: 0.35rem;
+	background: transparent;
+	color: var(--foreground, #111);
+	font-size: 0.78rem;
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.12s;
+}
+
+.burger-item:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+}
+
+.burger-item.is-active {
+	background: color-mix(in srgb, var(--primary, #2563eb) 10%, transparent);
+}
+
+.burger-item-icon {
+	width: 1.1rem;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	color: var(--muted-foreground, #6b7280);
+}
+
+.burger-item-label {
+	flex: 1;
+}
+
+.burger-item-check {
+	width: 0.9rem;
+	text-align: center;
+	font-size: 0.7rem;
+	color: var(--primary, #2563eb);
+	flex-shrink: 0;
+}
+
+.burger-divider {
+	height: 1px;
+	margin: 0.25rem 0.3rem;
+	background: var(--border, #e5e7eb);
+}
+
+.burger-section-label {
+	padding: 0.3rem 0.55rem 0.15rem;
+	font-size: 0.62rem;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted-foreground, #6b7280);
+}
+
 /* ── Lock viewport: prevent document-level scroll when wheeling over non-scrollable
    areas (e.g. the header bar), which otherwise exposes the underlying wireframe. ── */
 
@@ -45,12 +148,31 @@ html, body {
 	max-width: 100%;
 }
 
-/* ── Dev-mode header tint ───────────────────────────────────────────────
-   A muted red wash across the entire header bar so dev is unmistakable. */
+/* ── Sidebar reopen button (shown when sidebar is hidden) ──────────── */
 
-.dev-header {
-	background: color-mix(in srgb, var(--destructive, #dc2626) 15%, var(--background, #fff));
-	border-bottom-color: color-mix(in srgb, var(--destructive, #dc2626) 30%, var(--border, #e5e7eb));
+.sidebar-reopen-btn {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	z-index: 10;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.75rem;
+	height: 1.75rem;
+	border: 1px solid var(--border, #e5e7eb);
+	border-radius: 0.35rem;
+	background: var(--background, #fff);
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	padding: 0;
+	transition: background 0.15s, color 0.15s;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.sidebar-reopen-btn:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
 }
 
 /* ── Ultra-dense tool blocks ────────────────────────────────────────────── */
@@ -340,6 +462,40 @@ markdown-block pre code {
 	font-size: 0.68rem;
 	color: var(--muted-foreground, #6b7280);
 	white-space: nowrap;
+}
+
+/* ── Mobile: sidebar overlay + side panels full-width ──────────── */
+
+@media (max-width: 768px) {
+	.sidebar-mobile-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 999;
+		display: flex;
+	}
+
+	.sidebar-mobile-overlay .sidebar-panel {
+		width: 280px;
+		max-width: 80vw;
+		height: 100%;
+		flex-shrink: 0;
+	}
+
+	.sidebar-mobile-backdrop {
+		flex: 1;
+		background: rgba(0, 0, 0, 0.4);
+	}
+
+	.canvas-container,
+	.jsonl-container {
+		position: fixed !important;
+		inset: 0 !important;
+		width: 100% !important;
+		min-width: 0 !important;
+		max-width: none !important;
+		z-index: 900;
+		border-left: none !important;
+	}
 }
 
 /* ── Canvas side panel ─────────────────────────────────────────── */

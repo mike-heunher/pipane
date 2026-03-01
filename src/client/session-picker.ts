@@ -7,10 +7,21 @@
  * folder picker to choose a CWD for a new session.
  */
 
-import { html, css, LitElement, nothing, type TemplateResult } from "lit";
+import { html, css, LitElement, nothing, render, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { WsAgentAdapter, SessionInfoDTO } from "./ws-agent-adapter.js";
+import { getColorTheme, setColorTheme, getDarkMode, setDarkMode, type ColorTheme, type DarkMode } from "./theme-selector.js";
+
+export interface BurgerMenuCallbacks {
+	onToggleTokenUsage: () => void;
+	onOpenSettings: () => void;
+	onToggleJsonl: () => void;
+	onCloseSidebar: () => void;
+	isTokenUsageHidden: boolean;
+	isJsonlVisible: boolean;
+	isDevMode: boolean;
+}
 
 interface SessionGroup {
 	cwd: string;
@@ -65,6 +76,43 @@ export class SessionPicker extends LitElement {
 			padding: 0.5rem 0.75rem;
 			border-bottom: 1px solid var(--picker-border);
 			flex-shrink: 0;
+		}
+
+		.header.dev {
+			background: color-mix(in srgb, #dc2626 15%, var(--picker-bg));
+			border-bottom-color: color-mix(in srgb, #dc2626 30%, var(--picker-border));
+		}
+
+		.header-left {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+		}
+
+		.header-right {
+			display: flex;
+			align-items: center;
+			gap: 0.25rem;
+		}
+
+		.burger-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 1.5rem;
+			height: 1.5rem;
+			border: none;
+			border-radius: 0.25rem;
+			background: transparent;
+			color: var(--picker-muted);
+			cursor: pointer;
+			padding: 0;
+			transition: background 0.15s, color 0.15s;
+		}
+
+		.burger-btn:hover {
+			background: var(--picker-hover);
+			color: var(--picker-text);
 		}
 
 		.header-title {
@@ -600,12 +648,19 @@ export class SessionPicker extends LitElement {
 	@property({ attribute: false })
 	prefetchedSessions: SessionInfoDTO[] | undefined;
 
+	/** Callbacks for the burger menu actions (settings, theme, etc.) */
+	@property({ attribute: false })
+	burgerMenu: BurgerMenuCallbacks | undefined;
+
 	@state() private sessions: SessionInfoDTO[] = [];
 	@state() private loading = true;
 	@state() private showSkeleton = false;
 	@state() private searchQuery = "";
 	@state() private expandedGroups = new Set<string>();
 	@state() private pinnedSessions = loadPinnedSessions();
+	@state() private burgerMenuOpen = false;
+	@state() private themeSubmenuOpen = false;
+	@state() private burgerMenuPos = { top: 0, left: 0 };
 
 	// Folder picker state
 	@state() private showFolderPicker = false;
@@ -679,6 +734,7 @@ export class SessionPicker extends LitElement {
 		this.unsubSessionsChanged?.();
 		this.unsubGlobalStatus?.();
 		this.unsubStatusChange?.();
+		this._removeBurgerPortal();
 		if (this._sessionsChangedDebounceTimer) {
 			clearTimeout(this._sessionsChangedDebounceTimer);
 			this._sessionsChangedDebounceTimer = null;
@@ -1029,15 +1085,174 @@ export class SessionPicker extends LitElement {
 
 	// ── Render ──────────────────────────────────────────────────────────────
 
+	private _burgerPortal: HTMLDivElement | null = null;
+
+	private closeBurgerMenu() {
+		this.burgerMenuOpen = false;
+		this.themeSubmenuOpen = false;
+		this._removeBurgerPortal();
+	}
+
+	private _removeBurgerPortal() {
+		if (this._burgerPortal) {
+			this._burgerPortal.remove();
+			this._burgerPortal = null;
+		}
+	}
+
+	private _ensureBurgerPortal(): HTMLDivElement {
+		if (!this._burgerPortal) {
+			this._burgerPortal = document.createElement("div");
+			this._burgerPortal.id = "burger-menu-portal";
+			document.body.appendChild(this._burgerPortal);
+		}
+		return this._burgerPortal;
+	}
+
+	updated(changedProperties: Map<string, unknown>) {
+		super.updated(changedProperties);
+		if (this.burgerMenuOpen && this.burgerMenu) {
+			this._renderBurgerPortal();
+		} else {
+			this._removeBurgerPortal();
+		}
+	}
+
+	private _renderBurgerPortal() {
+		if (!this.burgerMenuOpen || !this.burgerMenu) return;
+
+		const portal = this._ensureBurgerPortal();
+		const bm = this.burgerMenu;
+		const currentTheme = getColorTheme();
+		const currentMode = getDarkMode();
+		const pos = this.burgerMenuPos;
+
+		const colorThemes: { id: ColorTheme; label: string }[] = [
+			{ id: "default", label: "Default" },
+			{ id: "gruvbox", label: "Gruvbox" },
+		];
+		const darkModes: { id: DarkMode; label: string; icon: string }[] = [
+			{ id: "light", label: "Light", icon: "☀️" },
+			{ id: "dark", label: "Dark", icon: "🌙" },
+			{ id: "system", label: "System", icon: "💻" },
+		];
+
+		const tpl = html`
+			<div class="burger-dropdown-backdrop" @click=${() => this.closeBurgerMenu()}></div>
+			<div class="burger-dropdown" style="top: ${pos.top}px; left: ${pos.left}px;">
+				<button
+					class="burger-item ${!bm.isTokenUsageHidden ? 'is-active' : ''}"
+					@click=${() => { this.closeBurgerMenu(); bm.onToggleTokenUsage(); }}
+				>
+					<span class="burger-item-icon">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+						</svg>
+					</span>
+					<span class="burger-item-label">Token usage</span>
+					<span class="burger-item-check">${!bm.isTokenUsageHidden ? '✓' : ''}</span>
+				</button>
+				<button
+					class="burger-item"
+					@click=${() => { this.closeBurgerMenu(); bm.onOpenSettings(); }}
+				>
+					<span class="burger-item-icon">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="3"></circle>
+							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+						</svg>
+					</span>
+					<span class="burger-item-label">Settings</span>
+				</button>
+				<button
+					class="burger-item ${bm.isJsonlVisible ? 'is-active' : ''}"
+					@click=${() => { this.closeBurgerMenu(); bm.onToggleJsonl(); }}
+				>
+					<span class="burger-item-icon">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<polyline points="16 18 22 12 16 6"></polyline>
+							<polyline points="8 6 2 12 8 18"></polyline>
+						</svg>
+					</span>
+					<span class="burger-item-label">JSONL viewer</span>
+					<span class="burger-item-check">${bm.isJsonlVisible ? '✓' : ''}</span>
+				</button>
+				<div class="burger-divider"></div>
+				<div class="burger-section-label">Color Theme</div>
+				${colorThemes.map(t => html`
+					<button
+						class="burger-item ${currentTheme === t.id ? 'is-active' : ''}"
+						@click=${() => { this.closeBurgerMenu(); setColorTheme(t.id); }}
+					>
+						<span class="burger-item-icon"></span>
+						<span class="burger-item-label">${t.label}</span>
+						<span class="burger-item-check">${currentTheme === t.id ? '✓' : ''}</span>
+					</button>
+				`)}
+				<div class="burger-divider"></div>
+				<div class="burger-section-label">Appearance</div>
+				${darkModes.map(m => html`
+					<button
+						class="burger-item ${currentMode === m.id ? 'is-active' : ''}"
+						@click=${() => { this.closeBurgerMenu(); setDarkMode(m.id); }}
+					>
+						<span class="burger-item-icon">${m.icon}</span>
+						<span class="burger-item-label">${m.label}</span>
+						<span class="burger-item-check">${currentMode === m.id ? '✓' : ''}</span>
+					</button>
+				`)}
+				<div class="burger-divider"></div>
+				<button
+					class="burger-item"
+					@click=${() => { this.closeBurgerMenu(); bm.onCloseSidebar(); }}
+				>
+					<span class="burger-item-icon">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+							<line x1="9" y1="3" x2="9" y2="21"></line>
+						</svg>
+					</span>
+					<span class="burger-item-label">Hide sidebar</span>
+				</button>
+			</div>
+		`;
+
+		render(tpl, portal);
+	}
+
 	render() {
 		const groups = this.filteredGroups;
 		const activeId = this.agent?.sessionId;
 
 		return html`
 			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
-				<div class="header">
-					<span class="header-title">Sessions</span>
-					<button class="new-btn" @click=${this.openFolderPicker}>+ NEW</button>
+				<div class="header ${this.burgerMenu?.isDevMode ? 'dev' : ''}">
+					<div class="header-left">
+						<button
+							class="burger-btn"
+							@click=${(e: Event) => {
+								e.stopPropagation();
+								if (!this.burgerMenuOpen) {
+									const btn = e.currentTarget as HTMLElement;
+									const rect = btn.getBoundingClientRect();
+									this.burgerMenuPos = { top: rect.bottom + 4, left: rect.left };
+								}
+								this.burgerMenuOpen = !this.burgerMenuOpen;
+								this.themeSubmenuOpen = false;
+							}}
+							title="Menu"
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<line x1="3" y1="12" x2="21" y2="12"></line>
+								<line x1="3" y1="6" x2="21" y2="6"></line>
+								<line x1="3" y1="18" x2="21" y2="18"></line>
+							</svg>
+						</button>
+						<span class="header-title">${this.burgerMenu?.isDevMode ? 'pi web · dev' : 'pi web'}</span>
+					</div>
+					<div class="header-right">
+						<button class="new-btn" @click=${this.openFolderPicker}>+ NEW</button>
+					</div>
 				</div>
 				<div class="search">
 					<input

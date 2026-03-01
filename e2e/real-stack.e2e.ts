@@ -144,8 +144,9 @@ test.describe("Real stack e2e", () => {
 
 		await gotoFreshSession(page);
 
-		// Open JSONL viewer
-		await page.getByTitle("Toggle raw JSONL viewer").click();
+		// Open JSONL viewer via burger menu
+		await page.locator("session-picker").getByTitle("Menu").click();
+		await page.getByText("JSONL viewer").click();
 		await expect(page.locator(".jsonl-panel")).toBeVisible();
 
 		const editor = page.locator("message-editor");
