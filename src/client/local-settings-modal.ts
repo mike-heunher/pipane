@@ -72,7 +72,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
     }
   },
   "appearance": {
-    "colorTheme": "default | gruvbox",
+    "colorTheme": "gruvbox | default",
     "darkMode": "light | dark | system",
     "showTokenUsage": true
   }

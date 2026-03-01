@@ -1132,7 +1132,7 @@ export class SessionPicker extends LitElement {
 		const pos = this.burgerMenuPos;
 
 		const colorThemes: { id: ColorTheme; label: string }[] = [
-			{ id: "default", label: "Default" },
+			{ id: "default", label: "Legacy" },
 			{ id: "gruvbox", label: "Gruvbox" },
 		];
 		const darkModes: { id: DarkMode; label: string; icon: string }[] = [

@@ -17,7 +17,7 @@ export type DarkMode = "light" | "dark" | "system";
 
 /** Read cached color theme (for instant page-load apply) */
 export function getColorTheme(): ColorTheme {
-	return (localStorage.getItem("color-theme") as ColorTheme) || "default";
+	return (localStorage.getItem("color-theme") as ColorTheme) || "gruvbox";
 }
 
 /** Read cached dark mode preference (for instant page-load apply) */
