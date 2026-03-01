@@ -148,6 +148,17 @@ html, body {
 	max-width: 100%;
 }
 
+/* Reduce conversation horizontal padding */
+#chat-scroll-area > .p-4 {
+	padding-left: 0.75rem !important;
+	padding-right: 0.75rem !important;
+}
+
+.shrink-0 > .px-2 {
+	padding-left: 0.35rem !important;
+	padding-right: 0.35rem !important;
+}
+
 /* ── Sidebar reopen button (shown when sidebar is hidden) ──────────── */
 
 .sidebar-reopen-btn {
