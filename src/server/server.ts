@@ -92,6 +92,34 @@ const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 
+// ── WebSocket keep-alive via ping/pong ────────────────────────────────
+// Ping all connected clients every 30s. If a client doesn't respond with
+// a pong within the interval, the connection is considered dead and terminated.
+// This prevents silent disconnects (e.g. from network changes, sleep, etc.)
+// from leaving zombie connections on the server side, and ensures the client's
+// onclose handler fires so auto-reconnect kicks in.
+const WS_PING_INTERVAL = 30_000;
+const wsAliveMap = new WeakMap<import("ws").WebSocket, boolean>();
+
+wss.on("connection", (ws) => {
+	wsAliveMap.set(ws, true);
+	ws.on("pong", () => { wsAliveMap.set(ws, true); });
+});
+
+const pingInterval = setInterval(() => {
+	for (const ws of wss.clients) {
+		if (wsAliveMap.get(ws) === false) {
+			// Didn't respond to last ping — terminate
+			ws.terminate();
+			continue;
+		}
+		wsAliveMap.set(ws, false);
+		ws.ping();
+	}
+}, WS_PING_INTERVAL);
+
+wss.on("close", () => { clearInterval(pingInterval); });
+
 app.get("/auth", (req: Request, res: Response) => {
 	const token = typeof req.query.token === "string" ? req.query.token : undefined;
 	if (isLocalRequest(req) || token === AUTH_TOKEN) {

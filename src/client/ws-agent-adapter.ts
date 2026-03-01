@@ -47,6 +47,13 @@ export class WsAgentAdapter {
 	private _runningPromise: Promise<void> | undefined;
 	private _resolveRunning: (() => void) | undefined;
 
+	// ── Auto-reconnect state ───────────────────────────────────────────────
+	private _wsUrl: string | undefined;
+	private _reconnecting = false;
+	private _reconnectAttempt = 0;
+	private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	private _connectionListeners = new Set<(connected: boolean) => void>();
+
 	// Dummy fields that AgentInterface checks but we don't need
 	streamFn: any = () => {};
 	getApiKey: any = undefined;
@@ -125,6 +132,16 @@ export class WsAgentAdapter {
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
+	get isConnected(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
+	get isReconnecting(): boolean { return this._reconnecting; }
+
+	onConnectionChange(fn: (connected: boolean) => void): () => void {
+		this._connectionListeners.add(fn);
+		return () => this._connectionListeners.delete(fn);
+	}
+	private emitConnectionChange(connected: boolean) {
+		for (const fn of this._connectionListeners) fn(connected);
+	}
 
 	/** Get pending tool call IDs */
 	get pendingToolCallIds(): ReadonlySet<string> {
@@ -232,19 +249,8 @@ export class WsAgentAdapter {
 	// ── Connection ─────────────────────────────────────────────────────────
 
 	async connect(url: string): Promise<void> {
-		await new Promise<void>((resolve, reject) => {
-			this.ws = new WebSocket(url);
-
-			this.ws.onopen = () => {
-				// Start in virtual state (no session loaded yet)
-				this._sessionStatus = "virtual";
-				resolve();
-			};
-
-			this.ws.onerror = () => reject(new Error("WebSocket error"));
-			this.ws.onclose = () => { this.ws = null; };
-			this.ws.onmessage = (ev) => this.handleMessage(ev.data);
-		});
+		this._wsUrl = url;
+		await this.connectWs(url, false);
 
 		// When the tab regains focus, sync state in case events were missed
 		// or updates didn't render while backgrounded.
@@ -253,6 +259,100 @@ export class WsAgentAdapter {
 				this.syncStateOnFocus();
 			}
 		});
+	}
+
+	/**
+	 * Internal WebSocket connect. On initial connect, rejects on error.
+	 * On reconnect, resolves silently (caller handles retry).
+	 */
+	private connectWs(url: string, isReconnect: boolean): Promise<void> {
+		return new Promise<void>((resolve, reject) => {
+			const ws = new WebSocket(url);
+
+			ws.onopen = () => {
+				this.ws = ws;
+				this._reconnecting = false;
+				this._reconnectAttempt = 0;
+				if (!isReconnect) {
+					this._sessionStatus = "virtual";
+				}
+				console.log(`[ws-adapter] WebSocket ${isReconnect ? "re" : ""}connected`);
+				this.emitConnectionChange(true);
+
+				if (isReconnect) {
+					// Re-sync state after reconnect
+					this.onReconnected();
+				}
+				resolve();
+			};
+
+			ws.onerror = () => {
+				if (!isReconnect) reject(new Error("WebSocket error"));
+				// On reconnect, onerror is followed by onclose which handles retry
+			};
+
+			ws.onclose = () => {
+				const wasConnected = this.ws === ws;
+				if (this.ws === ws) {
+					this.ws = null;
+				}
+
+				// Reject all pending requests — they'll never get a response
+				for (const [id, pending] of this.pendingRequests) {
+					pending.endSpan?.();
+					pending.reject(new Error("WebSocket disconnected"));
+				}
+				this.pendingRequests.clear();
+
+				if (wasConnected) {
+					console.log("[ws-adapter] WebSocket disconnected, will reconnect...");
+					this.emitConnectionChange(false);
+				}
+
+				// Schedule reconnect (both for initial connect failure during
+				// reconnect attempts and for unexpected disconnects)
+				if (isReconnect || wasConnected) {
+					this.scheduleReconnect();
+				}
+			};
+
+			ws.onmessage = (ev) => this.handleMessage(ev.data);
+		});
+	}
+
+	private scheduleReconnect() {
+		if (this._reconnectTimer) return; // already scheduled
+		this._reconnecting = true;
+		this._reconnectAttempt++;
+
+		// Exponential backoff: 500ms, 1s, 2s, 4s, ... capped at 10s
+		const delay = Math.min(500 * Math.pow(2, this._reconnectAttempt - 1), 10000);
+		console.log(`[ws-adapter] Reconnecting in ${delay}ms (attempt ${this._reconnectAttempt})...`);
+
+		this._reconnectTimer = setTimeout(async () => {
+			this._reconnectTimer = undefined;
+			if (!this._wsUrl) return;
+			try {
+				await this.connectWs(this._wsUrl, true);
+			} catch {
+				// connectWs only rejects on initial connect, not reconnect
+				// onclose handler will schedule next retry
+			}
+		}, delay);
+	}
+
+	/**
+	 * Called after a successful reconnect. Re-subscribes to the current
+	 * session and refreshes session statuses so the UI is up-to-date.
+	 */
+	private async onReconnected() {
+		// Re-subscribe to the current session to get fresh state
+		if (this._sessionPath && this._sessionStatus !== "virtual") {
+			this._syncJson = "";
+			this._syncHash = "";
+			this.subscribeToSession(this._sessionPath);
+		}
+		this.refreshSessionStatuses();
 	}
 
 	/**
