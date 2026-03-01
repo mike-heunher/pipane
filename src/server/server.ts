@@ -65,11 +65,9 @@ function isLocalAddress(addr: string | undefined | null): boolean {
 	return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
 
-function isLocalRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
+function isLocalRequest(req: Pick<IncomingMessage, "socket">): boolean {
 	if (process.env.PI_WEB_DISABLE_LOCAL_BYPASS === "1") return false;
-	if (isLocalAddress(req.socket.remoteAddress)) return true;
-	const host = (req.headers.host || "").split(":")[0].toLowerCase();
-	return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+	return isLocalAddress(req.socket.remoteAddress);
 }
 
 function setAuthCookie(res: Response): void {
