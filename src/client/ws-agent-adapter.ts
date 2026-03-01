@@ -86,6 +86,11 @@ export class WsAgentAdapter {
 	 * Outside of session switches, model/thinkingLevel are client-local.
 	 */
 	private _restoreModelFromServer = false;
+	/**
+	 * One-shot override selected in the UI, applies only to the next prompt
+	 * in the currently active conversation. Cleared immediately after sending.
+	 */
+	private _nextPromptModelOverride: Model<any> | undefined;
 
 	/** Cached available models for model matching */
 	private _availableModels: any[] | null = null;
@@ -122,6 +127,14 @@ export class WsAgentAdapter {
 	private _syncJson = "";
 	/** Current synced hash */
 	private _syncHash = "";
+
+	// ── session_sync coalescing (latest-wins per frame) ───────────────────
+	/** Latest session_sync payload waiting to be applied. */
+	private _pendingSessionSync: any | null = null;
+	/** True when a frame callback has been scheduled to flush session_sync. */
+	private _sessionSyncFlushScheduled = false;
+	/** True while applySessionSync is running to prevent concurrent flushes. */
+	private _sessionSyncFlushInProgress = false;
 
 	private _sessionListeners = new Set<() => void>();
 	private _contentListeners = new Set<() => void>();
@@ -458,7 +471,7 @@ export class WsAgentAdapter {
 		if (data.type === "session_sync") {
 			const sp = data.sessionPath as string;
 			if (sp !== this._sessionPath) return;
-			this.applySessionSync(data);
+			this.enqueueSessionSync(data);
 			return;
 		}
 
@@ -588,6 +601,48 @@ export class WsAgentAdapter {
 		const event = data as AgentEvent;
 		this.updateState(event);
 		this.emit(event);
+	}
+
+	/**
+	 * Coalesce high-frequency session_sync updates.
+	 * Latest update wins within a frame; no artificial delay beyond RAF.
+	 */
+	private enqueueSessionSync(syncMsg: any) {
+		this._pendingSessionSync = syncMsg;
+		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
+		this._sessionSyncFlushScheduled = true;
+
+		requestAnimationFrame(() => {
+			this._sessionSyncFlushScheduled = false;
+			this.flushSessionSyncQueue();
+		});
+	}
+
+	private clearSessionSyncQueue() {
+		this._pendingSessionSync = null;
+		this._sessionSyncFlushScheduled = false;
+	}
+
+	private async flushSessionSyncQueue() {
+		if (this._sessionSyncFlushInProgress) return;
+		this._sessionSyncFlushInProgress = true;
+		try {
+			while (this._pendingSessionSync) {
+				const next = this._pendingSessionSync;
+				this._pendingSessionSync = null;
+				await this.applySessionSync(next);
+			}
+		} finally {
+			this._sessionSyncFlushInProgress = false;
+			// If something arrived while we were finalizing, schedule another frame.
+			if (this._pendingSessionSync && !this._sessionSyncFlushScheduled) {
+				this._sessionSyncFlushScheduled = true;
+				requestAnimationFrame(() => {
+					this._sessionSyncFlushScheduled = false;
+					this.flushSessionSyncQueue();
+				});
+			}
+		}
 	}
 
 	private async applySessionSync(syncMsg: any) {
@@ -805,12 +860,15 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		if (!this._state.model) {
-			throw new Error(`BUG: _state.model is undefined when sending prompt. sessionStatus=${this._sessionStatus}, sessionPath=${this._sessionPath}`);
+		const effectiveModel = this._nextPromptModelOverride ?? this._state.model;
+		if (!effectiveModel) {
+			throw new Error(`BUG: effective model is undefined when sending prompt. sessionStatus=${this._sessionStatus}, sessionPath=${this._sessionPath}`);
 		}
-		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
+		const modelPayload = { provider: effectiveModel.provider, modelId: effectiveModel.id };
 
 		if (this._sessionStatus === "virtual") {
+			// Consume one-shot override exactly once (for this prompt only).
+			this._nextPromptModelOverride = undefined;
 			// Capture session nonce before the await. The prompt RPC blocks
 			// until the pi process finishes the entire turn (after agent_end),
 			// so the user may navigate away (e.g. create a new session) during
@@ -850,6 +908,9 @@ export class WsAgentAdapter {
 		}
 
 		if (!this._sessionPath) throw new Error("No session loaded");
+
+		// Consume one-shot override exactly once (for this prompt only).
+		this._nextPromptModelOverride = undefined;
 
 		await this.send({
 			type: "prompt",
@@ -954,9 +1015,16 @@ export class WsAgentAdapter {
 	}
 
 	setModel(m: Model<any>) {
-		// Client-side only until a prompt is sent
+		// One-shot override: applies only to the next prompt in the current session.
+		this._nextPromptModelOverride = m;
+		// Reflect selection in the UI immediately.
 		this._state.model = m;
-		// Notify UI immediately so the selected model label updates.
+		// Keep thinking level in sync with model capabilities.
+		// Non-reasoning models (common for OpenAI/provider-specific adapters)
+		// should always run with thinking "off".
+		if (!(m as any)?.reasoning) {
+			this._state.thinkingLevel = "off";
+		}
 		this.emitContentChange();
 	}
 
@@ -1113,6 +1181,7 @@ export class WsAgentAdapter {
 		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";
+		this.clearSessionSyncQueue();
 		this._state.error = undefined;
 
 		// Subscribe to this session on the server — it will push session_sync
@@ -1148,6 +1217,7 @@ export class WsAgentAdapter {
 		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";
+		this.clearSessionSyncQueue();
 		this._state.error = undefined;
 
 		// Unsubscribe from any previous session

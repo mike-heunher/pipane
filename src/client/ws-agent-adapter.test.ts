@@ -670,10 +670,19 @@ describe("WsAgentAdapter prompt routing", () => {
 			let changes = 0;
 			adapter.onContentChange(() => { changes++; });
 
+			adapter.setModel({ provider: "openai", id: "gpt-5", reasoning: true } as any);
+
+			expect((adapter as any)._state.model).toEqual({ provider: "openai", id: "gpt-5", reasoning: true });
+			expect(changes).toBe(1);
+		});
+
+		it("resets thinking level to off when selecting a non-reasoning model", () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			adapter.setThinkingLevel("high");
+
 			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
 
-			expect((adapter as any)._state.model).toEqual({ provider: "openai", id: "gpt-5" });
-			expect(changes).toBe(1);
+			expect(adapter.state.thinkingLevel).toBe("off");
 		});
 
 		it("emits content change when setThinkingLevel is called", () => {
