@@ -141,8 +141,8 @@ describe("local-settings", () => {
 			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
 			const read = store.read();
 			expect(read.settings.appearance).toEqual({
-				colorTheme: "default",
-				darkMode: "system",
+				colorTheme: "gruvbox",
+				darkMode: "dark",
 				showTokenUsage: true,
 			});
 		});
@@ -205,7 +205,7 @@ describe("local-settings", () => {
 			expect(result.valid).toBe(true);
 			expect(result.settings!.appearance).toEqual({
 				colorTheme: "gruvbox",
-				darkMode: "system",
+				darkMode: "dark",
 				showTokenUsage: true,
 			});
 		});

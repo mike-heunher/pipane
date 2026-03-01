@@ -69,8 +69,8 @@ const DEFAULT_SETTINGS: LocalSettings = {
 		enabled: false,
 	},
 	appearance: {
-		colorTheme: "default",
-		darkMode: "system",
+		colorTheme: "gruvbox",
+		darkMode: "dark",
 		showTokenUsage: true,
 	},
 };
@@ -373,10 +373,10 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 		}
 	}
 
-	// appearance section (optional, defaults to { colorTheme: "default", darkMode: "system", showTokenUsage: true })
+	// appearance section (optional, defaults to { colorTheme: "gruvbox", darkMode: "dark", showTokenUsage: true })
 	const appearanceRaw = value.appearance;
-	let colorTheme: ColorTheme = "default";
-	let darkMode: DarkMode = "system";
+	let colorTheme: ColorTheme = "gruvbox";
+	let darkMode: DarkMode = "dark";
 	let showTokenUsage = true;
 	if (appearanceRaw !== undefined) {
 		if (!appearanceRaw || typeof appearanceRaw !== "object" || Array.isArray(appearanceRaw)) {

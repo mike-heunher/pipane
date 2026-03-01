@@ -22,7 +22,7 @@ export function getColorTheme(): ColorTheme {
 
 /** Read cached dark mode preference (for instant page-load apply) */
 export function getDarkMode(): DarkMode {
-	return (localStorage.getItem("theme") as DarkMode) || "system";
+	return (localStorage.getItem("theme") as DarkMode) || "dark";
 }
 
 /** Read cached token usage visibility */
