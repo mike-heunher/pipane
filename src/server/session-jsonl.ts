@@ -31,14 +31,21 @@ function computeHashSync(data: string): string {
 /**
  * The canonical session state that gets serialized to JSON and sent to clients.
  * The client parses this and feeds it directly to the rendering layer.
+ *
+ * `messages` is a flat array that includes EVERYTHING:
+ * - Committed messages (from JSONL)
+ * - The in-flight stream message (appended at the end while streaming)
+ * - Partial tool results (injected as synthetic toolResult entries)
+ *
+ * The client just renders this array. No splitting, no fixups.
  */
 export interface SessionState {
+	/** Flat message array — the complete view of the conversation, including in-flight data */
 	messages: AgentMessage[];
-	streamMessage: AgentMessage | null;
-	status: "idle" | "streaming";
+	/** Is the agent currently running? (controls stop button + cursor animation) */
+	isStreaming: boolean;
+	/** Set of tool call IDs currently executing */
 	pendingToolCalls: string[];
-	/** Partial tool results from tool_execution_update events, keyed by toolCallId */
-	partialToolResults: Record<string, any>;
 	model: { provider: string; modelId: string } | null;
 	thinkingLevel: string;
 	steeringQueue: string[];
@@ -202,12 +209,40 @@ export class SessionJsonl {
 	 * Get the full session state (for reading, not for the wire protocol).
 	 */
 	toState(): SessionState {
+		return this.buildState();
+	}
+
+	// ── Private ────────────────────────────────────────────────────────────
+
+	/**
+	 * Build the flat session state. Merges streamMessage and partialToolResults
+	 * into the messages array so the client has a single thing to render.
+	 */
+	private buildState(): SessionState {
+		const messages: AgentMessage[] = [...this._messages];
+
+		// Inject partial tool results as synthetic toolResult messages
+		// so the client's tool renderers can show in-progress output
+		for (const [id, partialResult] of Object.entries(this._partialToolResults)) {
+			messages.push({
+				role: "toolResult",
+				toolCallId: id,
+				content: partialResult.content ?? [],
+				isError: false,
+				details: partialResult.details,
+				timestamp: Date.now(),
+			} as any);
+		}
+
+		// Append the in-flight stream message at the end
+		if (this._streamMessage) {
+			messages.push(this._streamMessage);
+		}
+
 		return {
-			messages: this._messages,
-			streamMessage: this._streamMessage,
-			status: "streaming",
+			messages,
+			isStreaming: true,
 			pendingToolCalls: this._pendingToolCalls,
-			partialToolResults: this._partialToolResults,
 			model: this._model,
 			thinkingLevel: this._thinkingLevel,
 			steeringQueue: this._steeringQueue,
@@ -215,21 +250,8 @@ export class SessionJsonl {
 		};
 	}
 
-	// ── Private ────────────────────────────────────────────────────────────
-
 	private buildJson(): string {
-		const state: SessionState = {
-			messages: this._messages,
-			streamMessage: this._streamMessage,
-			status: "streaming",
-			pendingToolCalls: this._pendingToolCalls,
-			partialToolResults: this._partialToolResults,
-			model: this._model,
-			thinkingLevel: this._thinkingLevel,
-			steeringQueue: this._steeringQueue,
-			error: this._error,
-		};
-		return JSON.stringify(state);
+		return JSON.stringify(this.buildState());
 	}
 
 	private rebuildJson(): void {
@@ -266,10 +288,8 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 
 	const state: SessionState = {
 		messages,
-		streamMessage: null,
-		status: "idle",
+		isStreaming: false,
 		pendingToolCalls: [],
-		partialToolResults: {},
 		model,
 		thinkingLevel,
 		steeringQueue: [],

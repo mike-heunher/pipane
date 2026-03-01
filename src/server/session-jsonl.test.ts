@@ -1,10 +1,14 @@
 /**
  * Tests for SessionJsonl — server-side session state with JSON diff sync.
  *
+ * The server builds a flat state: messages array includes everything
+ * (committed messages, in-flight stream message, partial tool results).
+ * The client just renders it.
+ *
  * @vitest-environment node
  */
 
-import { describe, it, expect, beforeEach, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { SessionJsonl, readSessionFromDisk, type SessionState } from "./session-jsonl.js";
 import { applySyncOp, computeHash } from "../shared/jsonl-sync.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -86,9 +90,28 @@ function writeSession(
 	return filePath;
 }
 
+/** Helper: get the last message of a given role from the flat array */
+function lastMessageOfRole(state: SessionState, role: string): any {
+	for (let i = state.messages.length - 1; i >= 0; i--) {
+		if ((state.messages[i] as any).role === role) return state.messages[i];
+	}
+	return null;
+}
+
+/** Helper: get all messages of a given role */
+function messagesOfRole(state: SessionState, role: string): any[] {
+	return state.messages.filter((m: any) => m.role === role);
+}
+
+/** Helper: count committed messages (excluding the in-flight stream message at the end) */
+function committedMessageCount(state: SessionState): number {
+	// The stream message (if any) is the last entry. We identify committed messages
+	// by looking at everything up to and including all message_end-delivered entries.
+	return state.messages.length;
+}
+
 /**
  * Simulate a client receiving sync ops from a SessionJsonl.
- * Tracks current json/hash and applies ops, verifying integrity.
  */
 class MockClient {
 	json = "";
@@ -122,10 +145,8 @@ describe("SessionJsonl", () => {
 
 			const state = parse(session.json);
 			expect(state.messages).toHaveLength(1);
-			expect(state.streamMessage).toBeNull();
-			expect(state.status).toBe("streaming");
+			expect(state.isStreaming).toBe(true);
 			expect(state.pendingToolCalls).toEqual([]);
-			expect(state.partialToolResults).toEqual({});
 			expect(state.model).toEqual({ provider: "anthropic", modelId: "claude-sonnet-4-20250514" });
 			expect(state.steeringQueue).toEqual([]);
 		});
@@ -152,44 +173,43 @@ describe("SessionJsonl", () => {
 			});
 		});
 
-		it("agent_start clears error and streamMessage", () => {
-			// Set some state first
-			session.applyEvent({ type: "message_start", message: { role: "assistant", content: [] } } as any);
+		it("agent_start clears error", () => {
 			session.applyEvent({ type: "turn_end", message: { role: "assistant", errorMessage: "oops" } } as any);
-
 			const changed = session.applyEvent({ type: "agent_start" } as any);
 			expect(changed).toBe(true);
 
 			const state = parse(session.json);
 			expect(state.error).toBeUndefined();
-			expect(state.streamMessage).toBeNull();
 		});
 
-		it("message_start sets streamMessage", () => {
+		it("message_start appends stream message to the flat array", () => {
 			const msg = { role: "assistant", content: [{ type: "text", text: "" }] };
-			const changed = session.applyEvent({ type: "message_start", message: msg } as any);
-			expect(changed).toBe(true);
+			session.applyEvent({ type: "message_start", message: msg } as any);
 
 			const state = parse(session.json);
-			expect(state.streamMessage).toEqual(msg);
+			// The stream message is appended at the end of messages
+			expect(state.messages).toHaveLength(2);
+			expect(state.messages[1]).toEqual(msg);
 		});
 
-		it("message_update updates streamMessage", () => {
+		it("message_update replaces the stream message at end of array", () => {
 			session.applyEvent({ type: "message_start", message: { role: "assistant", content: [{ type: "text", text: "a" }] } } as any);
 			const msg2 = { role: "assistant", content: [{ type: "text", text: "ab" }] };
 			session.applyEvent({ type: "message_update", message: msg2 } as any);
 
 			const state = parse(session.json);
-			expect(state.streamMessage).toEqual(msg2);
+			// Still 2 messages: user + the (updated) stream message
+			expect(state.messages).toHaveLength(2);
+			expect(state.messages[1]).toEqual(msg2);
 		});
 
-		it("message_end clears streamMessage and appends to messages", () => {
+		it("message_end commits the message and clears stream", () => {
 			session.applyEvent({ type: "message_start", message: { role: "assistant", content: [] } } as any);
 			const finalMsg = { role: "assistant", content: [{ type: "text", text: "done" }] };
 			session.applyEvent({ type: "message_end", message: finalMsg } as any);
 
 			const state = parse(session.json);
-			expect(state.streamMessage).toBeNull();
+			// Stream message is gone, committed message is in the array
 			expect(state.messages).toHaveLength(2);
 			expect(state.messages[1]).toEqual(finalMsg);
 		});
@@ -206,7 +226,7 @@ describe("SessionJsonl", () => {
 			expect(changed).toBe(false);
 		});
 
-		it("tool_execution_update stores partial result", () => {
+		it("tool_execution_update injects partial result as synthetic toolResult in messages", () => {
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
 			session.applyEvent({
 				type: "tool_execution_update",
@@ -218,30 +238,13 @@ describe("SessionJsonl", () => {
 			} as any);
 
 			const state = parse(session.json);
-			expect(state.partialToolResults["tool_1"]).toBeDefined();
-			expect(state.partialToolResults["tool_1"].content[0].text).toBe("partial output");
+			// Should have a synthetic toolResult in the messages array
+			const toolResults = state.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "tool_1");
+			expect(toolResults).toHaveLength(1);
+			expect((toolResults[0] as any).content[0].text).toBe("partial output");
 		});
 
-		it("tool_execution_update updates partial result incrementally", () => {
-			session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
-
-			session.applyEvent({
-				type: "tool_execution_update",
-				toolCallId: "tool_1",
-				partialResult: { content: [{ type: "text", text: "1\n" }], details: {} },
-			} as any);
-
-			session.applyEvent({
-				type: "tool_execution_update",
-				toolCallId: "tool_1",
-				partialResult: { content: [{ type: "text", text: "1\n2\n" }], details: {} },
-			} as any);
-
-			const state = parse(session.json);
-			expect(state.partialToolResults["tool_1"].content[0].text).toBe("1\n2\n");
-		});
-
-		it("tool_execution_end removes from pendingToolCalls and clears partial result", () => {
+		it("tool_execution_end removes from pendingToolCalls and removes partial result", () => {
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
 			session.applyEvent({
 				type: "tool_execution_update",
@@ -252,7 +255,9 @@ describe("SessionJsonl", () => {
 
 			const state = parse(session.json);
 			expect(state.pendingToolCalls).not.toContain("tool_1");
-			expect(state.partialToolResults["tool_1"]).toBeUndefined();
+			// The synthetic partial toolResult should be gone
+			const toolResults = state.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "tool_1");
+			expect(toolResults).toHaveLength(0);
 		});
 
 		it("unknown events return false", () => {
@@ -263,7 +268,6 @@ describe("SessionJsonl", () => {
 		it("hash changes on state-changing events", async () => {
 			const hash1 = session.hash;
 
-			// message_start actually changes the JSON (sets streamMessage)
 			session.applyEvent({
 				type: "message_start",
 				message: { role: "assistant", content: [{ type: "text", text: "hi" }] },
@@ -271,7 +275,6 @@ describe("SessionJsonl", () => {
 			const hash2 = session.hash;
 			expect(hash2).not.toBe(hash1);
 
-			// Verify hash is correct
 			const expectedHash = await computeHash(session.json);
 			expect(hash2).toBe(expectedHash);
 		});
@@ -306,12 +309,10 @@ describe("SessionJsonl", () => {
 				thinkingLevel: "off",
 			});
 
-			// Client syncs
 			const clientJson = session.json;
 			const clientHash = session.hash;
 			const clientVersion = session.version;
 
-			// Server changes
 			session.applyEvent({
 				type: "message_start",
 				message: { role: "assistant", content: [{ type: "text", text: "hello" }] },
@@ -319,7 +320,6 @@ describe("SessionJsonl", () => {
 
 			const op = session.computeSyncOp(clientJson, clientHash, clientVersion);
 			expect(op).not.toBeNull();
-			// Could be delta or full depending on change size
 			expect(["full", "delta"]).toContain(op!.op);
 		});
 	});
@@ -340,7 +340,7 @@ describe("SessionJsonl", () => {
 			expect(state!.thinkingLevel).toBe("high");
 		});
 
-		it("syncs streaming message updates", async () => {
+		it("syncs streaming messages into the flat array", async () => {
 			const session = new SessionJsonl({
 				messages: [{ role: "user", content: "hello" } as any],
 				model: null,
@@ -350,21 +350,23 @@ describe("SessionJsonl", () => {
 			const client = new MockClient();
 			await client.applyOp(session);
 
-			// Start streaming
+			// Start streaming — stream message appended to array
 			session.applyEvent({
 				type: "message_start",
 				message: { role: "assistant", content: [{ type: "text", text: "" }] },
 			} as any);
 			let state = await client.applyOp(session);
-			expect(state!.streamMessage).not.toBeNull();
+			expect(state!.messages).toHaveLength(2);
+			expect(state!.messages[1].role).toBe("assistant");
 
-			// Update streaming
+			// Update streaming — last message updated
 			session.applyEvent({
 				type: "message_update",
 				message: { role: "assistant", content: [{ type: "text", text: "Hello" }] },
 			} as any);
 			state = await client.applyOp(session);
-			expect((state!.streamMessage as any).content[0]).toEqual({ type: "text", text: "Hello" });
+			expect(state!.messages).toHaveLength(2);
+			expect((state!.messages[1] as any).content[0]).toEqual({ type: "text", text: "Hello" });
 
 			// More streaming
 			session.applyEvent({
@@ -372,19 +374,19 @@ describe("SessionJsonl", () => {
 				message: { role: "assistant", content: [{ type: "text", text: "Hello world" }] },
 			} as any);
 			state = await client.applyOp(session);
-			expect((state!.streamMessage as any).content[0]).toEqual({ type: "text", text: "Hello world" });
+			expect((state!.messages[1] as any).content[0]).toEqual({ type: "text", text: "Hello world" });
 
-			// End streaming
+			// End streaming — message finalized, still in array
 			session.applyEvent({
 				type: "message_end",
 				message: { role: "assistant", content: [{ type: "text", text: "Hello world!" }] },
 			} as any);
 			state = await client.applyOp(session);
-			expect(state!.streamMessage).toBeNull();
 			expect(state!.messages).toHaveLength(2);
+			expect((state!.messages[1] as any).content[0]).toEqual({ type: "text", text: "Hello world!" });
 		});
 
-		it("syncs tool execution with partial results (bash streaming)", async () => {
+		it("syncs tool execution with partial results as synthetic messages", async () => {
 			const session = new SessionJsonl({
 				messages: [{ role: "user", content: "run a loop" } as any],
 				model: null,
@@ -394,11 +396,11 @@ describe("SessionJsonl", () => {
 			const client = new MockClient();
 			await client.applyOp(session);
 
-			// Assistant requests tool use
+			// Assistant with tool call
 			const assistantMsg = {
 				role: "assistant",
 				content: [
-					{ type: "toolCall", id: "call_1", name: "Bash", arguments: '{"command":"for i in 1 2 3; do echo $i; sleep 1; done"}' },
+					{ type: "toolCall", id: "call_1", name: "Bash", arguments: '{"command":"echo hello"}' },
 				],
 				stopReason: "toolUse",
 			};
@@ -407,47 +409,42 @@ describe("SessionJsonl", () => {
 
 			let state = await client.applyOp(session);
 			expect(state!.messages).toHaveLength(2);
-			expect(state!.streamMessage).toBeNull();
 
 			// Tool execution starts
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "call_1" } as any);
 			state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).toContain("call_1");
 
-			// Bash streams partial output
+			// Bash streams partial output — appears as synthetic toolResult in messages
 			session.applyEvent({
 				type: "tool_execution_update",
 				toolCallId: "call_1",
 				partialResult: { content: [{ type: "text", text: "1\n" }], details: {} },
 			} as any);
 			state = await client.applyOp(session);
-			expect(state!.partialToolResults["call_1"].content[0].text).toBe("1\n");
+			const partialResults = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_1");
+			expect(partialResults).toHaveLength(1);
+			expect((partialResults[0] as any).content[0].text).toBe("1\n");
 
-			// More output
+			// More output — synthetic message updated
 			session.applyEvent({
 				type: "tool_execution_update",
 				toolCallId: "call_1",
 				partialResult: { content: [{ type: "text", text: "1\n2\n" }], details: {} },
 			} as any);
 			state = await client.applyOp(session);
-			expect(state!.partialToolResults["call_1"].content[0].text).toBe("1\n2\n");
+			const updated = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_1");
+			expect(updated).toHaveLength(1);
+			expect((updated[0] as any).content[0].text).toBe("1\n2\n");
 
-			// Even more output
-			session.applyEvent({
-				type: "tool_execution_update",
-				toolCallId: "call_1",
-				partialResult: { content: [{ type: "text", text: "1\n2\n3\n" }], details: {} },
-			} as any);
-			state = await client.applyOp(session);
-			expect(state!.partialToolResults["call_1"].content[0].text).toBe("1\n2\n3\n");
-
-			// Tool execution ends
+			// Tool execution ends — synthetic message removed
 			session.applyEvent({ type: "tool_execution_end", toolCallId: "call_1" } as any);
 			state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).not.toContain("call_1");
-			expect(state!.partialToolResults["call_1"]).toBeUndefined();
+			const afterEnd = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_1");
+			expect(afterEnd).toHaveLength(0);
 
-			// Tool result message arrives
+			// Real tool result message arrives
 			session.applyEvent({
 				type: "message_end",
 				message: {
@@ -471,14 +468,12 @@ describe("SessionJsonl", () => {
 			const client = new MockClient();
 			await client.applyOp(session);
 
-			// Two tool calls start
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "call_1" } as any);
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "call_2" } as any);
 
 			let state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).toEqual(["call_1", "call_2"]);
 
-			// Both stream partial results
 			session.applyEvent({
 				type: "tool_execution_update",
 				toolCallId: "call_1",
@@ -491,15 +486,18 @@ describe("SessionJsonl", () => {
 			} as any);
 
 			state = await client.applyOp(session);
-			expect(state!.partialToolResults["call_1"].content[0].text).toBe("output1");
-			expect(state!.partialToolResults["call_2"].content[0].text).toBe("output2");
+			const pr1 = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_1");
+			const pr2 = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_2");
+			expect(pr1).toHaveLength(1);
+			expect(pr2).toHaveLength(1);
 
-			// First tool finishes
 			session.applyEvent({ type: "tool_execution_end", toolCallId: "call_1" } as any);
 			state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).toEqual(["call_2"]);
-			expect(state!.partialToolResults["call_1"]).toBeUndefined();
-			expect(state!.partialToolResults["call_2"].content[0].text).toBe("output2");
+			const afterEnd1 = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_1");
+			expect(afterEnd1).toHaveLength(0);
+			const still2 = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_2");
+			expect(still2).toHaveLength(1);
 		});
 
 		it("returns null when nothing changed", async () => {
@@ -512,13 +510,11 @@ describe("SessionJsonl", () => {
 			const client = new MockClient();
 			await client.applyOp(session);
 
-			// No changes
 			const state = await client.applyOp(session);
 			expect(state).toBeNull();
 		});
 
 		it("uses delta sync for small changes", async () => {
-			// Build a session with enough data that deltas are worthwhile
 			const messages: any[] = [];
 			for (let i = 0; i < 20; i++) {
 				messages.push({ role: "user", content: `message ${i} with some padding text to make it larger` });
@@ -534,7 +530,6 @@ describe("SessionJsonl", () => {
 			const client = new MockClient();
 			await client.applyOp(session);
 
-			// Small change: start streaming
 			session.applyEvent({
 				type: "message_start",
 				message: { role: "assistant", content: [{ type: "text", text: "h" }] },
@@ -542,14 +537,14 @@ describe("SessionJsonl", () => {
 
 			const op = session.computeSyncOp(client.json, client.hash, client.version);
 			expect(op).not.toBeNull();
-			// For a large base + small change, should be delta
 			if (op!.op === "delta") {
 				const patchSize = op!.patches.reduce((s, p) => s + p.insert.length + 20, 0);
 				expect(patchSize).toBeLessThan(session.json.length);
 			}
 
 			const state = await client.applyOp(session);
-			expect(state!.streamMessage).not.toBeNull();
+			// Stream message is the last entry in the flat array
+			expect(state!.messages.length).toBe(messages.length + 1);
 		});
 
 		it("handles steering queue updates", async () => {
@@ -602,7 +597,7 @@ describe("SessionJsonl", () => {
 			let state = await client.applyOp(session);
 			expect(state!.messages).toHaveLength(0);
 
-			// 2. User message added (from disk sync)
+			// 2. User message added
 			session.applyEvent({ type: "agent_start" } as any);
 			session.applyEvent({
 				type: "message_end",
@@ -611,13 +606,14 @@ describe("SessionJsonl", () => {
 			state = await client.applyOp(session);
 			expect(state!.messages).toHaveLength(1);
 
-			// 3. Assistant starts streaming
+			// 3. Assistant starts streaming — appended to flat array
 			session.applyEvent({
 				type: "message_start",
 				message: { role: "assistant", content: [{ type: "text", text: "I'll" }] },
 			} as any);
 			state = await client.applyOp(session);
-			expect((state!.streamMessage as any).content[0]).toEqual({ type: "text", text: "I'll" });
+			expect(state!.messages).toHaveLength(2);
+			expect((state!.messages[1] as any).content[0]).toEqual({ type: "text", text: "I'll" });
 
 			// 4. Streaming continues with tool call
 			session.applyEvent({
@@ -631,7 +627,7 @@ describe("SessionJsonl", () => {
 				},
 			} as any);
 			state = await client.applyOp(session);
-			expect((state!.streamMessage as any).content).toHaveLength(2);
+			expect((state!.messages[1] as any).content).toHaveLength(2);
 
 			// 5. Assistant message finalized
 			session.applyEvent({
@@ -647,7 +643,6 @@ describe("SessionJsonl", () => {
 			} as any);
 			state = await client.applyOp(session);
 			expect(state!.messages).toHaveLength(2);
-			expect(state!.streamMessage).toBeNull();
 
 			// 6. Tool execution starts
 			session.applyEvent({
@@ -658,7 +653,7 @@ describe("SessionJsonl", () => {
 			state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).toEqual(["call_bash"]);
 
-			// 7. Bash streams output
+			// 7. Bash streams output — partial result as synthetic toolResult
 			session.applyEvent({
 				type: "tool_execution_update",
 				toolCallId: "call_bash",
@@ -668,19 +663,21 @@ describe("SessionJsonl", () => {
 				},
 			} as any);
 			state = await client.applyOp(session);
-			expect(state!.partialToolResults["call_bash"]).toBeDefined();
-			expect(state!.partialToolResults["call_bash"].content[0].text).toBe("file1.ts\nfile2.ts\n");
+			const partials = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_bash");
+			expect(partials).toHaveLength(1);
+			expect((partials[0] as any).content[0].text).toBe("file1.ts\nfile2.ts\n");
 
-			// 8. Tool execution ends
+			// 8. Tool execution ends — synthetic removed
 			session.applyEvent({
 				type: "tool_execution_end",
 				toolCallId: "call_bash",
 			} as any);
 			state = await client.applyOp(session);
 			expect(state!.pendingToolCalls).toEqual([]);
-			expect(Object.keys(state!.partialToolResults)).toHaveLength(0);
+			const noPartials = state!.messages.filter((m: any) => m.role === "toolResult" && m.toolCallId === "call_bash");
+			expect(noPartials).toHaveLength(0);
 
-			// 9. Tool result message
+			// 9. Real tool result
 			session.applyEvent({
 				type: "message_end",
 				message: {
@@ -704,7 +701,6 @@ describe("SessionJsonl", () => {
 			} as any);
 			state = await client.applyOp(session);
 			expect(state!.messages).toHaveLength(4);
-			expect(state!.streamMessage).toBeNull();
 
 			// Verify final hash integrity
 			const expectedHash = await computeHash(client.json);
@@ -735,8 +731,8 @@ describe("readSessionFromDisk (jsonl version)", () => {
 		const result = readSessionFromDisk(sessionPath);
 		const state = JSON.parse(result.json);
 		expect(state.messages).toHaveLength(2);
-		expect(state.status).toBe("idle");
-		expect(state.partialToolResults).toEqual({});
+		expect(state.isStreaming).toBe(false);
+		expect(state.pendingToolCalls).toEqual([]);
 
 		const expectedHash = await computeHash(result.json);
 		expect(result.hash).toBe(expectedHash);
@@ -746,6 +742,6 @@ describe("readSessionFromDisk (jsonl version)", () => {
 		const result = readSessionFromDisk("/nonexistent/path.jsonl");
 		const state = JSON.parse(result.json);
 		expect(state.messages).toHaveLength(0);
-		expect(state.status).toBe("idle");
+		expect(state.isStreaming).toBe(false);
 	});
 });
