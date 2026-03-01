@@ -6,6 +6,8 @@ test-results/
 playwright-report/
 e2e/latest/
 e2e/screenshots/
+!e2e/screenshots/walkthrough-hero.png
+!e2e/screenshots/walkthrough-final.png
 
 # Generated test fixtures
 e2e/fixtures/large-session-messages.json
