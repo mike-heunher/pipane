@@ -63,6 +63,51 @@ function truncate(s: string, max: number): string {
 	return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
+/**
+ * Auto-scroll pinning for streaming tool output containers.
+ *
+ * Scrolls to the bottom on every render update while streaming, unless the
+ * user has manually scrolled up. Once the user scrolls back to the bottom,
+ * auto-scroll resumes.
+ *
+ * Usage: call `createScrollPin()` once per renderer instance, then use the
+ * returned ref callback on the scrollable `<div>`.  Call `.streaming` setter
+ * to tell it whether we're still streaming.
+ */
+function createScrollPin() {
+	let pinned = true;
+	let isStreaming = false;
+	let installed = false;
+	let el: HTMLElement | null = null;
+
+	function onScroll() {
+		if (!el) return;
+		// Consider "at bottom" if within 8px of the bottom edge
+		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+		pinned = atBottom;
+	}
+
+	function refCb(element: Element | undefined) {
+		if (!element || !(element instanceof HTMLElement)) return;
+		el = element;
+		if (!installed) {
+			el.addEventListener("scroll", onScroll, { passive: true });
+			installed = true;
+		}
+		if (isStreaming && pinned) {
+			// Schedule scroll after Lit renders the DOM update
+			requestAnimationFrame(() => {
+				if (el) el.scrollTop = el.scrollHeight;
+			});
+		}
+	}
+
+	return {
+		ref: refCb,
+		set streaming(v: boolean) { isStreaming = v; },
+	};
+}
+
 export function formatBashMainText(command: string): string {
 	if (!command?.trim()) return "";
 	return command.includes("\n") ? command : "";
@@ -114,8 +159,12 @@ function resultText(result: ToolResultMessage | undefined): string {
 }
 
 class ReadRenderer implements ToolRenderer {
+	private scrollPin = createScrollPin();
+
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		this.scrollPin.streaming = state === "inprogress";
+
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
@@ -161,7 +210,7 @@ class ReadRenderer implements ToolRenderer {
 							title="Copy output"
 						>${icon(Copy, "sm")}</button>` : ""}
 					</div>
-					${content ? html`<div class="overflow-auto max-h-64">
+					${content ? html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
 						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
 					</div>` : ""}
 				</div>
@@ -172,8 +221,12 @@ class ReadRenderer implements ToolRenderer {
 }
 
 class WriteRenderer implements ToolRenderer {
+	private scrollPin = createScrollPin();
+
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		this.scrollPin.streaming = state === "inprogress";
+
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
@@ -224,7 +277,7 @@ class WriteRenderer implements ToolRenderer {
 							title="Copy content"
 						>${icon(Copy, "sm")}</button>` : ""}
 					</div>
-					${displayContent ? html`<div class="overflow-auto max-h-64">
+					${displayContent ? html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
 						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
 					</div>` : ""}
 				</div>
@@ -286,8 +339,12 @@ function antiFlickerRef(el: Element | undefined) {
 }
 
 class EditRenderer implements ToolRenderer {
+	private scrollPin = createScrollPin();
+
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		this.scrollPin.streaming = state === "inprogress";
+
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
@@ -315,7 +372,7 @@ class EditRenderer implements ToolRenderer {
 		let diffContent: ReturnType<typeof html> | string = "";
 		if (hasDiff) {
 			const diff = simpleDiff(oldText, newText);
-			diffContent = html`<div class="overflow-auto max-h-64">
+			diffContent = html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
 				<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs font-mono whitespace-pre-wrap">${diff.lines.map(l =>
 					l.type === "del" ? html`<span class="text-red-500 dark:text-red-400">- ${l.text}\n</span>`
 					: l.type === "add" ? html`<span class="text-green-500 dark:text-green-400">+ ${l.text}\n</span>`
@@ -354,11 +411,15 @@ class EditRenderer implements ToolRenderer {
 }
 
 class BashRenderer implements ToolRenderer {
+	private scrollPin = createScrollPin();
+
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
 		// When streaming with a result, it's a partial result (bash stdout streaming)
 		const state = result
 			? result.isError ? "error" : (isStreaming ? "inprogress" : "complete")
 			: "inprogress";
+		this.scrollPin.streaming = state === "inprogress";
+
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
@@ -411,7 +472,7 @@ class BashRenderer implements ToolRenderer {
 							${icon(Copy, "sm")}
 						</button>
 					</div>
-					<div class="overflow-auto max-h-64">
+					<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
 						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
 					</div>
 				</div>
