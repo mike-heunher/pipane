@@ -30,6 +30,7 @@ import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened } from "./canvas-panel.js";
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
+import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 import { formatUsage } from "@mariozechner/pi-web-ui";
@@ -41,6 +42,7 @@ let agent: WsAgentAdapter;
 let sidebarOpen = true;
 let steeringQueue: readonly string[] = [];
 let piInstallPromptOpen = false;
+let localSettingsModalOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undefined;
 let autoScroll = true;
@@ -235,6 +237,22 @@ function renderToolbarExtras() {
 	return html`${renderThinkingButton()}${renderTokenUsage()}`;
 }
 
+async function openLocalSettingsModal() {
+	if (localSettingsModalOpen) return;
+	localSettingsModalOpen = true;
+	try {
+		await openLocalSettingsDialog({
+			onSaved: () => {
+				renderApp();
+				const picker = document.querySelector("session-picker") as any;
+				picker?.refreshSessions?.();
+			},
+		});
+	} finally {
+		localSettingsModalOpen = false;
+	}
+}
+
 function fmtTok(n: number): string {
 	if (n < 1000) return String(n);
 	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
@@ -343,6 +361,16 @@ const renderApp = () => {
 					>
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+						</svg>
+					</button>
+					<button
+						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+						@click=${() => { void openLocalSettingsModal(); }}
+						title="Open local settings (~/.piweb/settings.json)"
+					>
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<circle cx="12" cy="12" r="3"></circle>
+							<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.08a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.08a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.08a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
 						</svg>
 					</button>
 					<button

@@ -480,6 +480,186 @@ markdown-block pre code {
 	border-top: 1px solid var(--border, #e5e7eb);
 }
 
+/* ── Local settings modal ───────────────────────────────────────── */
+
+.local-settings-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 10000;
+	background: rgba(0, 0, 0, 0.5);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 1rem;
+}
+
+.local-settings-panel {
+	width: min(860px, 96vw);
+	height: min(82vh, 900px);
+	display: flex;
+	flex-direction: column;
+	border-radius: 0.75rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: var(--background, #fff);
+	box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+	overflow: hidden;
+}
+
+.local-settings-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 0.75rem 1rem;
+	border-bottom: 1px solid var(--border, #e5e7eb);
+}
+
+.local-settings-title {
+	font-size: 0.95rem;
+	font-weight: 650;
+}
+
+.local-settings-close {
+	width: 1.6rem;
+	height: 1.6rem;
+	border: none;
+	border-radius: 0.35rem;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+}
+
+.local-settings-close:hover:not(:disabled) {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
+.local-settings-path {
+	padding: 0.5rem 1rem;
+	font-size: 0.72rem;
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	color: var(--muted-foreground, #6b7280);
+	border-bottom: 1px solid var(--border, #e5e7eb);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.local-settings-hint {
+	border-bottom: 1px solid var(--border, #e5e7eb);
+	background: color-mix(in srgb, var(--muted, #f3f4f6) 45%, transparent);
+}
+
+.local-settings-hint > summary {
+	cursor: pointer;
+	padding: 0.45rem 1rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--muted-foreground, #6b7280);
+	user-select: none;
+}
+
+.local-settings-hint-body {
+	padding: 0 1rem 0.6rem;
+	font-size: 0.74rem;
+	line-height: 1.35;
+	color: var(--muted-foreground, #6b7280);
+}
+
+.local-settings-hint-body p {
+	margin: 0.35rem 0;
+}
+
+.local-settings-hint-body pre {
+	margin: 0.45rem 0;
+	padding: 0.5rem 0.6rem;
+	border-radius: 0.35rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: var(--background, #fff);
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	font-size: 0.69rem;
+	line-height: 1.35;
+	overflow: auto;
+	white-space: pre;
+}
+
+.local-settings-editor {
+	flex: 1;
+	width: 100%;
+	border: none;
+	outline: none;
+	resize: none;
+	padding: 0.85rem 1rem;
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	font-size: 0.78rem;
+	line-height: 1.45;
+	background: var(--background, #fff);
+	color: var(--foreground, #111);
+}
+
+.local-settings-status {
+	min-height: 2.3rem;
+	padding: 0.45rem 1rem;
+	white-space: pre-wrap;
+	font-size: 0.75rem;
+	line-height: 1.35;
+	border-top: 1px solid var(--border, #e5e7eb);
+	color: var(--muted-foreground, #6b7280);
+}
+
+.local-settings-status.ok {
+	color: #15803d;
+}
+
+.local-settings-status.error {
+	color: #b91c1c;
+}
+
+.local-settings-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.7rem 1rem 0.85rem;
+	border-top: 1px solid var(--border, #e5e7eb);
+}
+
+.local-settings-footer-left,
+.local-settings-footer-right {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.local-settings-btn {
+	padding: 0.45rem 0.7rem;
+	border-radius: 0.4rem;
+	border: 1px solid var(--border, #e5e7eb);
+	background: var(--background, #fff);
+	color: var(--foreground, #111);
+	font-size: 0.78rem;
+	cursor: pointer;
+}
+
+.local-settings-btn:hover:not(:disabled) {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+}
+
+.local-settings-btn:disabled,
+.local-settings-close:disabled {
+	opacity: 0.6;
+	cursor: default;
+}
+
+.local-settings-btn-primary {
+	background: color-mix(in srgb, var(--primary, #2563eb) 85%, #fff);
+	border-color: color-mix(in srgb, var(--primary, #2563eb) 70%, var(--border, #e5e7eb));
+	color: white;
+}
+
+.local-settings-btn-primary:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--primary, #2563eb) 92%, #fff);
+}
+
 /* ── JSONL raw viewer side panel ────────────────────────────────── */
 
 .jsonl-container {

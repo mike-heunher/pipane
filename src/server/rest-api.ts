@@ -11,12 +11,23 @@ import path from "node:path";
 import { buildSessionContext, parseSessionEntries } from "@mariozechner/pi-coding-agent";
 import type { LoadTraceStore } from "./load-trace-store.js";
 import { SessionIndex } from "./session-index.js";
+import { LocalSettingsStore } from "./local-settings.js";
 
 interface RegisterRestApiOptions {
 	traceStore?: LoadTraceStore;
 }
 
-const sessionIndex = new SessionIndex();
+const localSettingsStore = new LocalSettingsStore();
+const sessionIndex = new SessionIndex({
+	cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
+});
+
+async function readJsonBody(req: any): Promise<any> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of req) chunks.push(chunk);
+	const raw = Buffer.concat(chunks).toString();
+	return JSON.parse(raw || "{}");
+}
 
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}) {
 	const traceStore = options.traceStore;
@@ -75,6 +86,48 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 	app.get("/api/sessions", async (_req, res) => {
 		try {
 			res.json(await sessionIndex.listSessions());
+		} catch (err: any) {
+			res.status(500).json({ error: err.message });
+		}
+	});
+
+	app.get("/api/settings/local", (_req, res) => {
+		try {
+			res.json(localSettingsStore.read());
+		} catch (err: any) {
+			res.status(500).json({ error: err.message });
+		}
+	});
+
+	app.post("/api/settings/local/validate", async (req, res) => {
+		try {
+			const body = await readJsonBody(req);
+			if (typeof body.content !== "string") {
+				res.status(400).json({ error: "Missing 'content' string" });
+				return;
+			}
+			res.json(localSettingsStore.validate(body.content));
+		} catch (err: any) {
+			res.status(500).json({ error: err.message });
+		}
+	});
+
+	app.put("/api/settings/local", async (req, res) => {
+		try {
+			const body = await readJsonBody(req);
+			if (typeof body.content !== "string") {
+				res.status(400).json({ error: "Missing 'content' string" });
+				return;
+			}
+
+			const result = localSettingsStore.save(body.content);
+			if (!result.valid) {
+				res.status(400).json(result);
+				return;
+			}
+
+			await sessionIndex.invalidateAll();
+			res.json(result);
 		} catch (err: any) {
 			res.status(500).json({ error: err.message });
 		}

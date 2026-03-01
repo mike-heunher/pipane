@@ -111,6 +111,25 @@ describe("SessionIndex", () => {
 		expect(second[0].messageCount).toBe(2);
 	});
 
+	it("applies cwd display formatter when provided", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "sess-a", cwd: "/Users/me/dev/pi-web", timestamp: "2026-01-01T10:00:00.000Z" },
+			{ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T10:00:02.000Z", message: { role: "user", timestamp: 1700000000000, content: "hello" } },
+		]);
+
+		const index = new SessionIndex({
+			agentDir,
+			extractorVersion: "test-v1",
+			cwdDisplayFormatter: (cwd) => cwd.replace(/^\/Users\/me/, "~"),
+		});
+		const sessions = await index.listSessions();
+
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0].cwd).toBe("/Users/me/dev/pi-web");
+		expect(sessions[0].cwdDisplay).toBe("~/dev/pi-web");
+	});
+
 	it("invalidates by extractor version", async () => {
 		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
 		writeSessionJsonl(sessionPath, [

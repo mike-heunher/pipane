@@ -94,6 +94,39 @@ Environment variables:
 
 LLM/API keys are read from standard environment variables (for example `ANTHROPIC_API_KEY`, etc.).
 
+Local user settings (macOS + Linux):
+
+- Path: `~/.piweb/settings.json`
+- Read on server startup; invalid config falls back to defaults
+- Save API auto-formats JSON with stable indentation
+
+Current schema:
+
+```json
+{
+  "version": 1,
+  "sidebar": {
+    "cwdTitle": {
+      "filters": [
+        { "pattern": "^~/dev/", "replacement": "dev/" }
+      ]
+    }
+  }
+}
+```
+
+Sidebar cwd title behavior:
+
+1. Start from full cwd path
+2. Replace `$HOME` prefix with `~`
+3. Apply `sidebar.cwdTitle.filters` in order (regex `pattern` + `replacement`)
+
+REST endpoints:
+
+- `GET /api/settings/local` — read effective settings + path + diagnostics
+- `POST /api/settings/local/validate` with `{ "content": "...json..." }`
+- `PUT /api/settings/local` with `{ "content": "...json..." }` (validate + auto-format + save)
+
 ---
 
 ## Load tracing (frontend + backend)

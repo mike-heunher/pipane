@@ -15,6 +15,7 @@ export interface SessionListItem {
 	id: string;
 	path: string;
 	cwd: string;
+	cwdDisplay?: string;
 	name?: string;
 	created: string;
 	modified: string;
@@ -37,18 +38,20 @@ interface SessionIndexCacheFile {
 }
 
 const CACHE_FORMAT_VERSION = 1 as const;
-const DEFAULT_EXTRACTOR_VERSION = "1";
+const DEFAULT_EXTRACTOR_VERSION = "2";
 
 export class SessionIndex {
 	private readonly agentDir: string;
 	private readonly extractorVersion: string;
 	private readonly cacheFilePath: string;
+	private readonly cwdDisplayFormatter?: (cwd: string) => string;
 	private inMemoryCache: SessionIndexCacheFile | null | undefined;
 
-	constructor(opts?: { agentDir?: string; extractorVersion?: string }) {
+	constructor(opts?: { agentDir?: string; extractorVersion?: string; cwdDisplayFormatter?: (cwd: string) => string }) {
 		this.agentDir = opts?.agentDir ?? getAgentDir();
 		this.extractorVersion = opts?.extractorVersion ?? DEFAULT_EXTRACTOR_VERSION;
 		this.cacheFilePath = path.join(this.agentDir, "cache", "pi-web-session-index-v1.json");
+		this.cwdDisplayFormatter = opts?.cwdDisplayFormatter;
 	}
 
 	async listSessions(): Promise<SessionListItem[]> {
@@ -213,10 +216,12 @@ export class SessionIndex {
 				return new Date(statMtimeMs);
 			})();
 
+			const cwd = typeof header.cwd === "string" ? header.cwd : "";
 			return {
 				id: header.id,
 				path: sessionPath,
-				cwd: typeof header.cwd === "string" ? header.cwd : "",
+				cwd,
+				cwdDisplay: cwd && this.cwdDisplayFormatter ? this.cwdDisplayFormatter(cwd) : cwd,
 				name,
 				created: created.toISOString(),
 				modified: modified.toISOString(),

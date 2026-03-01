@@ -1300,6 +1300,7 @@ export interface SessionInfoDTO {
 	id: string;
 	path: string;
 	cwd: string;
+	cwdDisplay?: string;
 	name?: string;
 	created: string;
 	modified: string;

@@ -15,6 +15,7 @@ import type { WsAgentAdapter, SessionInfoDTO } from "./ws-agent-adapter.js";
 interface SessionGroup {
 	cwd: string;
 	label: string;
+	displayCwd: string;
 	sessions: SessionInfoDTO[];
 }
 
@@ -803,7 +804,8 @@ export class SessionPicker extends LitElement {
 				(s) =>
 					(s.name?.toLowerCase().includes(query)) ||
 					s.firstMessage.toLowerCase().includes(query) ||
-					s.cwd.toLowerCase().includes(query),
+					s.cwd.toLowerCase().includes(query) ||
+					(s.cwdDisplay?.toLowerCase().includes(query) ?? false),
 			);
 		}
 
@@ -816,9 +818,8 @@ export class SessionPicker extends LitElement {
 
 		const groups: SessionGroup[] = [];
 		for (const [cwd, sessions] of groupMap) {
-			const parts = cwd.split("/").filter(Boolean);
-			const label = parts[parts.length - 1] || cwd;
-			groups.push({ cwd, label, sessions });
+			const displayCwd = sessions[0]?.cwdDisplay || cwd;
+			groups.push({ cwd, displayCwd, label: displayCwd, sessions });
 		}
 
 		// Sort sessions within each group:

@@ -139,6 +139,7 @@ export interface SessionOptions {
 	id?: string;
 	name?: string;
 	cwd?: string;
+	cwdDisplay?: string;
 	firstMessage?: string;
 	messageCount?: number;
 	created?: string;
@@ -158,6 +159,7 @@ export function createSession(opts: SessionOptions = {}): SessionInfoDTO {
 		id,
 		path: `${cwd}/.pi/sessions/${id}.jsonl`,
 		cwd,
+		cwdDisplay: opts.cwdDisplay,
 		name: opts.name,
 		created: opts.created ?? "2026-02-28T10:00:00.000Z",
 		modified: opts.modified ?? "2026-02-28T11:00:00.000Z",

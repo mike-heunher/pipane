@@ -346,9 +346,9 @@ describe("session-picker", () => {
 			const headers = getGroupHeaders(el);
 
 			expect(headers).toHaveLength(3);
-			expect(getGroupLabel(headers[0])).toBe("recent-project");
-			expect(getGroupLabel(headers[1])).toBe("middle-project");
-			expect(getGroupLabel(headers[2])).toBe("old-project");
+			expect(getGroupLabel(headers[0])).toBe("/home/user/recent-project");
+			expect(getGroupLabel(headers[1])).toBe("/home/user/middle-project");
+			expect(getGroupLabel(headers[2])).toBe("/home/user/old-project");
 		});
 
 		it("groups with running sessions sort to the top", async () => {
@@ -374,8 +374,23 @@ describe("session-picker", () => {
 
 			expect(headers).toHaveLength(2);
 			// Group with running session should be first
-			expect(getGroupLabel(headers[0])).toBe("old-project");
-			expect(getGroupLabel(headers[1])).toBe("recent-project");
+			expect(getGroupLabel(headers[0])).toBe("/home/user/old-project");
+			expect(getGroupLabel(headers[1])).toBe("/home/user/recent-project");
+		});
+	});
+
+	describe("cwd display labels", () => {
+		it("uses cwdDisplay from the backend when available", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({ name: "Session A", cwd: "/home/user/project", cwdDisplay: "~/dev/project" }),
+			]);
+
+			const el = await createPicker(agent);
+			const headers = getGroupHeaders(el);
+
+			expect(headers).toHaveLength(1);
+			expect(getGroupLabel(headers[0])).toBe("~/dev/project");
 		});
 	});
 
