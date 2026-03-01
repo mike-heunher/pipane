@@ -8,10 +8,30 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { getToolRenderer } from "@mariozechner/pi-web-ui";
-import { formatBashMainText, registerCodingAgentRenderers } from "./tool-renderers.js";
+import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
 registerCodingAgentRenderers();
+
+describe("stripCdPrefix", () => {
+	it("strips cd /path && prefix from command", () => {
+		expect(stripCdPrefix("cd /Users/dev/project && npm test")).toBe("npm test");
+		expect(stripCdPrefix("cd /foo/bar && ls -la")).toBe("ls -la");
+	});
+
+	it("leaves commands without cd prefix unchanged", () => {
+		expect(stripCdPrefix("npm test")).toBe("npm test");
+		expect(stripCdPrefix("echo hello")).toBe("echo hello");
+	});
+
+	it("handles empty/falsy input", () => {
+		expect(stripCdPrefix("")).toBe("");
+	});
+
+	it("strips cd prefix from multiline commands", () => {
+		expect(stripCdPrefix("cd /foo && echo a\necho b")).toBe("echo a\necho b");
+	});
+});
 
 describe("BashRenderer override", () => {
 	it("strips single-line bash command from main text", () => {

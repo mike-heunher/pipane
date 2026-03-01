@@ -141,6 +141,13 @@ function createScrollPin() {
 	};
 }
 
+/** Strip `cd /some/path && ` prefix that pi injects for cwd. */
+export function stripCdPrefix(command: string): string {
+	if (!command) return command;
+	const m = command.match(/^cd\s+\S+\s+&&\s+(.*)$/s);
+	return m ? m[1] : command;
+}
+
 export function formatBashMainText(command: string): string {
 	if (!command?.trim()) return "";
 	return command.includes("\n") ? command : "";
@@ -471,7 +478,7 @@ class BashRenderer implements ToolRenderer {
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
-		const command = parsed.command || "";
+		const command = stripCdPrefix(parsed.command || "");
 		const output = resultText(result);
 		const mainTextCommand = formatBashMainText(command);
 		const combined = output
