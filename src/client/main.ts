@@ -63,6 +63,7 @@ let autoScroll = true;
 let lastScrollTop = 0;
 let ignoreScrollEvents = false;
 let canvasFeatureEnabled = false;
+let sessionsPerProject = 5;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -367,7 +368,7 @@ const renderApp = () => {
 				${!isMobile()
 					? html`
 						<div class="shrink-0 border-r border-border bg-background overflow-hidden" style="width: 280px;">
-							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
+							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
 						</div>
 					`
 					: ""}
@@ -457,7 +458,7 @@ const renderApp = () => {
 		const mobileOverlay = html`
 			<div class="sidebar-mobile-overlay">
 				<div class="sidebar-panel shrink-0 border-r border-border bg-background overflow-hidden">
-					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
+					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
 				</div>
 				<div class="sidebar-mobile-backdrop" @click=${() => { mobileSidebarOpen = false; renderApp(); }}></div>
 			</div>
@@ -540,6 +541,9 @@ async function initApp() {
 		if (settingsRes.ok) {
 			const settingsData = await settingsRes.json();
 			canvasFeatureEnabled = settingsData.settings?.canvas?.enabled === true;
+			if (typeof settingsData.settings?.sidebar?.sessionsPerProject === "number") {
+				sessionsPerProject = settingsData.settings.sidebar.sessionsPerProject;
+			}
 		}
 	} catch {
 		// Ignore — canvas stays disabled by default
@@ -613,6 +617,9 @@ async function initApp() {
 			if (res.ok) {
 				const data = await res.json();
 				canvasFeatureEnabled = data.settings?.canvas?.enabled === true;
+				if (typeof data.settings?.sidebar?.sessionsPerProject === "number") {
+					sessionsPerProject = data.settings.sidebar.sessionsPerProject;
+				}
 			}
 		} catch { /* ignore */ }
 		await resyncAppearanceFromServer();

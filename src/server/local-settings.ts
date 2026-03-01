@@ -17,6 +17,7 @@ export interface LocalSettings {
 		cwdTitle: {
 			filters: CwdTitleFilter[];
 		};
+		sessionsPerProject: number;
 	};
 	canvas: {
 		enabled: boolean;
@@ -51,12 +52,15 @@ interface CompiledFilter {
 const VALID_COLOR_THEMES: readonly ColorTheme[] = ["default", "gruvbox"];
 const VALID_DARK_MODES: readonly DarkMode[] = ["light", "dark", "system"];
 
+const DEFAULT_SESSIONS_PER_PROJECT = 5;
+
 const DEFAULT_SETTINGS: LocalSettings = {
 	version: 1,
 	sidebar: {
 		cwdTitle: {
 			filters: [],
 		},
+		sessionsPerProject: DEFAULT_SESSIONS_PER_PROJECT,
 	},
 	canvas: {
 		enabled: false,
@@ -343,6 +347,16 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 		});
 	}
 
+	// sidebar.sessionsPerProject (optional, defaults to DEFAULT_SESSIONS_PER_PROJECT)
+	let sessionsPerProject = DEFAULT_SESSIONS_PER_PROJECT;
+	if (sidebar?.sessionsPerProject !== undefined) {
+		if (typeof sidebar.sessionsPerProject !== "number" || !Number.isInteger(sidebar.sessionsPerProject) || sidebar.sessionsPerProject < 1) {
+			errors.push("sidebar.sessionsPerProject must be a positive integer");
+		} else {
+			sessionsPerProject = sidebar.sessionsPerProject;
+		}
+	}
+
 	// canvas section (optional, defaults to { enabled: false })
 	const canvasRaw = value.canvas;
 	let canvasEnabled = false;
@@ -397,6 +411,7 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 			cwdTitle: {
 				filters,
 			},
+			sessionsPerProject,
 		},
 		canvas: {
 			enabled: canvasEnabled,

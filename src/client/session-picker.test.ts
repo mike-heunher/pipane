@@ -597,6 +597,34 @@ describe("session-picker", () => {
 			expect(btns[0].textContent).toContain("Show less");
 		});
 
+		it("respects custom sessionsPerProject property", async () => {
+			const agent = new MockAgent();
+			const sessions: SessionInfoDTO[] = [];
+			for (let i = 0; i < 8; i++) {
+				sessions.push(
+					createSession({
+						name: `Session ${i + 1}`,
+						cwd: "/home/user/project",
+						lastUserPromptTime: `2026-02-28T${String(10 + i).padStart(2, "0")}:00:00.000Z`,
+					}),
+				);
+			}
+			agent.setSessions(sessions);
+
+			const el = await createPicker(agent);
+			// Set a custom limit of 3
+			el.sessionsPerProject = 3;
+			await el.updateComplete;
+
+			const items = getSessionItems(el);
+			expect(items).toHaveLength(3);
+
+			// Should have a "show more" button with 5 hidden
+			const showMoreBtns = getShowMoreButtons(el);
+			expect(showMoreBtns).toHaveLength(1);
+			expect(showMoreBtns[0].textContent).toContain("5 more");
+		});
+
 		it("increases default limit to show all running sessions", async () => {
 			const agent = new MockAgent();
 			const sessions: SessionInfoDTO[] = [];

@@ -18,6 +18,7 @@ const DEFAULT_SETTINGS = {
 		cwdTitle: {
 			filters: [],
 		},
+		sessionsPerProject: 5,
 	},
 };
 
@@ -69,7 +70,11 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
         { "pattern": "^~/dev/", "replacement": "dev/" },
         { "pattern": "^dev/pipane$", "replacement": "pipane (dev)" }
       ]
-    }
+    },
+    "sessionsPerProject": 5
+  },
+  "canvas": {
+    "enabled": false
   },
   "appearance": {
     "colorTheme": "gruvbox | default",
@@ -78,6 +83,8 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
   }
 }</pre>
 			<p>Each filter supports: <code>pattern</code> (regex), <code>replacement</code> (string), optional <code>flags</code>.</p>
+			<p><strong>Sidebar:</strong> <code>sessionsPerProject</code> controls how many sessions are shown per project before "show more" truncation (positive integer, default 5).</p>
+			<p><strong>Canvas:</strong> <code>enabled</code> activates the canvas tool side panel.</p>
 			<p><strong>Appearance:</strong> <code>colorTheme</code>, <code>darkMode</code>, and <code>showTokenUsage</code> are also togglable from the sidebar menu.</p>
 		</div>
 	`;

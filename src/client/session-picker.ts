@@ -651,6 +651,10 @@ export class SessionPicker extends LitElement {
 	@property({ attribute: false })
 	burgerMenu: BurgerMenuCallbacks | undefined;
 
+	/** Max visible sessions per project before "show more" truncation. Default: 5. */
+	@property({ type: Number, attribute: false })
+	sessionsPerProject = 5;
+
 	@state() private sessions: SessionInfoDTO[] = [];
 	@state() private loading = true;
 	@state() private showSkeleton = false;
@@ -1302,8 +1306,8 @@ export class SessionPicker extends LitElement {
 			(s) => this.agent.getSessionStatus(s.path) === "running"
 		).length;
 
-		// Show at least 5 or all running sessions, whichever is more
-		const defaultLimit = Math.max(5, runningCount);
+		// Show at least sessionsPerProject or all running sessions, whichever is more
+		const defaultLimit = Math.max(this.sessionsPerProject, runningCount);
 		const totalCount = group.sessions.length;
 		const needsTruncation = totalCount > defaultLimit;
 		const visibleSessions = isExpanded || !needsTruncation

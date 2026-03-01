@@ -32,6 +32,7 @@ describe("local-settings", () => {
 		expect(read.errors).toEqual([]);
 		expect(read.settings.version).toBe(1);
 		expect(read.settings.sidebar.cwdTitle.filters).toEqual([]);
+		expect(read.settings.sidebar.sessionsPerProject).toBe(5);
 	});
 
 	it("validates and formats JSON on save", () => {
@@ -207,6 +208,67 @@ describe("local-settings", () => {
 				darkMode: "system",
 				showTokenUsage: true,
 			});
+		});
+	});
+
+	describe("sessionsPerProject", () => {
+		it("defaults to 5 when not specified", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+			}));
+			expect(store.settings.sidebar.sessionsPerProject).toBe(5);
+		});
+
+		it("accepts a valid positive integer", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: 10 },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings!.sidebar.sessionsPerProject).toBe(10);
+		});
+
+		it("rejects zero", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: 0 },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("sidebar.sessionsPerProject");
+		});
+
+		it("rejects negative numbers", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: -3 },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("sidebar.sessionsPerProject");
+		});
+
+		it("rejects non-integer numbers", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: 3.5 },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("sidebar.sessionsPerProject");
+		});
+
+		it("rejects non-number types", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: "ten" },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("sidebar.sessionsPerProject");
 		});
 	});
 
