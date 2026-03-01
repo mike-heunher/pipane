@@ -197,4 +197,4 @@ npm run test && npx playwright test --timeout 60000
 
 ## License
 
-See project license information in this repository.
+[MIT](LICENSE)
