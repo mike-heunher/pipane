@@ -6,7 +6,7 @@ if ("serviceWorker" in navigator) {
 }
 
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import { initThemes } from "./theme-selector.js";
+import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import {
 	AppStorage,
 	CustomProvidersStore,
@@ -40,8 +40,21 @@ initThemes();
 
 let agent: WsAgentAdapter;
 const isMobile = () => window.innerWidth <= 768;
-let sidebarOpen = !isMobile();
+let wasMobile = isMobile();
+let mobileSidebarOpen = false;
 let steeringQueue: readonly string[] = [];
+
+// Re-render when crossing the mobile/desktop breakpoint so the sidebar
+// instantly switches between inline (desktop) and overlay (mobile).
+window.addEventListener("resize", () => {
+	const nowMobile = isMobile();
+	if (nowMobile !== wasMobile) {
+		wasMobile = nowMobile;
+		// Close mobile overlay when switching back to desktop
+		if (!nowMobile) mobileSidebarOpen = false;
+		renderApp();
+	}
+});
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let chatJsonlJumpListenerInstalled = false;
@@ -49,22 +62,18 @@ let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undef
 let autoScroll = true;
 let lastScrollTop = 0;
 let ignoreScrollEvents = false;
+let canvasFeatureEnabled = false;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
 traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
-// Token usage visibility toggle
-const TOKEN_USAGE_KEY = "pipane-hide-token-usage";
+// Token usage visibility — backed by settings.json via theme-selector
 function isTokenUsageHidden(): boolean {
-	return localStorage.getItem(TOKEN_USAGE_KEY) === "true";
+	return !getShowTokenUsage();
 }
-function setTokenUsageHidden(hidden: boolean) {
-	localStorage.setItem(TOKEN_USAGE_KEY, String(hidden));
-	document.documentElement.classList.toggle("hide-token-usage", hidden);
-}
-if (isTokenUsageHidden()) {
-	document.documentElement.classList.add("hide-token-usage");
+function toggleTokenUsage() {
+	setShowTokenUsage(!getShowTokenUsage());
 }
 
 /**
@@ -335,15 +344,20 @@ const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
 
+	// Remove the static skeleton shell from index.html on first real render.
+	// Lit's render() doesn't clear pre-existing DOM children, so we must
+	// remove it explicitly to avoid it lingering behind the real app.
+	const skeletonShell = document.getElementById("skeleton-shell");
+	if (skeletonShell) skeletonShell.remove();
+
 	const state = agent?.state;
 	const messages = state?.messages ?? [];
 	const isStreaming = state?.isStreaming ?? false;
 
 	const burgerMenuCallbacks = {
-		onToggleTokenUsage: () => { setTokenUsageHidden(!isTokenUsageHidden()); renderApp(); },
+		onToggleTokenUsage: () => { toggleTokenUsage(); renderApp(); },
 		onOpenSettings: () => { void openLocalSettingsModal(); },
 		onToggleJsonl: () => { toggleJsonlPanel(); renderApp(); },
-		onCloseSidebar: () => { sidebarOpen = false; renderApp(); },
 		isTokenUsageHidden: isTokenUsageHidden(),
 		isJsonlVisible: isJsonlPanelVisible(),
 		isDevMode,
@@ -353,7 +367,7 @@ const renderApp = () => {
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
 			<!-- Main content: sidebar + chat -->
 			<div class="flex flex-1 overflow-hidden">
-				${sidebarOpen && !isMobile()
+				${!isMobile()
 					? html`
 						<div class="shrink-0 border-r border-border bg-background overflow-hidden" style="width: 280px;">
 							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
@@ -361,16 +375,17 @@ const renderApp = () => {
 					`
 					: ""}
 				<div class="flex-1 overflow-hidden flex flex-col">
-					${!sidebarOpen
+					${isMobile()
 						? html`
 							<button
-								class="sidebar-reopen-btn"
-								@click=${() => { sidebarOpen = true; renderApp(); }}
-								title="Show sidebar"
+								class="mobile-sidebar-btn"
+								@click=${() => { mobileSidebarOpen = true; renderApp(); }}
+								title="Open sessions"
 							>
 								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-									<line x1="9" y1="3" x2="9" y2="21"></line>
+									<line x1="3" y1="12" x2="21" y2="12"></line>
+									<line x1="3" y1="6" x2="21" y2="6"></line>
+									<line x1="3" y1="18" x2="21" y2="18"></line>
 								</svg>
 							</button>
 						`
@@ -428,7 +443,7 @@ const renderApp = () => {
 								</div>
 							</div>
 						</div>
-						${isCanvasVisible()
+						${canvasFeatureEnabled && isCanvasVisible()
 							? html`<div id="canvas-container" class="canvas-container border-l border-border"></div>`
 							: ""}
 						${isJsonlPanelVisible()
@@ -440,14 +455,14 @@ const renderApp = () => {
 		</div>
 	`;
 
-	// Mobile sidebar overlay (rendered outside main flex to avoid layout issues)
-	if (sidebarOpen && isMobile()) {
+	// Mobile sidebar overlay
+	if (mobileSidebarOpen && isMobile()) {
 		const mobileOverlay = html`
 			<div class="sidebar-mobile-overlay">
 				<div class="sidebar-panel shrink-0 border-r border-border bg-background overflow-hidden">
 					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks}></session-picker>
 				</div>
-				<div class="sidebar-mobile-backdrop" @click=${() => { sidebarOpen = false; renderApp(); }}></div>
+				<div class="sidebar-mobile-backdrop" @click=${() => { mobileSidebarOpen = false; renderApp(); }}></div>
 			</div>
 		`;
 		render(html`${appHtml}${mobileOverlay}`, app);
@@ -522,6 +537,17 @@ async function initApp() {
 	const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
 	setAppStorage(storage);
 
+	// Fetch local settings to check feature flags
+	try {
+		const settingsRes = await fetch("/api/settings/local");
+		if (settingsRes.ok) {
+			const settingsData = await settingsRes.json();
+			canvasFeatureEnabled = settingsData.settings?.canvas?.enabled === true;
+		}
+	} catch {
+		// Ignore — canvas stays disabled by default
+	}
+
 	// Connect WebSocket
 	agent = new WsAgentAdapter();
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -564,7 +590,7 @@ async function initApp() {
 			refreshJsonlPanel();
 		}
 
-		if (ev.type === "tool_execution_end" && (ev as any).toolName === "canvas") {
+		if (canvasFeatureEnabled && ev.type === "tool_execution_end" && (ev as any).toolName === "canvas") {
 			const details = (ev as any).result?.details;
 			if (details?.markdown) {
 				showCanvas(details.title || "Canvas", details.markdown);
@@ -582,16 +608,30 @@ async function initApp() {
 		}
 	});
 
+	// Re-fetch feature flags and appearance when local settings change
+	agent.onSessionsChanged(async (file) => {
+		if (file !== "__local_settings__") return;
+		try {
+			const res = await fetch("/api/settings/local");
+			if (res.ok) {
+				const data = await res.json();
+				canvasFeatureEnabled = data.settings?.canvas?.enabled === true;
+			}
+		} catch { /* ignore */ }
+		await resyncAppearanceFromServer();
+		renderApp();
+	});
+
 	// Session switch
 	agent.onSessionChange(async () => {
 		steeringQueue = agent.steeringQueue;
-		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
+		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		setJsonlSessionPath(agent.sessionFile);
 		autoScroll = true;
 		lastScrollTop = 0;
 		ignoreScrollEvents = false;
-		// Auto-close sidebar on mobile after session switch
-		if (isMobile()) sidebarOpen = false;
+		// Auto-close sidebar overlay on mobile after session switch
+		if (isMobile()) mobileSidebarOpen = false;
 		renderApp();
 		requestAnimationFrame(() => {
 			const editor = document.querySelector("message-editor") as any;
@@ -602,7 +642,7 @@ async function initApp() {
 
 	// Content change — just re-render
 	agent.onContentChange(() => {
-		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
+		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		refreshJsonlPanel();
 		renderApp();
 		scrollToBottomIfNeeded();

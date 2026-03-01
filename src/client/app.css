@@ -159,9 +159,9 @@ html, body {
 	padding-right: 0.35rem !important;
 }
 
-/* ── Sidebar reopen button (shown when sidebar is hidden) ──────────── */
+/* ── Mobile sidebar open button (hamburger, shown only on mobile) ──── */
 
-.sidebar-reopen-btn {
+.mobile-sidebar-btn {
 	position: absolute;
 	top: 0.5rem;
 	left: 0.5rem;
@@ -181,7 +181,7 @@ html, body {
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
-.sidebar-reopen-btn:hover {
+.mobile-sidebar-btn:hover {
 	background: var(--accent, rgba(0, 0, 0, 0.05));
 	color: var(--foreground, #111);
 }
