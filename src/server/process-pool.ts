@@ -241,12 +241,22 @@ export class ProcessPool {
 	/**
 	 * Pre-warm the pool with processes for the given cwd.
 	 */
-	prewarm(cwd: string): void {
+	/**
+	 * Pre-warm the pool with processes for the given cwd.
+	 * Spawns are staggered: each process must be ready (via get_state RPC)
+	 * before the next one is spawned. This prevents lock contention on
+	 * shared resources like auth.json during startup.
+	 */
+	async prewarm(cwd: string): Promise<void> {
 		const existing = this.pools.get(cwd)?.filter((p) => p.process.exitCode === null).length ?? 0;
 		const needed = Math.min(this.prewarmCount, this.maxProcesses) - existing;
 		for (let i = 0; i < needed; i++) {
 			if (this.totalProcesses >= this.maxProcesses) break;
-			this.spawn(cwd);
+			const proc = this.spawn(cwd);
+			if (i < needed - 1) {
+				// Wait for this process to be ready before spawning the next one
+				await this.waitForReady(proc);
+			}
 		}
 	}
 
