@@ -95,13 +95,23 @@ test.describe("Rerun duplicate rendering regression", () => {
 
 	test("message_end should not cause duplicate tool blocks", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(2000);
+
+		// Wait for session items to load
+		await page.waitForFunction(() => {
+			const picker = document.querySelector("session-picker") as any;
+			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) > 0;
+		}, null, { timeout: 10000 });
 
 		// Select session
 		await page.evaluate(() => {
 			(document.querySelector("session-picker") as any).shadowRoot.querySelector(".session-item")?.click();
 		});
-		await page.waitForTimeout(2000);
+
+		// Wait for tool-message to appear (session loaded)
+		await page.waitForFunction(() =>
+			document.querySelectorAll("tool-message").length > 0,
+			null, { timeout: 10000 },
+		);
 
 		// Verify initial: 1 tool-message (from aborted run)
 		let toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);

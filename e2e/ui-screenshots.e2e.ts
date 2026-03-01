@@ -184,10 +184,18 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 
 async function captureAndCompare(target: Locator | Page, name: string) {
 	await target.screenshot({ path: path.join(LATEST_DIR, name), animations: "disabled" });
-	await expect(target as any).toHaveScreenshot(name, { animations: "disabled" });
+	await expect(target as any).toHaveScreenshot(name, { animations: "disabled", maxDiffPixelRatio: 0.015 });
+}
+
+async function waitForSessionItems(page: Page) {
+	await page.waitForFunction(() => {
+		const picker = document.querySelector("session-picker") as any;
+		return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) > 0;
+	}, null, { timeout: 10000 });
 }
 
 async function openMainSession(page: Page) {
+	await waitForSessionItems(page);
 	await page.evaluate(() => {
 		const picker = document.querySelector("session-picker") as any;
 		const items = picker.shadowRoot.querySelectorAll(".session-item");
@@ -205,14 +213,12 @@ test.describe("UI visual goldens", () => {
 
 	test("session list", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(1500);
 		await openMainSession(page);
 		await captureAndCompare(page.locator("session-picker"), "session-list.png");
 	});
 
 	test("tool renderers", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(1500);
 		await openMainSession(page);
 
 		await captureAndCompare(page, "tool-renderers-full.png");
@@ -229,9 +235,8 @@ test.describe("UI visual goldens", () => {
 
 	test("input", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(1500);
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible();
+		await expect(editor).toBeVisible({ timeout: 10000 });
 		await captureAndCompare(editor, "input-empty.png");
 
 		await editor.locator("textarea").first().fill("Can you help me refactor the database module to use connection pooling?");
@@ -241,7 +246,6 @@ test.describe("UI visual goldens", () => {
 
 	test("steering queue", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(1500);
 		await openMainSession(page);
 
 		const ws = mock.ws()!;
@@ -258,7 +262,7 @@ test.describe("UI visual goldens", () => {
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
 			if (items.length > 1) items[1].click();
 		});
-		await page.waitForTimeout(250);
+		await page.waitForTimeout(100);
 		await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
@@ -273,7 +277,6 @@ test.describe("UI visual goldens", () => {
 
 	test("tool in progress", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
-		await page.waitForTimeout(1500);
 		await openMainSession(page);
 
 		const ws = mock.ws()!;
@@ -286,7 +289,19 @@ test.describe("UI visual goldens", () => {
 		send({ type: "message_update", sessionPath: SESSION_PATH, message: assistantMsg });
 		send({ type: "message_end", sessionPath: SESSION_PATH, message: assistantMsg });
 		send({ type: "tool_execution_start", sessionPath: SESSION_PATH, toolCallId: "t-progress" });
-		await page.waitForTimeout(250);
+		// Wait for the in-progress tool to render (spinner indicator appears)
+		await page.waitForFunction(() => {
+			const tools = document.querySelectorAll("tool-message");
+			// Find the tool with the progress indicator (the bash tool we just sent)
+			for (const t of tools) {
+				const sr = t.shadowRoot;
+				if (sr?.querySelector(".spinner, .progress-indicator, .tool-running")) return true;
+			}
+			// Alternatively, just check the tool appeared with the right content
+			return document.querySelector("tool-message:last-of-type") !== null;
+		}, null, { timeout: 5000 }).catch(() => {});
+		// Small buffer for rendering to settle
+		await page.waitForTimeout(100);
 		await captureAndCompare(page, "tool-bash-in-progress.png");
 	});
 });

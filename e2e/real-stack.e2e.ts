@@ -34,11 +34,12 @@ test.describe("Real stack e2e", () => {
 		]);
 
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible();
+		await expect(editor).toBeVisible({ timeout: 10000 });
+		// Wait for WebSocket to be fully connected (textarea becomes interactive)
 		const textarea = editor.locator("textarea").first();
+		await expect(textarea).toBeEnabled({ timeout: 5000 });
 		await textarea.fill("Hello, can you help me?");
 		await textarea.press("Meta+Enter");
 
@@ -71,10 +72,9 @@ test.describe("Real stack e2e", () => {
 		]);
 
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible();
+		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("Please read the config file");
 		await textarea.press("Meta+Enter");
@@ -102,9 +102,9 @@ test.describe("Real stack e2e", () => {
 		]);
 
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
 
 		const editor = page.locator("message-editor");
+		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("read config.ts");
 		await textarea.press("Meta+Enter");
@@ -123,7 +123,9 @@ test.describe("Real stack e2e", () => {
 		]);
 
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
+
+		// Wait for editor to be ready (WS connected)
+		await expect(page.locator("message-editor")).toBeVisible({ timeout: 10000 });
 
 		// Open JSONL viewer
 		await page.getByTitle("Toggle raw JSONL viewer").click();
@@ -152,9 +154,9 @@ test.describe("Real stack e2e", () => {
 		]);
 
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
 
 		const editor = page.locator("message-editor");
+		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("Help me refactor this module");
 		await textarea.press("Meta+Enter");
@@ -162,16 +164,10 @@ test.describe("Real stack e2e", () => {
 		// Wait for response
 		await expect(page.getByText("I'll help with that", { exact: false }).first()).toBeVisible({ timeout: 15000 });
 
-		// The session picker should show the session
-		const picker = page.locator("session-picker");
-		await expect(picker).toBeVisible();
-
-		// Session list should have at least one item
-		await page.waitForTimeout(2000);
-		const sessionCount = await page.evaluate(() => {
+		// The session picker should show the session — wait for at least one item
+		await page.waitForFunction(() => {
 			const picker = document.querySelector("session-picker") as any;
-			return picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0;
-		});
-		expect(sessionCount).toBeGreaterThanOrEqual(1);
+			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) >= 1;
+		}, null, { timeout: 10000 });
 	});
 });

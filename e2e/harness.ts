@@ -65,6 +65,50 @@ async function getFreePort(): Promise<number> {
 	});
 }
 
+/**
+ * Warm up the pi process pool by requesting model info via WebSocket.
+ * This triggers pi process acquisition without creating any sessions,
+ * ensuring the first test doesn't pay the cold-start penalty.
+ */
+async function warmUpPiProcess(port: number): Promise<void> {
+	const { default: WebSocket } = await import("ws");
+
+	const ws = new WebSocket(`ws://localhost:${port}/ws`);
+
+	await new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			ws.close();
+			reject(new Error("Warm-up timed out"));
+		}, 30000);
+
+		ws.on("open", () => {
+			// Request model info — this triggers the pi process pool to
+			// acquire a process and validate the configuration without
+			// creating any sessions.
+			ws.send(JSON.stringify({
+				type: "get_default_model",
+				id: "warmup_1",
+			}));
+		});
+
+		ws.on("message", (data) => {
+			try {
+				const msg = JSON.parse(data.toString());
+				if (msg.type === "response" && msg.id === "warmup_1") {
+					clearTimeout(timeout);
+					ws.close();
+					resolve();
+				}
+			} catch { /* ignore parse errors */ }
+		});
+
+		ws.on("error", (err) => {
+			clearTimeout(timeout);
+			reject(err);
+		});
+	});
+}
+
 export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> {
 	// 1. Start mock LLM
 	const mockLlm = await createMockLlmServer(scenarios);
@@ -173,13 +217,21 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 
 	// 7. Wait for server to be ready
 	try {
-		await waitForPort(piWebPort);
+		await waitForPort(piWebPort, 30000);
 	} catch (err) {
 		console.error("[pi-web] stdout:", stdout);
 		console.error("[pi-web] stderr:", stderr);
 		child.kill("SIGTERM");
 		await mockLlm.close();
 		throw err;
+	}
+
+	// 8. Warm up the pi process pool by sending a probe prompt via WebSocket.
+	//    This ensures the first real test doesn't pay the pi cold-start cost.
+	try {
+		await warmUpPiProcess(piWebPort);
+	} catch (err) {
+		console.error("[pi-web] warm-up failed (non-fatal):", err);
 	}
 
 	return {

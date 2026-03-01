@@ -98,10 +98,9 @@ test.describe("Session CWD stability", () => {
 
 		// Step 1: Go to the app and send a first prompt to establish a project group
 		await page.goto(`http://localhost:${harness.piWebPort}`);
-		await page.waitForTimeout(2000);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible();
+		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("First session message");
 		await textarea.press("Meta+Enter");
@@ -111,8 +110,11 @@ test.describe("Session CWD stability", () => {
 			page.getByText("first response from the mock", { exact: false }),
 		).toBeVisible({ timeout: 15000 });
 
-		// Wait for sidebar to settle
-		await page.waitForTimeout(2000);
+		// Wait for sidebar to have at least one session item
+		await page.waitForFunction(() => {
+			const picker = document.querySelector("session-picker") as any;
+			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) >= 1;
+		}, null, { timeout: 10000 });
 
 		// Discover the actual project cwd as the server sees it (may differ due to
 		// macOS /tmp → /private/tmp symlink resolution).
@@ -123,17 +125,27 @@ test.describe("Session CWD stability", () => {
 		const projectCwd = groups.find((g) => g.endsWith(projectBasename));
 		expect(projectCwd).toBeTruthy();
 
+		// On macOS, /tmp is a symlink to /private/tmp. The server may resolve it
+		// to the real path after session creation. Normalize for comparison.
+		const normalizeCwd = (p: string) => p.replace(/^\/private\/tmp\//, "/tmp/");
+
 		// The active session should be in the project group
 		const activeCwd1 = await getActiveSessionGroupCwd(page);
-		expect(activeCwd1).toBe(projectCwd);
+		expect(activeCwd1).toBeTruthy();
+		expect(normalizeCwd(activeCwd1!)).toBe(normalizeCwd(projectCwd!));
 
 		// Step 2: Click the "+" button on the project group to create a new session
+		const sessionCountBefore = await getSessionCount(page);
 		await clickGroupNewButton(page, projectCwd!);
-		await page.waitForTimeout(500);
+		// Wait for the new session item to appear
+		await page.waitForFunction((expected) => {
+			const picker = document.querySelector("session-picker") as any;
+			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) > expected;
+		}, sessionCountBefore, { timeout: 5000 });
 
 		// The new (virtual) session should immediately appear in the correct group
 		const activeCwdAfterNew = await getActiveSessionGroupCwd(page);
-		expect(activeCwdAfterNew).toBe(projectCwd);
+		expect(normalizeCwd(activeCwdAfterNew!)).toBe(normalizeCwd(projectCwd!));
 
 		// Step 3: Set up a new scenario and send a message in the new session
 		harness.setScenarios([
@@ -145,7 +157,7 @@ test.describe("Session CWD stability", () => {
 
 		// Check the session is still in the right group right before sending
 		const activeCwdBeforeSend = await getActiveSessionGroupCwd(page);
-		expect(activeCwdBeforeSend).toBe(projectCwd);
+		expect(normalizeCwd(activeCwdBeforeSend!)).toBe(normalizeCwd(projectCwd!));
 
 		// Send the message
 		await textarea2.press("Meta+Enter");
@@ -204,8 +216,10 @@ test.describe("Session CWD stability", () => {
 		}
 
 		// Verify: the session was NEVER outside the project group
+		// (normalize to handle macOS /tmp → /private/tmp symlink)
+		const normalizedProjectCwd = normalizeCwd(projectCwd!);
 		const wrongResults = pollResults.filter(
-			(r) => r.cwd !== null && r.cwd !== projectCwd,
+			(r) => r.cwd !== null && normalizeCwd(r.cwd) !== normalizedProjectCwd,
 		);
 
 		if (wrongResults.length > 0) {
@@ -222,6 +236,6 @@ test.describe("Session CWD stability", () => {
 
 		// Also verify the session eventually settled in the right group
 		const finalCwd = pollResults[pollResults.length - 1]?.cwd;
-		expect(finalCwd).toBe(projectCwd);
+		expect(normalizeCwd(finalCwd!)).toBe(normalizedProjectCwd);
 	});
 });
