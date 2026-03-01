@@ -467,6 +467,17 @@ markdown-block pre code {
 /* ── Mobile: sidebar overlay + side panels full-width ──────────── */
 
 @media (max-width: 768px) {
+	/* Tighter horizontal padding for conversation & input */
+	#chat-scroll-area > .p-4 {
+		padding-left: 0.5rem !important;
+		padding-right: 0.5rem !important;
+	}
+
+	.shrink-0 > .px-2 {
+		padding-left: 0.25rem !important;
+		padding-right: 0.25rem !important;
+	}
+
 	.sidebar-mobile-overlay {
 		position: fixed;
 		inset: 0;
