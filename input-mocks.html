@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Input Box Redesign Mocks — pi-web</title>
+<style>
+  /* Gruvbox dark palette */
+  :root {
+    --bg0: #282828;
+    --bg1: #3c3836;
+    --bg2: #504945;
+    --bg3: #665c54;
+    --bg4: #7c6f64;
+    --fg0: #fbf1c7;
+    --fg1: #ebdbb2;
+    --fg2: #d5c4a1;
+    --fg3: #bdae93;
+    --fg4: #a89984;
+    --red: #fb4934;
+    --green: #b8bb26;
+    --yellow: #fabd2f;
+    --blue: #83a598;
+    --purple: #d3869b;
+    --aqua: #8ec07c;
+    --orange: #fe8019;
+    --border: #665c54;
+    --card: #3c3836;
+    --muted: #504945;
+    --muted-fg: #a89984;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg0);
+    color: var(--fg1);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 2rem;
+  }
+
+  h1 {
+    text-align: center;
+    color: var(--fg2);
+    font-size: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--fg4);
+    font-size: 0.85rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .mock {
+    background: var(--bg0);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .mock-label {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .mock-label h2 {
+    font-size: 0.9rem;
+    color: var(--blue);
+    font-weight: 600;
+  }
+
+  .mock-label p {
+    font-size: 0.75rem;
+    color: var(--fg4);
+  }
+
+  /* Shared icon styles */
+  .icon {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .icon-sm { width: 14px; height: 14px; }
+
+  /* Simulated context: messages above + status below */
+  .context-above {
+    padding: 12px 16px;
+    font-size: 0.8rem;
+    color: var(--fg4);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg0);
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px;
+    font-size: 0.7rem;
+    color: var(--fg4);
+    background: color-mix(in srgb, var(--muted) 50%, var(--card));
+    border-top: 1px solid var(--border);
+  }
+
+  .status-bar .left, .status-bar .right { display: flex; align-items: center; gap: 8px; }
+
+  /* placeholder text */
+  textarea::placeholder, input::placeholder {
+    color: var(--muted-fg);
+    opacity: 0.7;
+  }
+
+  textarea, input[type="text"] {
+    font-family: inherit;
+    font-size: 0.875rem;
+    color: var(--fg1);
+    background: transparent;
+    border: none;
+    outline: none;
+    resize: none;
+  }
+
+  /* Button base */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s, transform 0.1s;
+  }
+
+  .btn:hover { background: var(--bg2); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--muted-fg);
+  }
+
+  .btn-ghost:hover { color: var(--fg1); background: var(--bg2); }
+
+  .btn-icon {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+  }
+
+  .btn-sm {
+    height: 28px;
+    padding: 0 8px;
+    font-size: 0.75rem;
+  }
+
+  .send-icon { transform: translateY(2px) rotate(-45deg); }
+
+  /* ============================== */
+  /* CURRENT (reference)            */
+  /* ============================== */
+  .current-input {
+    background: var(--card);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .current-input textarea {
+    width: 100%;
+    padding: 16px;
+  }
+
+  .current-input .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 8px 8px;
+    border-top: 1px solid var(--border);
+    background: color-mix(in srgb, var(--muted) 50%, var(--card));
+    border-radius: 0 0 12px 12px;
+    padding-top: 6px;
+  }
+
+  .current-input .toolbar .left,
+  .current-input .toolbar .right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .model-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: var(--muted-fg);
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .model-tag:hover { background: var(--bg2); color: var(--fg1); }
+
+  .token-usage {
+    font-size: 0.7rem;
+    color: var(--fg4);
+    padding: 4px 6px;
+  }
+
+  /* ============================== */
+  /* MOCK 1: Floating pill           */
+  /* ============================== */
+  .mock1 {
+    background: var(--bg1);
+    border-radius: 24px;
+    border: 1px solid var(--border);
+    padding: 4px;
+    display: flex;
+    align-items: flex-end;
+    gap: 4px;
+  }
+
+  .mock1 textarea {
+    flex: 1;
+    padding: 10px 16px;
+    min-height: 20px;
+  }
+
+  .mock1 .side-btns {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-right: 4px;
+    padding-bottom: 2px;
+  }
+
+  .mock1 .send-btn {
+    background: var(--blue);
+    color: var(--bg0);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .mock1 .send-btn:hover { opacity: 0.85; }
+
+  /* ============================== */
+  /* MOCK 2: Minimal underline       */
+  /* ============================== */
+  .mock2-wrap {
+    padding: 0 4px 8px;
+  }
+
+  .mock2 {
+    border-bottom: 2px solid var(--bg3);
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 8px 0;
+    transition: border-color 0.2s;
+  }
+
+  .mock2:focus-within { border-color: var(--blue); }
+
+  .mock2 textarea {
+    flex: 1;
+    padding: 4px 0;
+  }
+
+  .mock2 .meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 4px;
+  }
+
+  /* ============================== */
+  /* MOCK 3: Inset toolbar card      */
+  /* ============================== */
+  .mock3 {
+    background: var(--bg1);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .mock3 .top-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    font-size: 0.7rem;
+  }
+
+  .mock3 textarea {
+    width: 100%;
+    padding: 12px 16px;
+  }
+
+  .mock3 .bottom-row {
+    display: flex;
+    justify-content: flex-end;
+    padding: 6px 8px;
+  }
+
+  /* ============================== */
+  /* MOCK 4: Terminal / code style   */
+  /* ============================== */
+  .mock4 {
+    background: var(--bg0);
+    border: 1px solid var(--bg3);
+    border-radius: 8px;
+    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+    overflow: hidden;
+  }
+
+  .mock4 .prompt-line {
+    display: flex;
+    align-items: flex-start;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .mock4 .prompt-char {
+    color: var(--aqua);
+    font-weight: 700;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    user-select: none;
+  }
+
+  .mock4 textarea {
+    flex: 1;
+    font-family: inherit;
+    font-size: 0.85rem;
+    padding: 0;
+    line-height: 1.4;
+  }
+
+  .mock4 .bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 12px;
+    background: var(--bg1);
+    border-top: 1px solid var(--bg3);
+    font-size: 0.7rem;
+    color: var(--fg4);
+  }
+
+  .mock4 .bar .left, .mock4 .bar .right { display: flex; gap: 8px; align-items: center; }
+
+  /* ============================== */
+  /* MOCK 5: Compact single-line     */
+  /* ============================== */
+  .mock5 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 6px 6px 14px;
+  }
+
+  .mock5 textarea {
+    flex: 1;
+    padding: 6px 0;
+  }
+
+  .mock5 .actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .mock5 .send-pill {
+    background: var(--blue);
+    color: var(--bg0);
+    border: none;
+    border-radius: 8px;
+    height: 32px;
+    padding: 0 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: opacity 0.15s;
+  }
+
+  .mock5 .send-pill:hover { opacity: 0.85; }
+
+  /* ============================== */
+  /* MOCK 6: Slack-inspired          */
+  /* ============================== */
+  .mock6 {
+    background: var(--card);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .mock6 .format-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  }
+
+  .mock6 .format-bar .divider {
+    width: 1px;
+    height: 16px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+
+  .mock6 textarea {
+    width: 100%;
+    padding: 12px 16px;
+  }
+
+  .mock6 .bottom-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--muted) 40%, var(--card));
+    border-top: 1px solid var(--border);
+  }
+
+  .mock6 .bottom-toolbar .left,
+  .mock6 .bottom-toolbar .right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .mock6 .send-btn-accent {
+    background: var(--aqua);
+    color: var(--bg0);
+    border: none;
+    border-radius: 6px;
+    height: 28px;
+    width: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .mock6 .send-btn-accent:hover { opacity: 0.85; }
+
+  /* ============================== */
+  /* MOCK 7: Glass / translucent     */
+  /* ============================== */
+  .mock7 {
+    background: rgba(60, 56, 54, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 16px;
+    border: 1px solid rgba(102, 92, 84, 0.5);
+    padding: 4px;
+  }
+
+  .mock7 .inner {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .mock7 .left-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 0 4px 8px;
+  }
+
+  .mock7 textarea {
+    flex: 1;
+    padding: 10px 8px;
+  }
+
+  .mock7 .right-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 4px 0;
+  }
+
+  .mock7 .send-glow {
+    background: var(--blue);
+    color: var(--bg0);
+    border: none;
+    border-radius: 10px;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 0 12px rgba(131, 165, 152, 0.3);
+    transition: box-shadow 0.2s, opacity 0.15s;
+  }
+
+  .mock7 .send-glow:hover { box-shadow: 0 0 20px rgba(131, 165, 152, 0.5); }
+
+  /* ============================== */
+  /* MOCK 8: Outlined focus ring     */
+  /* ============================== */
+  .mock8 {
+    border: 2px solid var(--bg3);
+    border-radius: 12px;
+    background: var(--bg0);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    overflow: hidden;
+  }
+
+  .mock8:focus-within {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 3px rgba(131, 165, 152, 0.15);
+  }
+
+  .mock8 textarea {
+    width: 100%;
+    padding: 14px 16px 10px;
+  }
+
+  .mock8 .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px 6px;
+  }
+
+  .mock8 .toolbar .left,
+  .mock8 .toolbar .right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .mock8 .kbd {
+    font-size: 0.65rem;
+    color: var(--fg4);
+    background: var(--bg2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+  }
+
+  /* ============================== */
+  /* MOCK 9: Elevated shadow card    */
+  /* ============================== */
+  .mock9 {
+    background: var(--bg1);
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.35), 0 1px 4px rgba(0,0,0,0.2);
+    overflow: hidden;
+  }
+
+  .mock9 textarea {
+    width: 100%;
+    padding: 14px 16px 8px;
+  }
+
+  .mock9 .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 6px;
+  }
+
+  .mock9 .toolbar .left,
+  .mock9 .toolbar .right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .mock9 .accent-send {
+    background: linear-gradient(135deg, var(--blue), var(--aqua));
+    color: var(--bg0);
+    border: none;
+    border-radius: 8px;
+    height: 30px;
+    width: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .mock9 .accent-send:hover { opacity: 0.85; }
+
+  /* ============================== */
+  /* MOCK 10: Split – input / bar    */
+  /* ============================== */
+  .mock10 {
+    overflow: hidden;
+  }
+
+  .mock10 .input-area {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    display: flex;
+    align-items: flex-end;
+    padding: 4px;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .mock10 textarea {
+    flex: 1;
+    padding: 10px 12px;
+  }
+
+  .mock10 .send-square {
+    background: var(--blue);
+    color: var(--bg0);
+    border: none;
+    border-radius: 8px;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .mock10 .send-square:hover { opacity: 0.85; }
+
+  .mock10 .detached-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    font-size: 0.7rem;
+    color: var(--fg4);
+    border-radius: 8px;
+    background: var(--bg1);
+    border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  }
+
+  .mock10 .detached-bar .left,
+  .mock10 .detached-bar .right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Util */
+  .flex { display: flex; }
+  .items-center { align-items: center; }
+  .gap-1 { gap: 4px; }
+  .gap-2 { gap: 8px; }
+  .text-muted { color: var(--muted-fg); }
+  .text-xs { font-size: 0.7rem; }
+</style>
+</head>
+<body>
+
+<h1>Input Box Redesign — 10 Mocks</h1>
+<p class="subtitle">Gruvbox dark theme · Improving cohesion with the rest of pi-web</p>
+
+<div class="grid">
+
+<!-- ===== CURRENT ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>Current</h2>
+    <p>Reference — the existing input box</p>
+  </div>
+  <div class="current-input">
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="toolbar">
+      <div class="left">
+        <button class="btn btn-ghost btn-icon">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <button class="btn btn-ghost btn-icon" style="width:auto;padding:0 6px;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>
+        </button>
+      </div>
+      <div class="right">
+        <span class="model-tag">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M12 3l1.5 4.5H18l-3.5 2.5L16 14.5 12 11.5 8 14.5l1.5-4.5L6 7.5h4.5z"/></svg>
+          gpt-5.3-codex
+        </span>
+        <span class="token-usage">↑64k ↓4.6k $0.279</span>
+        <button class="btn btn-ghost btn-icon">
+          <svg class="icon send-icon" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 1: Floating pill ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>1. Floating Pill</h2>
+    <p>Rounded pill shape with accent send button — like iMessage / ChatGPT</p>
+  </div>
+  <div class="mock1">
+    <button class="btn btn-ghost btn-icon" style="margin-bottom:2px;">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+    </button>
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="side-btns">
+      <span class="model-tag" style="font-size:0.65rem;">gpt-5.3-codex</span>
+      <button class="send-btn">
+        <svg class="icon send-icon" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 2: Minimal underline ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>2. Minimal Underline</h2>
+    <p>Clean bottom-border only — focus activates accent color</p>
+  </div>
+  <div class="mock2-wrap">
+    <div class="mock2">
+      <button class="btn btn-ghost btn-icon">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <textarea placeholder="Type a message..." rows="1"></textarea>
+      <div class="meta">
+        <span style="font-size:0.65rem;color:var(--fg4);">gpt-5.3-codex</span>
+        <span style="font-size:0.65rem;color:var(--fg4);">↑64k ↓4.6k</span>
+        <button class="btn btn-ghost btn-icon">
+          <svg class="icon send-icon" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 3: Toolbar on top ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>3. Toolbar on Top</h2>
+    <p>Model & attachments in a tinted header bar — textarea below</p>
+  </div>
+  <div class="mock3">
+    <div class="top-toolbar">
+      <button class="btn btn-ghost btn-icon" style="width:24px;height:24px;">
+        <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <span style="color:var(--fg4);font-size:0.7rem;">gpt-5.3-codex</span>
+      <span style="flex:1;"></span>
+      <span style="color:var(--fg4);font-size:0.65rem;">↑64k ↓4.6k $0.279</span>
+    </div>
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="bottom-row">
+      <button class="btn btn-ghost btn-icon">
+        <svg class="icon send-icon" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 4: Terminal style ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>4. Terminal / Code</h2>
+    <p>Monospaced with a prompt character — matches the dev-tool aesthetic</p>
+  </div>
+  <div class="mock4">
+    <div class="prompt-line">
+      <span class="prompt-char">❯</span>
+      <textarea placeholder="Type a message..." rows="1" style="font-family:inherit;"></textarea>
+    </div>
+    <div class="bar">
+      <div class="left">
+        <button class="btn btn-ghost btn-icon" style="width:24px;height:24px;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <span>gpt-5.3-codex</span>
+        <span style="opacity:0.5;">|</span>
+        <span>↑64k ↓4.6k $0.279</span>
+      </div>
+      <div class="right">
+        <span style="color:var(--aqua);font-size:0.65rem;">⏎ send</span>
+        <span style="color:var(--fg4);font-size:0.65rem;">⎋ stop</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 5: Compact single-line ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>5. Compact Row</h2>
+    <p>Everything in one dense row with a colored Send pill</p>
+  </div>
+  <div class="mock5">
+    <button class="btn btn-ghost btn-icon" style="width:28px;height:28px;">
+      <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+    </button>
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="actions">
+      <span style="font-size:0.65rem;color:var(--fg4);margin-right:4px;">gpt-5.3-codex</span>
+      <button class="send-pill">
+        <svg class="icon-sm icon send-icon" viewBox="0 0 24 24" style="stroke:var(--bg0);"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        Send
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 6: Slack-inspired ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>6. Slack-Inspired</h2>
+    <p>Format bar on top, tools + send on bottom — familiar chat UI</p>
+  </div>
+  <div class="mock6">
+    <div class="format-bar">
+      <button class="btn btn-ghost btn-icon" style="width:26px;height:26px;"><strong style="font-size:0.8rem;color:var(--muted-fg);">B</strong></button>
+      <button class="btn btn-ghost btn-icon" style="width:26px;height:26px;"><em style="font-size:0.8rem;color:var(--muted-fg);">I</em></button>
+      <button class="btn btn-ghost btn-icon" style="width:26px;height:26px;"><span style="font-size:0.75rem;color:var(--muted-fg);font-family:monospace;">&lt;/&gt;</span></button>
+      <div class="divider"></div>
+      <button class="btn btn-ghost btn-icon" style="width:26px;height:26px;">
+        <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+    </div>
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="bottom-toolbar">
+      <div class="left">
+        <span class="model-tag" style="font-size:0.65rem;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M12 3l1.5 4.5H18l-3.5 2.5L16 14.5 12 11.5 8 14.5l1.5-4.5L6 7.5h4.5z"/></svg>
+          gpt-5.3-codex
+        </span>
+        <span class="text-xs text-muted">↑64k ↓4.6k $0.279</span>
+      </div>
+      <div class="right">
+        <button class="send-btn-accent">
+          <svg class="icon send-icon" viewBox="0 0 24 24" style="stroke:var(--bg0);"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 7: Glass / translucent ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>7. Frosted Glass</h2>
+    <p>Translucent backdrop blur — floats above content</p>
+  </div>
+  <div class="mock7">
+    <div class="inner">
+      <div class="left-actions">
+        <button class="btn btn-ghost btn-icon">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+      </div>
+      <textarea placeholder="Type a message..." rows="1"></textarea>
+      <div class="right-actions">
+        <span style="font-size:0.65rem;color:var(--fg4);">gpt-5.3-codex</span>
+        <button class="send-glow">
+          <svg class="icon send-icon" viewBox="0 0 24 24" style="stroke:var(--bg0);"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 8: Outlined focus ring ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>8. Focus Ring</h2>
+    <p>Subtle border that lights up on focus — keyboard hint in toolbar</p>
+  </div>
+  <div class="mock8">
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="toolbar">
+      <div class="left">
+        <button class="btn btn-ghost btn-icon" style="width:28px;height:28px;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <span class="model-tag" style="font-size:0.65rem;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M12 3l1.5 4.5H18l-3.5 2.5L16 14.5 12 11.5 8 14.5l1.5-4.5L6 7.5h4.5z"/></svg>
+          gpt-5.3-codex
+        </span>
+      </div>
+      <div class="right">
+        <span class="text-xs text-muted">↑64k ↓4.6k $0.279</span>
+        <button class="btn btn-ghost btn-icon" style="width:28px;height:28px;">
+          <svg class="icon send-icon" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+        <span class="kbd">⏎</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 9: Elevated shadow card ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>9. Elevated Card</h2>
+    <p>Strong drop-shadow lifts the input — gradient accent send button</p>
+  </div>
+  <div class="mock9">
+    <textarea placeholder="Type a message..." rows="1"></textarea>
+    <div class="toolbar">
+      <div class="left">
+        <button class="btn btn-ghost btn-icon" style="width:28px;height:28px;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
+        <span class="model-tag" style="font-size:0.65rem;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M12 3l1.5 4.5H18l-3.5 2.5L16 14.5 12 11.5 8 14.5l1.5-4.5L6 7.5h4.5z"/></svg>
+          gpt-5.3-codex
+        </span>
+        <span class="text-xs text-muted">↑64k ↓4.6k $0.279</span>
+      </div>
+      <div class="right">
+        <button class="accent-send">
+          <svg class="icon send-icon" viewBox="0 0 24 24" style="stroke:var(--bg0);"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== MOCK 10: Split input + bar ===== -->
+<div class="mock">
+  <div class="mock-label">
+    <h2>10. Split Input + Bar</h2>
+    <p>Detached metadata bar beneath the input — clean separation</p>
+  </div>
+  <div class="mock10">
+    <div class="input-area">
+      <button class="btn btn-ghost btn-icon" style="margin-bottom:2px;">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+      <textarea placeholder="Type a message..." rows="1"></textarea>
+      <button class="send-square">
+        <svg class="icon send-icon" viewBox="0 0 24 24" style="stroke:var(--bg0);"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      </button>
+    </div>
+    <div class="detached-bar">
+      <div class="left">
+        <span class="model-tag" style="font-size:0.65rem;padding:2px 4px;">
+          <svg class="icon-sm icon" viewBox="0 0 24 24"><path d="M12 3l1.5 4.5H18l-3.5 2.5L16 14.5 12 11.5 8 14.5l1.5-4.5L6 7.5h4.5z"/></svg>
+          gpt-5.3-codex
+        </span>
+      </div>
+      <div class="right">
+        <span>↑64k ↓4.6k $0.279</span>
+        <span style="color:var(--aqua);">⏎ send</span>
+        <span>⎋ stop</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /grid -->
+
+</body>
+</html>

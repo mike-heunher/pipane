@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>+ Button Design Mockups</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a1a;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    padding: 2rem;
+  }
+  h1 { text-align: center; margin-bottom: 0.5rem; font-size: 1.5rem; color: #ccc; }
+  .subtitle { text-align: center; color: #777; margin-bottom: 2rem; font-size: 0.85rem; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 2rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  .mockup {
+    background: #232323;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #333;
+  }
+  .mockup-label {
+    background: #2a2a2a;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.7rem;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+  }
+  .mockup-label .num { color: #666; }
+
+  /* ── Shared picker chrome ── */
+  .picker {
+    --bg: #2b2520;
+    --border: #3d3530;
+    --text: #d4c8b8;
+    --muted: #8a7e70;
+    --active: #7c9a5e;
+    --active-bg: rgba(124,154,94,0.1);
+    background: var(--bg);
+    font-size: 13px;
+    min-height: 340px;
+    display: flex;
+    flex-direction: column;
+  }
+  .picker .hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .picker .hdr-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .picker .search-box {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .picker .search-box input {
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.8rem;
+    outline: none;
+  }
+  .picker .group-hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.75rem 0.15rem;
+  }
+  .picker .group-label {
+    font-size: 0.58rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .picker .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    border: none;
+    background: none;
+    width: 100%;
+    text-align: left;
+    color: var(--text);
+    cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .picker .item:hover { background: rgba(255,255,255,0.03); }
+  .picker .item.active {
+    background: var(--active-bg);
+    border-left-color: var(--active);
+  }
+  .picker .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    margin-top: 5px;
+    flex-shrink: 0;
+  }
+  .picker .dot.green { background: var(--active); }
+  .picker .dot.gray { background: var(--muted); opacity: 0.5; }
+  .picker .dot.red { background: #c45; }
+  .picker .item-content { flex: 1; min-width: 0; }
+  .picker .item-name {
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .picker .item-meta {
+    font-size: 0.65rem;
+    color: var(--muted);
+    margin-top: 1px;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .picker .badge {
+    background: rgba(124,154,94,0.25);
+    color: var(--active);
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 600;
+  }
+  .picker .list { flex: 1; overflow-y: auto; padding: 0.25rem 0; }
+
+  /* ── Current design (reference) ── */
+  .current-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+  }
+  .current-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    padding: 0;
+    background: color-mix(in srgb, var(--muted) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 700;
+    line-height: 1;
+    border-radius: 999px;
+    opacity: 0.82;
+  }
+
+  /* ── Design variants ── */
+
+  /* 1: Filled pill with icon */
+  .d1-btn {
+    background: linear-gradient(135deg, rgba(124,154,94,0.2), rgba(124,154,94,0.1));
+    border: 1px solid rgba(124,154,94,0.3);
+    color: var(--active);
+    cursor: pointer;
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    transition: all 0.15s;
+  }
+  .d1-btn:hover {
+    background: linear-gradient(135deg, rgba(124,154,94,0.3), rgba(124,154,94,0.15));
+    border-color: rgba(124,154,94,0.5);
+  }
+  .d1-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.2rem;
+    height: 1.2rem;
+    padding: 0;
+    background: rgba(124,154,94,0.15);
+    border: 1px solid rgba(124,154,94,0.3);
+    color: var(--active);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1;
+    border-radius: 999px;
+  }
+
+  /* 2: Ghost button, no border */
+  .d2-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+  .d2-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
+  .d2-btn svg { opacity: 0.7; }
+  .d2-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 300;
+    border-radius: 4px;
+    opacity: 0.6;
+  }
+  .d2-group-btn:hover { opacity: 1; background: rgba(255,255,255,0.06); }
+
+  /* 3: Rounded square icon-only */
+  .d3-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    font-weight: 300;
+    transition: all 0.15s;
+  }
+  .d3-btn:hover {
+    color: var(--active);
+    border-color: rgba(124,154,94,0.4);
+    background: rgba(124,154,94,0.1);
+  }
+  .d3-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 500;
+    border-radius: 3px;
+    opacity: 0.7;
+  }
+
+  /* 4: Underline link style */
+  .d4-btn {
+    background: none;
+    border: none;
+    color: var(--active);
+    cursor: pointer;
+    padding: 0.15rem 0;
+    font-size: 0.72rem;
+    font-weight: 500;
+    text-decoration: underline;
+    text-decoration-color: rgba(124,154,94,0.3);
+    text-underline-offset: 2px;
+    transition: all 0.15s;
+  }
+  .d4-btn:hover { text-decoration-color: var(--active); }
+  .d4-group-btn {
+    background: none;
+    border: none;
+    color: var(--active);
+    cursor: pointer;
+    font-size: 0.55rem;
+    font-weight: 600;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .d4-group-btn:hover { opacity: 1; }
+
+  /* 5: Solid accent button */
+  .d5-btn {
+    background: var(--active);
+    border: none;
+    color: #1a1a16;
+    cursor: pointer;
+    padding: 0.25rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    transition: all 0.15s;
+  }
+  .d5-btn:hover { filter: brightness(1.15); }
+  .d5-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: var(--active);
+    border: none;
+    color: #1a1a16;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 999px;
+  }
+
+  /* 6: Outline pill with SVG plus icon */
+  .d6-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    transition: all 0.15s;
+  }
+  .d6-btn:hover {
+    border-color: var(--muted);
+    color: var(--text);
+  }
+  .d6-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: none;
+    border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 500;
+    border-radius: 999px;
+    opacity: 0.7;
+  }
+
+  /* 7: Floating action circle (FAB-inspired) */
+  .d7-btn {
+    background: rgba(124,154,94,0.15);
+    border: none;
+    color: var(--active);
+    cursor: pointer;
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    font-weight: 300;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    transition: all 0.15s;
+  }
+  .d7-btn:hover {
+    background: rgba(124,154,94,0.25);
+    box-shadow: 0 3px 12px rgba(0,0,0,0.3);
+    transform: scale(1.05);
+  }
+  .d7-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    background: rgba(124,154,94,0.12);
+    border: none;
+    color: var(--active);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 300;
+    border-radius: 50%;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  }
+
+  /* 8: Minimal dash-border */
+  .d8-btn {
+    background: none;
+    border: 1px dashed color-mix(in srgb, var(--muted) 50%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    transition: all 0.15s;
+  }
+  .d8-btn:hover {
+    border-color: var(--muted);
+    color: var(--text);
+    border-style: solid;
+  }
+  .d8-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: none;
+    border: 1px dashed color-mix(in srgb, var(--muted) 35%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 500;
+    border-radius: 999px;
+    opacity: 0.7;
+  }
+
+  /* 9: Thin icon + label separated by divider */
+  .d9-btn {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 0;
+    border-radius: 5px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    overflow: hidden;
+    transition: all 0.15s;
+  }
+  .d9-btn .icon-part {
+    padding: 0.2rem 0.35rem;
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+  }
+  .d9-btn .text-part {
+    padding: 0.2rem 0.4rem;
+  }
+  .d9-btn:hover { color: var(--text); border-color: var(--muted); }
+  .d9-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 0.7rem;
+    font-weight: 600;
+    border-radius: 4px;
+    opacity: 0.7;
+  }
+
+  /* 10: Glow/neon accent */
+  .d10-btn {
+    background: transparent;
+    border: 1px solid rgba(124,154,94,0.4);
+    color: var(--active);
+    cursor: pointer;
+    padding: 0.22rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    box-shadow: 0 0 6px rgba(124,154,94,0.15), inset 0 0 6px rgba(124,154,94,0.05);
+    transition: all 0.15s;
+  }
+  .d10-btn:hover {
+    box-shadow: 0 0 12px rgba(124,154,94,0.3), inset 0 0 8px rgba(124,154,94,0.1);
+    border-color: rgba(124,154,94,0.6);
+  }
+  .d10-group-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.15rem;
+    height: 1.15rem;
+    background: transparent;
+    border: 1px solid rgba(124,154,94,0.35);
+    color: var(--active);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: 999px;
+    box-shadow: 0 0 5px rgba(124,154,94,0.12);
+  }
+
+  .note {
+    text-align: center;
+    color: #555;
+    font-size: 0.75rem;
+    margin-top: 2rem;
+    padding-bottom: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>+ Button Redesign Mockups</h1>
+<p class="subtitle">10 variations for the header "+ New" and group "+" buttons — hover to preview interaction states</p>
+
+<div class="grid">
+
+  <!-- CURRENT -->
+  <div class="mockup">
+    <div class="mockup-label"><span>Current Design (reference)</span><span class="num">#0</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="current-btn">+ New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="current-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 1: Filled pill with gradient -->
+  <div class="mockup">
+    <div class="mockup-label"><span>1 — Tinted Accent Pill</span><span class="num">#1</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d1-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d1-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2: Ghost/transparent -->
+  <div class="mockup">
+    <div class="mockup-label"><span>2 — Ghost Button (borderless)</span><span class="num">#2</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d2-btn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d2-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3: Rounded square icon-only -->
+  <div class="mockup">
+    <div class="mockup-label"><span>3 — Rounded Square Icon</span><span class="num">#3</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d3-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d3-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4: Underline link -->
+  <div class="mockup">
+    <div class="mockup-label"><span>4 — Underline Link</span><span class="num">#4</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d4-btn">+ New session</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d4-group-btn">+ NEW</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5: Solid filled -->
+  <div class="mockup">
+    <div class="mockup-label"><span>5 — Solid Accent Fill</span><span class="num">#5</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d5-btn"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d5-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6: Outline pill -->
+  <div class="mockup">
+    <div class="mockup-label"><span>6 — Outline Pill + SVG Icon</span><span class="num">#6</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d6-btn"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d6-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7: FAB circle -->
+  <div class="mockup">
+    <div class="mockup-label"><span>7 — Floating Circle (FAB)</span><span class="num">#7</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d7-btn"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d7-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8: Dashed border -->
+  <div class="mockup">
+    <div class="mockup-label"><span>8 — Dashed Outline</span><span class="num">#8</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d8-btn"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d8-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9: Split button -->
+  <div class="mockup">
+    <div class="mockup-label"><span>9 — Split Icon + Label</span><span class="num">#9</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d9-btn"><span class="icon-part"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span><span class="text-part">New</span></button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d9-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10: Glow/neon -->
+  <div class="mockup">
+    <div class="mockup-label"><span>10 — Subtle Glow Accent</span><span class="num">#10</span></div>
+    <div class="picker">
+      <div class="hdr">
+        <span class="hdr-title">Sessions</span>
+        <button class="d10-btn"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>New</button>
+      </div>
+      <div class="search-box"><input placeholder="Search sessions…" /></div>
+      <div class="list">
+        <div class="group-hdr"><span class="group-label">PI-WEB</span><button class="d10-group-btn">+</button></div>
+        <div class="item active"><span class="dot green"></span><div class="item-content"><div class="item-name">Fix themed skeleton modal save behavior</div><div class="item-meta">1m ago <span class="badge">106</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Add settings.json path filters UI editor</div><div class="item-meta">13m ago <span class="badge">167</span></div></div></div>
+        <div class="item"><span class="dot gray"></span><div class="item-content"><div class="item-name">Fix session search reset behavior</div><div class="item-meta">13m ago <span class="badge">56</span></div></div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<p class="note">Hover over each button to see interaction states. All designs use the same warm theme color palette from pi-web.</p>
+
+</body>
+</html>

@@ -49,6 +49,8 @@ let autoScroll = true;
 let lastScrollTop = 0;
 let ignoreScrollEvents = false;
 
+const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
+
 traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
 // Token usage visibility toggle
@@ -339,7 +341,7 @@ const renderApp = () => {
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-border shrink-0">
+			<div class="flex items-center justify-between border-b border-border shrink-0 ${isDevMode ? 'dev-header' : ''}">
 				<div class="flex items-center gap-2 px-4 py-2">
 					<button
 						class="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
@@ -351,7 +353,7 @@ const renderApp = () => {
 							<line x1="9" y1="3" x2="9" y2="21"></line>
 						</svg>
 					</button>
-					<span class="text-base font-semibold text-foreground">pi web</span>
+					<span class="text-base font-semibold text-foreground">${isDevMode ? "pi web · dev" : "pi web"}</span>
 				</div>
 				<div class="flex items-center gap-1 px-2">
 					<button

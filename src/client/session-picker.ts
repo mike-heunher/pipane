@@ -77,18 +77,20 @@ export class SessionPicker extends LitElement {
 
 		.new-btn {
 			background: none;
-			border: 1px solid var(--picker-border);
-			color: var(--picker-muted);
+			border: none;
+			color: var(--picker-active, #7c9a5e);
 			cursor: pointer;
-			padding: 0.2rem 0.5rem;
-			border-radius: 4px;
-			font-size: 0.75rem;
-			transition: all 0.15s;
+			padding: 0;
+			font-size: 0.55rem;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			opacity: 0.6;
+			transition: opacity 0.15s;
 		}
 
 		.new-btn:hover {
-			color: var(--picker-text);
-			border-color: var(--picker-muted);
+			opacity: 1;
 		}
 
 		.search {
@@ -147,36 +149,26 @@ export class SessionPicker extends LitElement {
 		}
 
 		.group-new-btn {
-			display: inline-flex;
-			align-items: center;
-			justify-content: center;
-			width: 1.1rem;
-			height: 1.1rem;
-			padding: 0;
-			background: color-mix(in srgb, var(--picker-muted) 14%, transparent);
-			border: 1px solid color-mix(in srgb, var(--picker-muted) 35%, transparent);
-			color: var(--picker-muted);
+			background: none;
+			border: none;
+			color: var(--picker-active, #7c9a5e);
 			cursor: pointer;
-			font-size: 0.74rem;
-			font-weight: 700;
-			line-height: 1;
-			border-radius: 999px;
-			opacity: 0.82;
-			transition: all 0.15s ease;
+			padding: 0;
+			font-size: 0.55rem;
+			font-weight: 600;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+			opacity: 0.6;
+			transition: opacity 0.15s;
 			flex-shrink: 0;
 		}
 
 		.group-new-btn:hover {
 			opacity: 1;
-			color: var(--picker-active);
-			border-color: color-mix(in srgb, var(--picker-active) 55%, transparent);
-			background: color-mix(in srgb, var(--picker-active) 18%, transparent);
-			transform: translateY(-0.5px);
 		}
 
 		.group-new-btn:focus-visible {
 			outline: none;
-			box-shadow: 0 0 0 2px color-mix(in srgb, var(--picker-active) 35%, transparent);
 			opacity: 1;
 		}
 
@@ -1045,7 +1037,7 @@ export class SessionPicker extends LitElement {
 			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
 				<div class="header">
 					<span class="header-title">Sessions</span>
-					<button class="new-btn" @click=${this.openFolderPicker}>+ New</button>
+					<button class="new-btn" @click=${this.openFolderPicker}>+ NEW</button>
 				</div>
 				<div class="search">
 					<input
@@ -1119,7 +1111,7 @@ export class SessionPicker extends LitElement {
 					class="group-new-btn"
 					@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd); }}
 					title="New session in ${group.cwd}"
-				>+</button>
+				>+ NEW</button>
 			</div>
 			${repeat(
 				visibleSessions,

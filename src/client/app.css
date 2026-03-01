@@ -37,6 +37,14 @@ html, body {
 	max-width: 100%;
 }
 
+/* ── Dev-mode header tint ───────────────────────────────────────────────
+   A muted red wash across the entire header bar so dev is unmistakable. */
+
+.dev-header {
+	background: color-mix(in srgb, var(--destructive, #dc2626) 15%, var(--background, #fff));
+	border-bottom-color: color-mix(in srgb, var(--destructive, #dc2626) 30%, var(--border, #e5e7eb));
+}
+
 /* ── Ultra-dense tool blocks ────────────────────────────────────────────── */
 
 .tool-header-label {
