@@ -4,10 +4,6 @@ A clean web interface for the **pi coding agent**. Open any pi conversation in p
 
 `pipane` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
 
-## Screenshot
-
-![pipane screenshot](docs/assets/pi-web-screenshot.png)
-
 ## Walkthrough
 
 Hero shot:
