@@ -31,7 +31,7 @@ echo "🚀 Starting pi-web in production mode (tmux: $SESSION)..."
 echo "   http://localhost:$PORT"
 
 tmux new-session -d -s "$SESSION" -c "$(pwd)" \
-  "PORT=$PORT PI_CWD=$PI_CWD NODE_ENV=production node $BUILD_DIR/server/server.js"
+  "PORT=$PORT PI_CWD=$PI_CWD NODE_ENV=production node $BUILD_DIR/server/server/server.js"
 
 echo "✅ Running in tmux session '$SESSION'"
 echo "   Attach: tmux attach -t $SESSION"
