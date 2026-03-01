@@ -28,20 +28,42 @@ test.describe("Real stack e2e", () => {
 		await harness?.close();
 	});
 
+	/** Navigate to the app and start a fresh (virtual) session for a clean test. */
+	async function gotoFreshSession(page: import("@playwright/test").Page) {
+		await page.goto(`http://localhost:${harness.piWebPort}`);
+		const editor = page.locator("message-editor");
+		await expect(editor).toBeVisible({ timeout: 10000 });
+		const textarea = editor.locator("textarea").first();
+		await expect(textarea).toBeEnabled({ timeout: 5000 });
+
+		// If there are existing sessions (from prior tests), the page auto-loads
+		// the most recent one. Create a new virtual session so tests start clean.
+		const hasExistingSessions = await page.evaluate(() => {
+			const picker = document.querySelector("session-picker") as any;
+			if (!picker?.shadowRoot) return false;
+			return picker.shadowRoot.querySelectorAll(".session-item").length > 0;
+		});
+		if (hasExistingSessions) {
+			await page.evaluate(() => {
+				const picker = document.querySelector("session-picker") as any;
+				const btn = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
+				btn?.click();
+			});
+			await page.waitForTimeout(300);
+		}
+	}
+
 	test("can send a prompt and see the response", async ({ page }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await gotoFreshSession(page);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible({ timeout: 10000 });
-		// Wait for WebSocket to be fully connected (textarea becomes interactive)
 		const textarea = editor.locator("textarea").first();
-		await expect(textarea).toBeEnabled({ timeout: 5000 });
 		await textarea.fill("Hello, can you help me?");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		// Wait for an assistant message to appear
 		const assistantMsg = page.locator("assistant-message").first();
@@ -71,13 +93,12 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await gotoFreshSession(page);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("Please read the config file");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		// Wait for tool-message to appear (the read tool was called)
 		await expect(page.locator("tool-message").first()).toBeVisible({ timeout: 15000 });
@@ -101,13 +122,12 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await gotoFreshSession(page);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("read config.ts");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		// Wait for the custom tool renderer to appear
 		const toolMsg = page.locator("tool-message").first();
@@ -122,10 +142,7 @@ test.describe("Real stack e2e", () => {
 			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
-
-		// Wait for editor to be ready (WS connected)
-		await expect(page.locator("message-editor")).toBeVisible({ timeout: 10000 });
+		await gotoFreshSession(page);
 
 		// Open JSONL viewer
 		await page.getByTitle("Toggle raw JSONL viewer").click();
@@ -134,7 +151,7 @@ test.describe("Real stack e2e", () => {
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("jump-test prompt");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		await expect(page.getByText("I can help you with your project", { exact: false }).first()).toBeVisible({ timeout: 15000 });
 		await expect(page.locator(".jsonl-entry").first()).toBeVisible({ timeout: 15000 });
@@ -167,13 +184,12 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await gotoFreshSession(page);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("run the loop");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		// Wait for tool-message to appear (the bash tool was called)
 		await expect(page.locator("tool-message").first()).toBeVisible({ timeout: 15000 });
@@ -194,13 +210,12 @@ test.describe("Real stack e2e", () => {
 			{ match: /.*/, chunks: textChunks("Sure, I'll help with that.") },
 		]);
 
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await gotoFreshSession(page);
 
 		const editor = page.locator("message-editor");
-		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("Help me refactor this module");
-		await textarea.press("Meta+Enter");
+		await textarea.press("Enter");
 
 		// Wait for response
 		await expect(page.getByText("I'll help with that", { exact: false }).first()).toBeVisible({ timeout: 15000 });

@@ -237,6 +237,14 @@ test.describe("UI visual goldens", () => {
 		await page.goto(`http://localhost:${mock.port}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
+		// The page auto-loads the latest session which may open the canvas panel.
+		// Close it to get a consistent editor width for the screenshot.
+		await page.waitForTimeout(300);
+		const canvasCloseBtn = page.locator("button.canvas-close");
+		if (await canvasCloseBtn.isVisible().catch(() => false)) {
+			await canvasCloseBtn.click();
+			await page.waitForTimeout(200);
+		}
 		await captureAndCompare(editor, "input-empty.png");
 
 		await editor.locator("textarea").first().fill("Can you help me refactor the database module to use connection pooling?");
