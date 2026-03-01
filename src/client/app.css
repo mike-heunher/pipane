@@ -150,13 +150,13 @@ html, body {
 
 /* Reduce conversation horizontal padding */
 #chat-scroll-area > .p-4 {
-	padding-left: 0.75rem !important;
-	padding-right: 0.75rem !important;
+	padding-left: 0.35rem !important;
+	padding-right: 0.35rem !important;
 }
 
 .shrink-0 > .px-2 {
-	padding-left: 0.35rem !important;
-	padding-right: 0.35rem !important;
+	padding-left: 0.15rem !important;
+	padding-right: 0.15rem !important;
 }
 
 /* ── Mobile sidebar open button (hamburger, shown only on mobile) ──── */
@@ -480,13 +480,13 @@ markdown-block pre code {
 @media (max-width: 768px) {
 	/* Tighter horizontal padding for conversation & input */
 	#chat-scroll-area > .p-4 {
-		padding-left: 0.5rem !important;
-		padding-right: 0.5rem !important;
+		padding-left: 0.25rem !important;
+		padding-right: 0.25rem !important;
 	}
 
 	.shrink-0 > .px-2 {
-		padding-left: 0.25rem !important;
-		padding-right: 0.25rem !important;
+		padding-left: 0.1rem !important;
+		padding-right: 0.1rem !important;
 	}
 
 	.sidebar-mobile-overlay {
