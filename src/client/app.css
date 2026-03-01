@@ -9,12 +9,20 @@
 	display: none !important;
 }
 
-/* ── Slack-style input: bottom toolbar gets tinted bg + top border ── */
+/* ── Flat full-width input: remove card frame, tint toolbar ── */
 
+/* Strip the card container (rounded-xl, border, shadow, bg) */
+message-editor > div {
+	background: transparent !important;
+	border: none !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+}
+
+/* Toolbar gets a tinted background */
 message-editor > div > .px-2.pb-2 {
-	border-top: 1px solid var(--border, #e5e7eb);
-	background: color-mix(in srgb, var(--muted, #f3f4f6) 50%, var(--card, #fff));
-	border-radius: 0 0 0.75rem 0.75rem;
+	background: color-mix(in srgb, var(--muted, #f3f4f6) 50%, var(--background, #fff));
+	border-radius: 0;
 	padding-top: 0.35rem;
 	padding-bottom: 0.35rem;
 }

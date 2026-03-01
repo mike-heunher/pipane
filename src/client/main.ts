@@ -422,7 +422,7 @@ const renderApp = () => {
 						<div class="flex-1 overflow-hidden relative flex flex-col">
 							<!-- Messages area -->
 							<div id="chat-scroll-area" class="flex-1 overflow-y-auto" @scroll=${handleScroll}>
-								<div class="max-w-3xl mx-auto p-4 pb-0">
+								<div class="max-w-3xl mx-auto p-4 pb-4">
 									<pi-message-list
 										.messages=${messages}
 										.isStreaming=${isStreaming}
@@ -433,7 +433,7 @@ const renderApp = () => {
 							<!-- Steering queue (between messages and input) -->
 							${renderSteeringQueue()}
 							<!-- Input area -->
-							<div class="shrink-0 pt-2.5 pb-1">
+							<div class="shrink-0 border-t border-border">
 								<div class="max-w-3xl mx-auto px-2">
 									<message-editor
 										.isStreaming=${isStreaming}

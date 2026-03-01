@@ -150,7 +150,7 @@ test.describe("Wide viewport layout", () => {
 
 		// Also check the input area wrapper
 		const inputWidths = await page.evaluate(() => {
-			const inputArea = document.querySelector(".shrink-0.pt-2\\.5");
+			const inputArea = document.querySelector(".shrink-0.border-t");
 			const inputWrapper = inputArea?.querySelector("div") as HTMLElement | null;
 
 			if (!inputWrapper) return null;
