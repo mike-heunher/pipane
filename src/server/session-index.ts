@@ -109,12 +109,17 @@ export class SessionIndex {
 		sessions.sort((a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime());
 
 		if (mutated) {
-			this.writeCache({
-				cacheFormatVersion: CACHE_FORMAT_VERSION,
-				extractorVersion: this.extractorVersion,
-				generatedAt: new Date().toISOString(),
-				entries: nextEntries,
-			});
+			try {
+				this.writeCache({
+					cacheFormatVersion: CACHE_FORMAT_VERSION,
+					extractorVersion: this.extractorVersion,
+					generatedAt: new Date().toISOString(),
+					entries: nextEntries,
+				});
+			} catch {
+				// Cache writes are best-effort. Listing sessions must still succeed
+				// on read-only agent dirs or transient filesystem errors.
+			}
 		}
 
 		return sessions;

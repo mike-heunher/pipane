@@ -130,4 +130,21 @@ describe("SessionIndex", () => {
 		const cache2 = JSON.parse(readFileSync(cachePath, "utf8"));
 		expect(cache2.extractorVersion).toBe("v2");
 	});
+
+	it("keeps listing sessions when cache write fails", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "sess-a", cwd: "/tmp/project-a", timestamp: "2026-01-01T10:00:00.000Z" },
+			{ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T10:00:02.000Z", message: { role: "user", timestamp: 1700000000000, content: "hello" } },
+		]);
+
+		const index = new SessionIndex({ agentDir, extractorVersion: "test-v1" });
+		(index as any).writeCache = () => {
+			throw new Error("simulated write failure");
+		};
+
+		const sessions = await index.listSessions();
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0].id).toBe("sess-a");
+	});
 });
