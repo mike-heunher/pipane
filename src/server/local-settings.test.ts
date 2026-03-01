@@ -329,4 +329,84 @@ describe("local-settings", () => {
 			expect(existsSync(settingsPath)).toBe(true);
 		});
 	});
+
+	describe("toolCollapse setting", () => {
+		it("accepts valid toolCollapse with keepOpen", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: { keepOpen: 3 },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings?.toolCollapse?.keepOpen).toBe(3);
+		});
+
+		it("accepts toolCollapse with keepOpen 0", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: { keepOpen: 0 },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings?.toolCollapse?.keepOpen).toBe(0);
+		});
+
+		it("rejects negative keepOpen", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: { keepOpen: -1 },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("non-negative integer");
+		});
+
+		it("rejects non-integer keepOpen", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: { keepOpen: 2.5 },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("non-negative integer");
+		});
+
+		it("rejects non-object toolCollapse", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: "invalid",
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("toolCollapse must be an object");
+		});
+
+		it("settings without toolCollapse remain valid", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings?.toolCollapse).toBeUndefined();
+		});
+
+		it("saves and loads toolCollapse setting", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const saved = store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				toolCollapse: { keepOpen: 5 },
+			}));
+			expect(saved.valid).toBe(true);
+
+			const store2 = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			expect(store2.settings.toolCollapse?.keepOpen).toBe(5);
+		});
+	});
 });

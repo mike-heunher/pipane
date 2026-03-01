@@ -31,6 +31,7 @@ import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, can
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
+import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 import { formatUsage } from "@mariozechner/pi-web-ui";
@@ -253,6 +254,7 @@ async function openLocalSettingsModal() {
 	try {
 		await openLocalSettingsDialog({
 			onSaved: () => {
+				loadAutoCollapseSettings();
 				renderApp();
 				const picker = document.querySelector("session-picker") as any;
 				picker?.refreshSessions?.();
@@ -472,6 +474,7 @@ const renderApp = () => {
 	requestAnimationFrame(() => {
 		configureMessageEditor();
 		scrollToBottomIfNeeded();
+		runAutoCollapse();
 		const canvasEl = document.getElementById("canvas-container");
 		if (canvasEl) initCanvas(canvasEl, renderApp);
 		const jsonlEl = document.getElementById("jsonl-container");
@@ -629,6 +632,7 @@ async function initApp() {
 	// Session switch
 	agent.onSessionChange(async () => {
 		steeringQueue = agent.steeringQueue;
+		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		setJsonlSessionPath(agent.sessionFile);
 		autoScroll = true;
@@ -716,6 +720,9 @@ async function initApp() {
 	};
 
 	window.addEventListener("pi-fork-request", handleForkRequest);
+
+	// Load auto-collapse settings
+	loadAutoCollapseSettings();
 
 	// Load models
 	const endLoadModelSpan = traceSpanStart("frontend_load_default_model");

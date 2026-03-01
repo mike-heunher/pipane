@@ -35,6 +35,7 @@ import kotlin from "highlight.js/lib/languages/kotlin";
 import scss from "highlight.js/lib/languages/scss";
 import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight } from "lucide";
 import { showCanvas } from "./canvas-panel.js";
+import { notifyToolToggled } from "./auto-collapse.js";
 
 // Register highlight.js languages
 hljs.registerLanguage("javascript", javascript);
@@ -226,6 +227,10 @@ function handleToggle(e: Event) {
 	if (threadLine) threadLine.style.display = isHidden ? "" : "none";
 	if (chv) {
 		chv.style.transform = isHidden ? "rotate(90deg)" : "";
+	}
+	// Notify auto-collapse so user-opened tools aren't re-collapsed
+	if (isHidden) {
+		notifyToolToggled(wrapper);
 	}
 }
 

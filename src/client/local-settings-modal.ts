@@ -62,6 +62,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 		<summary>Schema hint</summary>
 		<div class="local-settings-hint-body">
 			<p><strong>Path title pipeline:</strong> full cwd → replace HOME prefix with <code>~</code> → apply filters in order.</p>
+			<p><strong>Tool collapse:</strong> <code>keepOpen</code> = number of recent tool calls to leave expanded. <code>0</code> = collapse all finished, <code>999999</code> = disable. Once you manually open a collapsed tool, it stays open.</p>
 			<pre>{
   "version": 1,
   "sidebar": {
@@ -80,12 +81,16 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
     "colorTheme": "gruvbox | default",
     "darkMode": "light | dark | system",
     "showTokenUsage": true
+  },
+  "toolCollapse": {
+    "keepOpen": 3
   }
 }</pre>
 			<p>Each filter supports: <code>pattern</code> (regex), <code>replacement</code> (string), optional <code>flags</code>.</p>
 			<p><strong>Sidebar:</strong> <code>sessionsPerProject</code> controls how many sessions are shown per project before "show more" truncation (positive integer, default 5).</p>
 			<p><strong>Canvas:</strong> <code>enabled</code> activates the canvas tool side panel.</p>
 			<p><strong>Appearance:</strong> <code>colorTheme</code>, <code>darkMode</code>, and <code>showTokenUsage</code> are also togglable from the sidebar menu.</p>
+			<p><strong>Tool collapse:</strong> <code>keepOpen</code> = number of recent tool calls to leave expanded. <code>0</code> = collapse all finished, <code>999999</code> = disable. Once you manually open a collapsed tool, it stays open.</p>
 		</div>
 	`;
 

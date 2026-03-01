@@ -27,6 +27,9 @@ export interface LocalSettings {
 		darkMode: DarkMode;
 		showTokenUsage: boolean;
 	};
+	toolCollapse?: {
+		keepOpen: number;
+	};
 }
 
 export interface LocalSettingsValidationResult {
@@ -403,6 +406,19 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 		}
 	}
 
+	// Validate toolCollapse (optional)
+	let toolCollapse: { keepOpen: number } | undefined;
+	if (value.toolCollapse !== undefined) {
+		const tc = value.toolCollapse;
+		if (!tc || typeof tc !== "object" || Array.isArray(tc)) {
+			errors.push("toolCollapse must be an object");
+		} else if (typeof tc.keepOpen !== "number" || !Number.isFinite(tc.keepOpen) || tc.keepOpen < 0 || Math.floor(tc.keepOpen) !== tc.keepOpen) {
+			errors.push("toolCollapse.keepOpen must be a non-negative integer");
+		} else {
+			toolCollapse = { keepOpen: tc.keepOpen };
+		}
+	}
+
 	if (errors.length > 0) return null;
 
 	return {
@@ -421,6 +437,7 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 			darkMode,
 			showTokenUsage,
 		},
+		...(toolCollapse ? { toolCollapse } : {}),
 	};
 }
 
