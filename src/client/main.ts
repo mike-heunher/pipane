@@ -293,7 +293,13 @@ function renderTokenUsage() {
 
 	try {
 		const parts: string[] = [];
-		if (totals.input) parts.push(`↑${fmtTok(totals.input)}`);
+		const contextWindow = state.model?.contextWindow;
+		if (totals.input && contextWindow) {
+			const pct = Math.round((totals.input / contextWindow) * 100);
+			parts.push(`↑${pct}%/${fmtTok(contextWindow)}`);
+		} else if (totals.input) {
+			parts.push(`↑${fmtTok(totals.input)}`);
+		}
 		if (totals.output) parts.push(`↓${fmtTok(totals.output)}`);
 		if (totals.cost?.total) parts.push(`$${totals.cost.total < 0.01 ? totals.cost.total.toFixed(4) : totals.cost.total < 1 ? totals.cost.total.toFixed(3) : totals.cost.total.toFixed(2)}`);
 		if (!parts.length) return "";
