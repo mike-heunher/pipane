@@ -8,12 +8,23 @@ export interface CwdTitleFilter {
 	flags?: string;
 }
 
+export type ColorTheme = "default" | "gruvbox";
+export type DarkMode = "light" | "dark" | "system";
+
 export interface LocalSettings {
 	version: 1;
 	sidebar: {
 		cwdTitle: {
 			filters: CwdTitleFilter[];
 		};
+	};
+	canvas: {
+		enabled: boolean;
+	};
+	appearance: {
+		colorTheme: ColorTheme;
+		darkMode: DarkMode;
+		showTokenUsage: boolean;
 	};
 }
 
@@ -37,12 +48,23 @@ interface CompiledFilter {
 	replacement: string;
 }
 
+const VALID_COLOR_THEMES: readonly ColorTheme[] = ["default", "gruvbox"];
+const VALID_DARK_MODES: readonly DarkMode[] = ["light", "dark", "system"];
+
 const DEFAULT_SETTINGS: LocalSettings = {
 	version: 1,
 	sidebar: {
 		cwdTitle: {
 			filters: [],
 		},
+	},
+	canvas: {
+		enabled: false,
+	},
+	appearance: {
+		colorTheme: "default",
+		darkMode: "system",
+		showTokenUsage: true,
 	},
 };
 
@@ -93,6 +115,10 @@ export class LocalSettingsStore {
 
 	get errors(): string[] {
 		return [...this.loadErrors];
+	}
+
+	get canvasEnabled(): boolean {
+		return this.currentSettings.canvas.enabled;
 	}
 
 	formatCwdTitle(cwd: string): string {
@@ -244,6 +270,26 @@ export class LocalSettingsStore {
 		this.loadErrors = [];
 		return result;
 	}
+
+	/**
+	 * Merge a partial settings object into the current settings.
+	 * Only the provided top-level sections are merged (deep-merged one level).
+	 */
+	patch(partial: Record<string, any>): LocalSettingsValidationResult {
+		const merged = structuredClone(this.currentSettings) as any;
+
+		for (const key of Object.keys(partial)) {
+			if (key === "version") continue; // never patch version
+			if (merged[key] && typeof merged[key] === "object" && typeof partial[key] === "object" && !Array.isArray(partial[key])) {
+				Object.assign(merged[key], partial[key]);
+			} else {
+				merged[key] = partial[key];
+			}
+		}
+
+		const json = JSON.stringify(merged, null, 2);
+		return this.save(json);
+	}
 }
 
 function validateSettingsObject(value: any, errors: string[]): LocalSettings | null {
@@ -297,6 +343,52 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 		});
 	}
 
+	// canvas section (optional, defaults to { enabled: false })
+	const canvasRaw = value.canvas;
+	let canvasEnabled = false;
+	if (canvasRaw !== undefined) {
+		if (!canvasRaw || typeof canvasRaw !== "object" || Array.isArray(canvasRaw)) {
+			errors.push("canvas must be an object");
+		} else if (typeof canvasRaw.enabled !== "boolean") {
+			errors.push("canvas.enabled must be a boolean");
+		} else {
+			canvasEnabled = canvasRaw.enabled;
+		}
+	}
+
+	// appearance section (optional, defaults to { colorTheme: "default", darkMode: "system", showTokenUsage: true })
+	const appearanceRaw = value.appearance;
+	let colorTheme: ColorTheme = "default";
+	let darkMode: DarkMode = "system";
+	let showTokenUsage = true;
+	if (appearanceRaw !== undefined) {
+		if (!appearanceRaw || typeof appearanceRaw !== "object" || Array.isArray(appearanceRaw)) {
+			errors.push("appearance must be an object");
+		} else {
+			if (appearanceRaw.colorTheme !== undefined) {
+				if (typeof appearanceRaw.colorTheme !== "string" || !VALID_COLOR_THEMES.includes(appearanceRaw.colorTheme as ColorTheme)) {
+					errors.push(`appearance.colorTheme must be one of: ${VALID_COLOR_THEMES.join(", ")}`);
+				} else {
+					colorTheme = appearanceRaw.colorTheme as ColorTheme;
+				}
+			}
+			if (appearanceRaw.darkMode !== undefined) {
+				if (typeof appearanceRaw.darkMode !== "string" || !VALID_DARK_MODES.includes(appearanceRaw.darkMode as DarkMode)) {
+					errors.push(`appearance.darkMode must be one of: ${VALID_DARK_MODES.join(", ")}`);
+				} else {
+					darkMode = appearanceRaw.darkMode as DarkMode;
+				}
+			}
+			if (appearanceRaw.showTokenUsage !== undefined) {
+				if (typeof appearanceRaw.showTokenUsage !== "boolean") {
+					errors.push("appearance.showTokenUsage must be a boolean");
+				} else {
+					showTokenUsage = appearanceRaw.showTokenUsage;
+				}
+			}
+		}
+	}
+
 	if (errors.length > 0) return null;
 
 	return {
@@ -305,6 +397,14 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 			cwdTitle: {
 				filters,
 			},
+		},
+		canvas: {
+			enabled: canvasEnabled,
+		},
+		appearance: {
+			colorTheme,
+			darkMode,
+			showTokenUsage,
 		},
 	};
 }

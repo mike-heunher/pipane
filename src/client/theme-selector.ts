@@ -1,38 +1,37 @@
 /**
- * Theme selector component for pipane.
+ * Theme selector — reads/writes appearance settings via the server settings API.
  *
  * Manages two orthogonal settings:
  *   1. Color theme: "default" | "gruvbox" (stored as data-color-theme on <html>)
  *   2. Light/dark mode: "light" | "dark" | "system" (the existing .dark class)
  *
- * Replaces the simple <theme-toggle> with a dropdown that shows both options.
+ * Settings are persisted to ~/.piweb/settings.json via PATCH /api/settings/local.
+ * localStorage is used as a fast cache for immediate application on page load
+ * (avoids flash of wrong theme before the API responds).
  */
-
-import { html, render } from "lit";
 
 export type ColorTheme = "default" | "gruvbox";
 export type DarkMode = "light" | "dark" | "system";
 
-const COLOR_THEMES: { id: ColorTheme; label: string }[] = [
-	{ id: "default", label: "Default" },
-	{ id: "gruvbox", label: "Gruvbox" },
-];
+// ── Fast cache for instant page-load application ──────────────────────────
 
-const DARK_MODES: { id: DarkMode; label: string; icon: string }[] = [
-	{ id: "light", label: "Light", icon: "☀️" },
-	{ id: "dark", label: "Dark", icon: "🌙" },
-	{ id: "system", label: "System", icon: "💻" },
-];
-
-/** Read persisted color theme */
+/** Read cached color theme (for instant page-load apply) */
 export function getColorTheme(): ColorTheme {
 	return (localStorage.getItem("color-theme") as ColorTheme) || "default";
 }
 
-/** Read persisted dark mode preference */
+/** Read cached dark mode preference (for instant page-load apply) */
 export function getDarkMode(): DarkMode {
 	return (localStorage.getItem("theme") as DarkMode) || "system";
 }
+
+/** Read cached token usage visibility */
+export function getShowTokenUsage(): boolean {
+	const val = localStorage.getItem("pipane-show-token-usage");
+	return val === null ? true : val === "true";
+}
+
+// ── DOM application ───────────────────────────────────────────────────────
 
 /** Apply the color theme attribute to <html> */
 function applyColorTheme(theme: ColorTheme) {
@@ -51,13 +50,21 @@ function applyDarkMode(mode: DarkMode) {
 	document.documentElement.classList.toggle("dark", isDark);
 }
 
-/** Set color theme + persist */
+/** Apply token usage visibility class */
+function applyShowTokenUsage(show: boolean) {
+	document.documentElement.classList.toggle("hide-token-usage", !show);
+}
+
+// ── Setters (update cache + DOM + persist to server) ─────────────────────
+
+/** Set color theme: update cache, DOM, and persist to server */
 export function setColorTheme(theme: ColorTheme) {
 	localStorage.setItem("color-theme", theme);
 	applyColorTheme(theme);
+	patchAppearance({ colorTheme: theme });
 }
 
-/** Set dark mode + persist */
+/** Set dark mode: update cache, DOM, and persist to server */
 export function setDarkMode(mode: DarkMode) {
 	if (mode === "system") {
 		localStorage.removeItem("theme");
@@ -65,12 +72,36 @@ export function setDarkMode(mode: DarkMode) {
 		localStorage.setItem("theme", mode);
 	}
 	applyDarkMode(mode);
+	patchAppearance({ darkMode: mode });
 }
 
-/** Initialize themes on page load */
+/** Set token usage visibility: update cache, DOM, and persist to server */
+export function setShowTokenUsage(show: boolean) {
+	localStorage.setItem("pipane-show-token-usage", String(show));
+	applyShowTokenUsage(show);
+	patchAppearance({ showTokenUsage: show });
+}
+
+// ── Server persistence ────────────────────────────────────────────────────
+
+function patchAppearance(partial: Record<string, any>) {
+	fetch("/api/settings/local", {
+		method: "PATCH",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ appearance: partial }),
+	}).catch((err) => {
+		console.error("Failed to persist appearance setting:", err);
+	});
+}
+
+// ── Initialization ────────────────────────────────────────────────────────
+
+/** Initialize themes on page load using cached values, then sync from server */
 export function initThemes() {
+	// Apply immediately from cache (fast, no flash)
 	applyColorTheme(getColorTheme());
 	applyDarkMode(getDarkMode());
+	applyShowTokenUsage(getShowTokenUsage());
 
 	// Listen for system preference changes
 	window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -78,95 +109,48 @@ export function initThemes() {
 			applyDarkMode("system");
 		}
 	});
+
+	// Sync from server (the server settings are the source of truth)
+	syncFromServer();
+}
+
+/** Fetch settings from server and update local cache + DOM if different */
+async function syncFromServer() {
+	try {
+		const res = await fetch("/api/settings/local");
+		if (!res.ok) return;
+		const data = await res.json();
+		const appearance = data?.settings?.appearance;
+		if (!appearance) return;
+
+		if (appearance.colorTheme && appearance.colorTheme !== getColorTheme()) {
+			localStorage.setItem("color-theme", appearance.colorTheme);
+			applyColorTheme(appearance.colorTheme);
+		}
+		if (appearance.darkMode && appearance.darkMode !== getDarkMode()) {
+			if (appearance.darkMode === "system") {
+				localStorage.removeItem("theme");
+			} else {
+				localStorage.setItem("theme", appearance.darkMode);
+			}
+			applyDarkMode(appearance.darkMode);
+		}
+		if (typeof appearance.showTokenUsage === "boolean") {
+			const cached = getShowTokenUsage();
+			if (appearance.showTokenUsage !== cached) {
+				localStorage.setItem("pipane-show-token-usage", String(appearance.showTokenUsage));
+				applyShowTokenUsage(appearance.showTokenUsage);
+			}
+		}
+	} catch {
+		// Server may not be available yet; local cache is fine as fallback
+	}
 }
 
 /**
- * Render the theme selector button + dropdown into a container element.
- * Call this from renderApp() to keep it reactive.
+ * Re-sync appearance settings from server. Call when local settings change
+ * notification arrives via WebSocket.
  */
-export function createThemeSelector(): HTMLElement {
-	const wrapper = document.createElement("div");
-	wrapper.className = "theme-selector-wrap";
-
-	let open = false;
-
-	const renderSelector = () => {
-		const currentMode = getDarkMode();
-		const currentTheme = getColorTheme();
-		const modeInfo = DARK_MODES.find((m) => m.id === currentMode) || DARK_MODES[2];
-
-		const tpl = html`
-			<button
-				class="theme-selector-btn"
-				@click=${(e: Event) => {
-					e.stopPropagation();
-					open = !open;
-					renderSelector();
-				}}
-				title="Theme settings"
-			>
-				<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-					<circle cx="12" cy="12" r="5"></circle>
-					<line x1="12" y1="1" x2="12" y2="3"></line>
-					<line x1="12" y1="21" x2="12" y2="23"></line>
-					<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-					<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-					<line x1="1" y1="12" x2="3" y2="12"></line>
-					<line x1="21" y1="12" x2="23" y2="12"></line>
-					<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-					<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-				</svg>
-			</button>
-			${open
-				? html`
-					<div class="theme-selector-dropdown" @click=${(e: Event) => e.stopPropagation()}>
-						<div class="theme-selector-section-label">Color Theme</div>
-						${COLOR_THEMES.map(
-							(t) => html`
-								<button
-									class="theme-selector-option ${currentTheme === t.id ? "is-active" : ""}"
-									@click=${() => {
-										setColorTheme(t.id);
-										renderSelector();
-									}}
-								>
-									<span class="theme-selector-check">${currentTheme === t.id ? "✓" : ""}</span>
-									${t.label}
-								</button>
-							`,
-						)}
-						<div class="theme-selector-divider"></div>
-						<div class="theme-selector-section-label">Appearance</div>
-						${DARK_MODES.map(
-							(m) => html`
-								<button
-									class="theme-selector-option ${currentMode === m.id ? "is-active" : ""}"
-									@click=${() => {
-										setDarkMode(m.id);
-										renderSelector();
-									}}
-								>
-									<span class="theme-selector-check">${currentMode === m.id ? "✓" : ""}</span>
-									<span>${m.icon}</span>
-									${m.label}
-								</button>
-							`,
-						)}
-					</div>
-				`
-				: ""}
-		`;
-		render(tpl, wrapper);
-	};
-
-	// Close dropdown on outside click
-	document.addEventListener("click", () => {
-		if (open) {
-			open = false;
-			renderSelector();
-		}
-	});
-
-	renderSelector();
-	return wrapper;
+export async function resyncAppearanceFromServer() {
+	await syncFromServer();
 }

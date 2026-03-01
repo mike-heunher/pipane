@@ -134,4 +134,137 @@ describe("local-settings", () => {
 		]);
 		expect(out).toBe("workspace/pipane");
 	});
+
+	describe("appearance settings", () => {
+		it("defaults appearance when not specified", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const read = store.read();
+			expect(read.settings.appearance).toEqual({
+				colorTheme: "default",
+				darkMode: "system",
+				showTokenUsage: true,
+			});
+		});
+
+		it("saves and reads appearance settings", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				appearance: { colorTheme: "gruvbox", darkMode: "dark", showTokenUsage: false },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings!.appearance).toEqual({
+				colorTheme: "gruvbox",
+				darkMode: "dark",
+				showTokenUsage: false,
+			});
+		});
+
+		it("rejects invalid colorTheme", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				appearance: { colorTheme: "nope" },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("appearance.colorTheme");
+		});
+
+		it("rejects invalid darkMode", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				appearance: { darkMode: "nope" },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("appearance.darkMode");
+		});
+
+		it("rejects non-boolean showTokenUsage", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				appearance: { showTokenUsage: "yes" },
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("appearance.showTokenUsage");
+		});
+
+		it("allows partial appearance (missing fields get defaults)", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				appearance: { colorTheme: "gruvbox" },
+			}));
+			expect(result.valid).toBe(true);
+			expect(result.settings!.appearance).toEqual({
+				colorTheme: "gruvbox",
+				darkMode: "system",
+				showTokenUsage: true,
+			});
+		});
+	});
+
+	describe("patch", () => {
+		it("merges a partial appearance update into existing settings", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [{ pattern: "^~/dev/", replacement: "dev/" }] } },
+				appearance: { colorTheme: "default", darkMode: "system", showTokenUsage: true },
+			}));
+
+			const result = store.patch({ appearance: { darkMode: "dark" } });
+			expect(result.valid).toBe(true);
+			expect(result.settings!.appearance).toEqual({
+				colorTheme: "default",
+				darkMode: "dark",
+				showTokenUsage: true,
+			});
+			// sidebar filters should be preserved
+			expect(result.settings!.sidebar.cwdTitle.filters).toHaveLength(1);
+		});
+
+		it("patches token usage without affecting other sections", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				canvas: { enabled: true },
+				appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
+			}));
+
+			const result = store.patch({ appearance: { showTokenUsage: false } });
+			expect(result.valid).toBe(true);
+			expect(result.settings!.appearance.showTokenUsage).toBe(false);
+			expect(result.settings!.appearance.colorTheme).toBe("gruvbox");
+			expect(result.settings!.appearance.darkMode).toBe("light");
+			expect(result.settings!.canvas.enabled).toBe(true);
+		});
+
+		it("rejects invalid patch values", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+			}));
+
+			const result = store.patch({ appearance: { colorTheme: "invalid" } });
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("appearance.colorTheme");
+		});
+
+		it("works when no settings file exists yet", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.patch({ appearance: { darkMode: "dark" } });
+			expect(result.valid).toBe(true);
+			expect(result.settings!.appearance.darkMode).toBe("dark");
+			expect(existsSync(settingsPath)).toBe(true);
+		});
+	});
 });

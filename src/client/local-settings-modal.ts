@@ -70,9 +70,15 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
         { "pattern": "^dev/pipane$", "replacement": "pipane (dev)" }
       ]
     }
+  },
+  "appearance": {
+    "colorTheme": "default | gruvbox",
+    "darkMode": "light | dark | system",
+    "showTokenUsage": true
   }
 }</pre>
 			<p>Each filter supports: <code>pattern</code> (regex), <code>replacement</code> (string), optional <code>flags</code>.</p>
+			<p><strong>Appearance:</strong> <code>colorTheme</code>, <code>darkMode</code>, and <code>showTokenUsage</code> are also togglable from the sidebar menu.</p>
 		</div>
 	`;
 

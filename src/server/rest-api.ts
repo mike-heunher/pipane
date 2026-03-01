@@ -15,13 +15,12 @@ import { LocalSettingsStore } from "./local-settings.js";
 
 interface RegisterRestApiOptions {
 	traceStore?: LoadTraceStore;
+	localSettingsStore?: LocalSettingsStore;
 	onLocalSettingsReloaded?: () => void;
 }
 
-const localSettingsStore = new LocalSettingsStore();
-const sessionIndex = new SessionIndex({
-	cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
-});
+let localSettingsStore: LocalSettingsStore;
+let sessionIndex: SessionIndex;
 
 let localSettingsWatcherStarted = false;
 
@@ -51,6 +50,10 @@ async function readJsonBody(req: any): Promise<any> {
 
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}) {
 	const traceStore = options.traceStore;
+	localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
+	sessionIndex = new SessionIndex({
+		cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
+	});
 	startLocalSettingsWatcher(options.onLocalSettingsReloaded);
 
 	app.post("/api/debug/load-trace/event", async (req, res) => {
@@ -128,6 +131,28 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				return;
 			}
 			res.json(localSettingsStore.validate(body.content));
+		} catch (err: any) {
+			res.status(500).json({ error: err.message });
+		}
+	});
+
+	app.patch("/api/settings/local", async (req, res) => {
+		try {
+			const body = await readJsonBody(req);
+			if (!body || typeof body !== "object") {
+				res.status(400).json({ error: "Request body must be a JSON object" });
+				return;
+			}
+
+			const result = localSettingsStore.patch(body);
+			if (!result.valid) {
+				res.status(400).json(result);
+				return;
+			}
+
+			await sessionIndex.invalidateAll();
+			options.onLocalSettingsReloaded?.();
+			res.json(result);
 		} catch (err: any) {
 			res.status(500).json({ error: err.message });
 		}

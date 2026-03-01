@@ -1145,18 +1145,6 @@ export class SessionPicker extends LitElement {
 			<div class="burger-dropdown-backdrop" @click=${() => this.closeBurgerMenu()}></div>
 			<div class="burger-dropdown" style="top: ${pos.top}px; left: ${pos.left}px;">
 				<button
-					class="burger-item ${!bm.isTokenUsageHidden ? 'is-active' : ''}"
-					@click=${() => { this.closeBurgerMenu(); bm.onToggleTokenUsage(); }}
-				>
-					<span class="burger-item-icon">
-						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-						</svg>
-					</span>
-					<span class="burger-item-label">Token usage</span>
-					<span class="burger-item-check">${!bm.isTokenUsageHidden ? '✓' : ''}</span>
-				</button>
-				<button
 					class="burger-item"
 					@click=${() => { this.closeBurgerMenu(); bm.onOpenSettings(); }}
 				>
@@ -1167,6 +1155,19 @@ export class SessionPicker extends LitElement {
 						</svg>
 					</span>
 					<span class="burger-item-label">Settings</span>
+				</button>
+				<div class="burger-divider"></div>
+				<button
+					class="burger-item ${!bm.isTokenUsageHidden ? 'is-active' : ''}"
+					@click=${() => { this.closeBurgerMenu(); bm.onToggleTokenUsage(); }}
+				>
+					<span class="burger-item-icon">
+						<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+						</svg>
+					</span>
+					<span class="burger-item-label">Token usage</span>
+					<span class="burger-item-check">${!bm.isTokenUsageHidden ? '✓' : ''}</span>
 				</button>
 				<button
 					class="burger-item ${bm.isJsonlVisible ? 'is-active' : ''}"
