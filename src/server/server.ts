@@ -31,6 +31,7 @@ import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
 import { LoadTraceStore } from "./load-trace-store.js";
+import { LocalSettingsStore } from "./local-settings.js";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
@@ -140,6 +141,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 const traceStore = new LoadTraceStore();
+const localSettingsStore = new LocalSettingsStore();
 
 app.use((req: Request, res: Response, next: NextFunction) => {
 	const traceId = typeof req.headers["x-pi-trace-id"] === "string" ? req.headers["x-pi-trace-id"] : "";
@@ -170,6 +172,7 @@ app.use(express.static(clientDist));
 // Register REST endpoints
 registerRestApi(app, {
 	traceStore,
+	localSettingsStore,
 	onLocalSettingsReloaded: () => {
 		wss.clients.forEach((client) => {
 			if (client.readyState === WebSocket.OPEN) {
@@ -194,7 +197,13 @@ const canvasExtension = path.resolve(__dirname, "../../../extensions/canvas.ts")
 const pool = new ProcessPool(
 	{
 		command: PI_LAUNCH.command,
-		baseArgs: [...PI_LAUNCH.baseArgs, "--mode", "rpc", "-e", canvasExtension],
+		baseArgs: () => {
+			const args = [...PI_LAUNCH.baseArgs, "--mode", "rpc"];
+			if (localSettingsStore.canvasEnabled) {
+				args.push("-e", canvasExtension);
+			}
+			return args;
+		},
 	},
 	{
 		maxProcesses: PI_MAX_PROCESSES,

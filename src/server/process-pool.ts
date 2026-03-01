@@ -39,7 +39,7 @@ export interface PoolOptions {
 
 export interface SpawnConfig {
 	command: string;
-	baseArgs: string[];
+	baseArgs: string[] | (() => string[]);
 	extraArgs?: string[];
 	env?: Record<string, string>;
 }
@@ -95,8 +95,11 @@ export class ProcessPool {
 		// (e.g. bash) don't inherit pipane's "production" setting.
 		const { NODE_ENV: _, ...parentEnv } = process.env;
 
+		const baseArgs = typeof this.spawnConfig.baseArgs === "function"
+			? this.spawnConfig.baseArgs()
+			: this.spawnConfig.baseArgs;
 		const child = spawn(this.spawnConfig.command, [
-			...this.spawnConfig.baseArgs,
+			...baseArgs,
 			...(this.spawnConfig.extraArgs ?? []),
 		], {
 			cwd,
