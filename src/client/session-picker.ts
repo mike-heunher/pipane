@@ -122,71 +122,75 @@ export class SessionPicker extends LitElement {
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
-			padding: 0.35rem 0.75rem;
-			margin-top: 0.25rem;
-			background: color-mix(in srgb, var(--picker-text) 5%, transparent);
-			border-top: 1px solid var(--picker-border);
-			border-bottom: 1px solid color-mix(in srgb, var(--picker-border) 60%, transparent);
+			padding: 0.4rem 0.75rem 0.15rem;
+			margin-top: 0.15rem;
+			background: transparent;
+			border: none;
 		}
 
 		.group-header:first-child {
 			margin-top: 0;
-			border-top: none;
 		}
 
 		.group-label {
-			font-size: 0.72rem;
-			font-weight: 700;
-			color: var(--picker-text);
+			font-size: 0.58rem;
+			font-weight: 600;
+			color: var(--picker-muted);
 			text-transform: uppercase;
-			letter-spacing: 0.04em;
+			letter-spacing: 0.06em;
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
 			flex: 1;
 			min-width: 0;
-			opacity: 0.8;
 		}
 
 		.group-new-btn {
-			background: none;
-			border: 1px solid var(--picker-border);
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 1.1rem;
+			height: 1.1rem;
+			padding: 0;
+			background: color-mix(in srgb, var(--picker-muted) 14%, transparent);
+			border: 1px solid color-mix(in srgb, var(--picker-muted) 35%, transparent);
 			color: var(--picker-muted);
 			cursor: pointer;
-			padding: 0.05rem 0.35rem;
-			font-size: 0.8rem;
-			font-weight: 600;
-			line-height: 1.2;
-			border-radius: 4px;
-			opacity: 0.7;
-			transition: all 0.15s;
+			font-size: 0.74rem;
+			font-weight: 700;
+			line-height: 1;
+			border-radius: 999px;
+			opacity: 0.82;
+			transition: all 0.15s ease;
 			flex-shrink: 0;
 		}
 
-		.group-header:hover .group-new-btn {
+		.group-new-btn:hover {
 			opacity: 1;
-			border-color: var(--picker-muted);
+			color: var(--picker-active);
+			border-color: color-mix(in srgb, var(--picker-active) 55%, transparent);
+			background: color-mix(in srgb, var(--picker-active) 18%, transparent);
+			transform: translateY(-0.5px);
 		}
 
-		.group-new-btn:hover {
-			opacity: 1 !important;
-			color: var(--picker-active);
-			border-color: var(--picker-active);
-			background: var(--picker-active-bg);
+		.group-new-btn:focus-visible {
+			outline: none;
+			box-shadow: 0 0 0 2px color-mix(in srgb, var(--picker-active) 35%, transparent);
+			opacity: 1;
 		}
 
 		.session-item {
 			display: block;
 			width: 100%;
 			box-sizing: border-box;
-			padding: 0.4rem 0.75rem;
+			padding: 0.24rem 0.65rem 0.24rem 0.8rem;
 			border: none;
 			background: none;
 			color: var(--picker-text);
 			text-align: left;
 			cursor: pointer;
-			font-size: 0.8rem;
-			line-height: 1.3;
+			font-size: 0.78rem;
+			line-height: 1.22;
 			transition: background 0.1s;
 		}
 
@@ -197,9 +201,11 @@ export class SessionPicker extends LitElement {
 		.session-item.active {
 			background: var(--picker-active-bg);
 			border-left: 2px solid var(--picker-active);
+			padding-left: calc(0.8rem - 2px);
 		}
 
 		.session-name {
+			font-size: 0.735rem;
 			font-weight: 500;
 			display: -webkit-box;
 			-webkit-line-clamp: 2;
@@ -207,64 +213,94 @@ export class SessionPicker extends LitElement {
 			overflow: hidden;
 			text-overflow: ellipsis;
 			word-break: break-word;
+			line-height: 1.24;
 		}
 
 		.session-meta {
-			font-size: 0.7rem;
+			font-size: 0.6rem;
 			color: var(--picker-muted);
 			white-space: nowrap;
-			overflow: hidden;
-			text-overflow: ellipsis;
 			display: flex;
 			align-items: center;
-			gap: 0.35rem;
-			margin-top: 1px;
+			gap: 0.32rem;
+			margin-top: 2px;
+			line-height: 1.12;
+		}
+
+		.msg-count-badge {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 1.03rem;
+			height: 0.84rem;
+			padding: 0 0.24rem;
+			border-radius: 0.42rem;
+			background: color-mix(in srgb, var(--picker-muted) 18%, transparent);
+			color: var(--picker-muted);
+			font-size: 0.55rem;
+			font-weight: 600;
+			line-height: 1;
+			flex-shrink: 0;
 		}
 
 		.status-badge {
 			display: inline-flex;
 			align-items: center;
 			justify-content: center;
-			align-self: stretch;
-			width: 1rem;
-			margin-left: -0.75rem;
-			margin-top: -0.4rem;
-			margin-bottom: -0.4rem;
-			margin-right: 0.45rem;
-			font-size: 0.55rem;
+			align-self: center;
+			min-width: 0.66rem;
+			height: 0.66rem;
+			margin-left: -0.35rem;
+			margin-right: 0.42rem;
+			font-size: 0.46rem;
 			font-weight: 700;
 			text-transform: uppercase;
-			letter-spacing: 0.05em;
-			border-radius: 0;
+			letter-spacing: 0.03em;
+			border-radius: 999px;
 			white-space: nowrap;
 			flex-shrink: 0;
 			overflow: hidden;
+			padding: 0 0.18rem;
+			line-height: 1;
 		}
 
 		.status-badge .status-text {
 			display: inline-block;
-			transform: rotate(-90deg);
-			transform-origin: center;
 		}
 
 		.status-badge.running {
+			min-width: 0.46rem;
+			height: 0.46rem;
+			padding: 0;
+			margin-left: -0.25rem;
+			margin-right: 0.5rem;
 			color: #ef4444;
-			background: color-mix(in srgb, #ef4444 16%, transparent);
+			background: color-mix(in srgb, #ef4444 58%, transparent);
 		}
 
 		.status-badge.done {
+			min-width: 0.46rem;
+			height: 0.46rem;
+			padding: 0;
+			margin-left: -0.25rem;
+			margin-right: 0.5rem;
 			color: #22c55e;
-			background: color-mix(in srgb, #22c55e 16%, transparent);
+			background: color-mix(in srgb, #22c55e 55%, transparent);
 		}
 
 		.status-badge.idle {
+			min-width: 0.42rem;
+			height: 0.42rem;
+			padding: 0;
+			margin-left: -0.25rem;
+			margin-right: 0.5rem;
 			color: #9ca3af;
-			background: color-mix(in srgb, #9ca3af 18%, transparent);
+			background: color-mix(in srgb, #9ca3af 45%, transparent);
 		}
 
 		.session-item-row {
 			display: flex;
-			align-items: stretch;
+			align-items: flex-start;
 			gap: 0;
 		}
 
@@ -274,16 +310,19 @@ export class SessionPicker extends LitElement {
 		}
 
 		.pin-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
 			background: none;
 			border: none;
 			color: var(--picker-muted);
 			cursor: pointer;
-			padding: 0.15rem;
+			padding: 0.1rem;
 			border-radius: 3px;
 			opacity: 0;
 			transition: all 0.15s;
 			flex-shrink: 0;
-			margin-top: 0.1rem;
+			margin-top: 0;
 		}
 
 		.pin-btn.pinned {
@@ -306,16 +345,19 @@ export class SessionPicker extends LitElement {
 		}
 
 		.delete-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
 			background: none;
 			border: none;
 			color: var(--picker-muted);
 			cursor: pointer;
-			padding: 0.15rem;
+			padding: 0.1rem;
 			border-radius: 3px;
 			opacity: 0;
 			transition: all 0.15s;
 			flex-shrink: 0;
-			margin-top: 0.1rem;
+			margin-top: 0;
 		}
 
 		.session-item:hover .delete-btn {
@@ -332,13 +374,13 @@ export class SessionPicker extends LitElement {
 			display: block;
 			width: 100%;
 			box-sizing: border-box;
-			padding: 0.3rem 0.75rem;
+			padding: 0.2rem 0.75rem 0.2rem 1.25rem;
 			border: none;
 			background: none;
 			color: var(--picker-muted);
 			text-align: left;
 			cursor: pointer;
-			font-size: 0.72rem;
+			font-size: 0.65rem;
 			font-weight: 500;
 			transition: all 0.15s;
 		}
@@ -1085,33 +1127,34 @@ export class SessionPicker extends LitElement {
 						title="${s.cwd}\n${s.firstMessage}"
 					>
 						<div class="session-item-row">
-							<span class="status-badge ${effectiveStatus}">${effectiveStatus === "idle" ? nothing : html`<span class="status-text">${effectiveStatus}</span>`}</span>
+							<span class="status-badge ${effectiveStatus}">${nothing}</span>
 							<div class="session-item-content">
-								<span class="session-name">${isPinned ? html`<span class="pin-indicator">📌</span> ` : nothing}${this.getSessionDisplayName(s)}</span>
+								<span class="session-name">${this.getSessionDisplayName(s)}</span>
 								<span class="session-meta">
-									${this.formatTime(s.lastUserPromptTime || s.modified)} · ${s.messageCount} msgs
+									${this.formatTime(s.lastUserPromptTime || s.modified)}
+									<span class="msg-count-badge">${s.messageCount}</span>
+									<span
+										class="pin-btn ${isPinned ? "pinned" : ""}"
+										@click=${(e: Event) => this.handleTogglePin(e, s)}
+										title="${isPinned ? "Unpin session" : "Pin to top"}"
+									>
+										<svg width="14" height="14" viewBox="0 0 24 24" fill="${isPinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<path d="M12 17v5"></path>
+											<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"></path>
+										</svg>
+									</span>
+									<span
+										class="delete-btn"
+										@click=${(e: Event) => this.handleDeleteSession(e, s)}
+										title="Delete session"
+									>
+										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+											<polyline points="3 6 5 6 21 6"></polyline>
+											<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+										</svg>
+									</span>
 								</span>
 							</div>
-							<span
-								class="pin-btn ${isPinned ? "pinned" : ""}"
-								@click=${(e: Event) => this.handleTogglePin(e, s)}
-								title="${isPinned ? "Unpin session" : "Pin to top"}"
-							>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="${isPinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<path d="M12 17v5"></path>
-									<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"></path>
-								</svg>
-							</span>
-							<span
-								class="delete-btn"
-								@click=${(e: Event) => this.handleDeleteSession(e, s)}
-								title="Delete session"
-							>
-								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-									<polyline points="3 6 5 6 21 6"></polyline>
-									<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-								</svg>
-							</span>
 						</div>
 					</button>
 				`;

@@ -235,7 +235,7 @@ describe("session-picker", () => {
 			expect(hasDoneBadge(items[0])).toBe(false);
 
 			const badge = items[0].querySelector(".status-badge.running")!;
-			expect(badge.textContent?.trim()).toBe("running");
+			expect(badge.textContent?.trim()).toBe("");
 		});
 
 		it("shows done badge for completed sessions", async () => {
@@ -257,7 +257,7 @@ describe("session-picker", () => {
 			expect(hasRunningBadge(items[0])).toBe(false);
 
 			const badge = items[0].querySelector(".status-badge.done")!;
-			expect(badge.textContent?.trim()).toBe("done");
+			expect(badge.textContent?.trim()).toBe("");
 		});
 
 		it("shows idle badge for sessions without status", async () => {
