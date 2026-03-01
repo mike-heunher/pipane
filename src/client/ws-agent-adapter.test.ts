@@ -767,4 +767,28 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.model).toEqual({ provider: "openai", id: "gpt-5" });
 		});
 	});
+
+	describe("session_sync coalescing", () => {
+		it("keeps a pending full sync when deltas arrive in the same frame", () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+
+			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{}", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h1", hash: "h2" });
+
+			expect(a._pendingSessionSync.op).toBe("full");
+			expect(a._pendingSessionSync.hash).toBe("h1");
+		});
+
+		it("still keeps latest delta when only deltas are queued", () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "a" }], baseHash: "h0", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "b" }], baseHash: "h1", hash: "h2" });
+
+			expect(a._pendingSessionSync.op).toBe("delta");
+			expect(a._pendingSessionSync.hash).toBe("h2");
+		});
+	});
 });

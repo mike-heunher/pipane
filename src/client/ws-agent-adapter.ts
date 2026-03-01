@@ -606,9 +606,22 @@ export class WsAgentAdapter {
 	/**
 	 * Coalesce high-frequency session_sync updates.
 	 * Latest update wins within a frame; no artificial delay beyond RAF.
+	 *
+	 * Important: once we have queued a full sync, never overwrite it with deltas.
+	 * A full sync is required to establish the base hash after reconnect/re-subscribe.
 	 */
 	private enqueueSessionSync(syncMsg: any) {
-		this._pendingSessionSync = syncMsg;
+		const pending = this._pendingSessionSync;
+		if (!pending) {
+			this._pendingSessionSync = syncMsg;
+		} else if (syncMsg.op === "full") {
+			// New full sync supersedes anything pending.
+			this._pendingSessionSync = syncMsg;
+		} else if (pending.op !== "full") {
+			// Delta can replace older delta (latest-wins).
+			this._pendingSessionSync = syncMsg;
+		}
+		// else: keep pending full, ignore incoming delta
 		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushScheduled = true;
 
@@ -652,6 +665,13 @@ export class WsAgentAdapter {
 				? { data: syncMsg.data, hash: syncMsg.hash }
 				: { patches: syncMsg.patches, hash: syncMsg.hash, baseHash: syncMsg.baseHash }),
 		};
+
+		// After reconnect/re-subscribe, we must receive a full sync first.
+		// Ignore early deltas until a base hash exists.
+		if (syncOp.op === "delta" && !this._syncHash) {
+			console.warn("[ws-adapter] Ignoring delta while awaiting full sync");
+			return;
+		}
 
 		const result = await applySyncOp(this._syncJson, this._syncHash, syncOp);
 		if (!result) {
