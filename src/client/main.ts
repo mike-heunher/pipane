@@ -173,18 +173,12 @@ function renderSteeringQueue() {
 	if (steeringQueue.length === 0) return "";
 	return html`
 		<div class="steering-queue">
-			<div class="steering-queue-header">
-				<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-					<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-				</svg>
-				<span>Queued steering ${steeringQueue.length === 1 ? "prompt" : "prompts"}</span>
-			</div>
 			${steeringQueue.map((msg, i) => html`
-				<div class="steering-queue-item">
-					<span class="steering-queue-index">${i + 1}</span>
-					<span class="steering-queue-text">${msg.length > 120 ? msg.slice(0, 120) + "…" : msg}</span>
-					<button class="steering-queue-remove" @click=${() => { agent.removeSteering(i); }} title="Remove from queue">
-						<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+				<div class="steering-chip">
+					<span class="steering-chip-num">${i + 1}</span>
+					<span class="steering-chip-text">${msg.length > 80 ? msg.slice(0, 80) + "…" : msg}</span>
+					<button class="steering-chip-remove" @click=${() => { agent.removeSteering(i); }} title="Remove from queue">
+						<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
 							<line x1="18" y1="6" x2="6" y2="18"></line>
 							<line x1="6" y1="6" x2="18" y2="18"></line>
 						</svg>
@@ -217,7 +211,7 @@ function renderTokenUsage() {
 
 	try {
 		const text = formatUsage(totals);
-		return html`<div class="text-xs text-muted-foreground text-right h-5"><span>${text}</span></div>`;
+		return html`<span class="input-token-usage">${text}</span>`;
 	} catch {
 		return "";
 	}
@@ -353,7 +347,7 @@ const renderApp = () => {
 							<!-- Steering queue (between messages and input) -->
 							${renderSteeringQueue()}
 							<!-- Input area -->
-							<div class="shrink-0 pt-2.5">
+							<div class="shrink-0 pt-2.5 pb-1">
 								<div class="max-w-3xl mx-auto px-2">
 									<message-editor
 										.isStreaming=${isStreaming}
@@ -367,7 +361,7 @@ const renderApp = () => {
 										.onAbort=${() => agent?.abort()}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
 									></message-editor>
-									${renderTokenUsage()}
+									<div class="input-token-bar">${renderTokenUsage()}</div>
 								</div>
 							</div>
 						</div>

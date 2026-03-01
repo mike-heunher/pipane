@@ -97,11 +97,8 @@ test.describe("Steering queue e2e", () => {
 		const queue = page.locator(".steering-queue");
 		await expect(queue).toBeVisible({ timeout: 5000 });
 
-		// Verify the steering text is shown in the queue
-		await expect(page.locator(".steering-queue-text").first()).toContainText("also do cleanup", { timeout: 5000 });
-
-		// Verify queue header shows "1" prompt (singular)
-		await expect(page.locator(".steering-queue-header")).toContainText("Queued steering prompt", { timeout: 5000 });
+		// Verify the steering text is shown in the queue chip
+		await expect(page.locator(".steering-chip-text").first()).toContainText("also do cleanup", { timeout: 5000 });
 
 		// 5. Wait for the slow task to complete and the steering to be consumed.
 		//    The queue should disappear once the steering prompt is consumed.
@@ -154,15 +151,14 @@ test.describe("Steering queue e2e", () => {
 		await textarea.press("Enter");
 
 		// 4. Verify both are shown
-		await expect(page.locator(".steering-queue-item")).toHaveCount(2, { timeout: 5000 });
-		await expect(page.locator(".steering-queue-header")).toContainText("Queued steering prompts", { timeout: 5000 });
+		await expect(page.locator(".steering-chip")).toHaveCount(2, { timeout: 5000 });
 
-		// 5. Click the remove button on the first item
-		const removeBtn = page.locator(".steering-queue-remove").first();
+		// 5. Click the remove button on the first chip
+		const removeBtn = page.locator(".steering-chip-remove").first();
 		await removeBtn.click();
 
-		// 6. Only one item should remain
-		await expect(page.locator(".steering-queue-item")).toHaveCount(1, { timeout: 5000 });
-		await expect(page.locator(".steering-queue-text").first()).toContainText("second steering message", { timeout: 5000 });
+		// 6. Only one chip should remain
+		await expect(page.locator(".steering-chip")).toHaveCount(1, { timeout: 5000 });
+		await expect(page.locator(".steering-chip-text").first()).toContainText("second steering message", { timeout: 5000 });
 	});
 });

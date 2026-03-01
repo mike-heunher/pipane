@@ -66,45 +66,91 @@ function truncate(s: string, max: number): string {
 /**
  * Auto-scroll pinning for streaming tool output containers.
  *
- * Scrolls to the bottom on every render update while streaming, unless the
- * user has manually scrolled up. Once the user scrolls back to the bottom,
- * auto-scroll resumes.
+ * - While streaming: pins scroll to the bottom unless the user scrolls up.
+ *   Re-pins when the user scrolls back to the bottom.
+ * - On completion: scrolls to the end once so finished tool calls always
+ *   show the tail of the output.
  *
- * Usage: call `createScrollPin()` once per renderer instance, then use the
- * returned ref callback on the scrollable `<div>`.  Call `.streaming` setter
- * to tell it whether we're still streaming.
+ * Uses a MutationObserver on the scrollable container to detect content
+ * changes reliably (the ref callback alone can fire before Lit has
+ * committed the inner text nodes).
  */
 function createScrollPin() {
-	let pinned = true;
+	let userScrolledUp = false;
 	let isStreaming = false;
-	let installed = false;
 	let el: HTMLElement | null = null;
+	let observer: MutationObserver | null = null;
+	let scrollListenerInstalled = false;
+	/** Tracks whether we already did the one-time scroll-to-end on completion. */
+	let didCompleteScroll = false;
 
-	function onScroll() {
+	function isAtBottom(): boolean {
+		if (!el) return true;
+		return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+	}
+
+	function scrollToEnd() {
+		if (el) el.scrollTop = el.scrollHeight;
+	}
+
+	function onUserScroll() {
+		if (!el || !isStreaming) return;
+		userScrolledUp = !isAtBottom();
+	}
+
+	/** Called by MutationObserver whenever child content changes. */
+	function onMutation() {
 		if (!el) return;
-		// Consider "at bottom" if within 8px of the bottom edge
-		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-		pinned = atBottom;
+		if (isStreaming && !userScrolledUp) {
+			scrollToEnd();
+		}
 	}
 
 	function refCb(element: Element | undefined) {
 		if (!element || !(element instanceof HTMLElement)) return;
-		el = element;
-		if (!installed) {
-			el.addEventListener("scroll", onScroll, { passive: true });
-			installed = true;
+
+		if (element !== el) {
+			// New element — reset state and install listeners
+			el = element;
+			scrollListenerInstalled = false;
+			observer?.disconnect();
+			observer = null;
+			didCompleteScroll = false;
+			userScrolledUp = false;
 		}
-		if (isStreaming && pinned) {
-			// Schedule scroll after Lit renders the DOM update
-			requestAnimationFrame(() => {
-				if (el) el.scrollTop = el.scrollHeight;
-			});
+
+		if (!scrollListenerInstalled) {
+			el.addEventListener("scroll", onUserScroll, { passive: true });
+			scrollListenerInstalled = true;
+		}
+
+		if (!observer) {
+			observer = new MutationObserver(onMutation);
+			observer.observe(el, { childList: true, subtree: true, characterData: true });
+		}
+
+		// When streaming just finished (transition to complete), scroll to end
+		// once so the user sees the tail of the output.
+		if (!isStreaming && !didCompleteScroll) {
+			didCompleteScroll = true;
+			requestAnimationFrame(() => scrollToEnd());
 		}
 	}
 
 	return {
 		ref: refCb,
-		set streaming(v: boolean) { isStreaming = v; },
+		set streaming(v: boolean) {
+			if (isStreaming && !v) {
+				// Streaming just stopped — let refCb do the one-time completion scroll
+				didCompleteScroll = false;
+			}
+			if (!isStreaming && v) {
+				// Streaming just started — reset user scroll state
+				userScrolledUp = false;
+				didCompleteScroll = false;
+			}
+			isStreaming = v;
+		},
 	};
 }
 
