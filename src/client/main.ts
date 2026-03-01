@@ -469,10 +469,13 @@ async function initApp() {
 		}
 	});
 
-	// Session switch: full re-init of chat panel
+	// Session switch: update session on existing chat panel (don't recreate agent-interface)
 	agent.onSessionChange(async () => {
-		await chatPanel.setAgent(agent as any);
-		patchAgentInterface();
+		const ai = chatPanel.agentInterface;
+		if (ai) {
+			ai.session = agent as any;
+			ai.requestUpdate();
+		}
 		// Refresh steering queue for the new session (it's per-session now)
 		steeringQueue = agent.steeringQueue;
 		// Restore canvas if this session has one we haven't auto-opened yet
