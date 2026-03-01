@@ -280,65 +280,6 @@ markdown-block pre code {
 
 /* ── Small input menu button + dropdown ─────────────────────────── */
 
-.injected-menu-wrap {
-	position: relative;
-	display: inline-flex;
-}
-
-.injected-menu-btn {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 1.7rem;
-	height: 1.7rem;
-	border-radius: 0.35rem;
-	border: none;
-	background: transparent;
-	color: var(--muted-foreground, #6b7280);
-	cursor: pointer;
-	padding: 0;
-	transition: background 0.15s, color 0.15s;
-}
-
-.injected-menu-btn:hover {
-	background: var(--accent, rgba(0, 0, 0, 0.05));
-	color: var(--foreground, #111);
-}
-
-.injected-menu-dropdown {
-	position: absolute;
-	right: 0;
-	bottom: calc(100% + 0.35rem);
-	z-index: 30;
-	min-width: 11rem;
-	padding: 0.25rem;
-	border: 1px solid var(--border, #e5e7eb);
-	border-radius: 0.5rem;
-	background: var(--background, #fff);
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-}
-
-.menu-copy-session-file {
-	width: 100%;
-	display: block;
-	padding: 0.35rem 0.5rem;
-	border: none;
-	border-radius: 0.35rem;
-	background: transparent;
-	color: var(--foreground, #111);
-	text-align: left;
-	font-size: 0.75rem;
-	cursor: pointer;
-}
-
-.menu-copy-session-file:hover:not(:disabled) {
-	background: var(--accent, rgba(0, 0, 0, 0.05));
-}
-
-.menu-copy-session-file:disabled {
-	opacity: 0.5;
-	cursor: default;
-}
 
 /* ── Steering queue: horizontal chips ───────────────────────────── */
 
@@ -478,6 +419,11 @@ markdown-block pre code {
 /* ── Mobile: sidebar overlay + side panels full-width ──────────── */
 
 @media (max-width: 768px) {
+	/* Hide model name text in the input toolbar, keep only the icon */
+	message-editor .h-8.text-xs.truncate > .ml-1 {
+		display: none;
+	}
+
 	/* Tighter horizontal padding for conversation & input */
 	#chat-scroll-area > .p-4 {
 		padding-left: 0.25rem !important;

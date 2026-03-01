@@ -31,7 +31,7 @@ import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, can
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
-import { ensureInputMenuButton } from "./input-menu.js";
+
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 import { formatUsage } from "@mariozechner/pi-web-ui";
 
@@ -110,12 +110,9 @@ function configureMessageEditor() {
 		}
 	};
 
-	ensureInputMenuButton(editor, () => agent?.sessionFile);
-
 	const origUpdated = editor.updated?.bind(editor);
 	editor.updated = (changedProps: Map<string, any>) => {
 		origUpdated?.(changedProps);
-		ensureInputMenuButton(editor, () => agent?.sessionFile);
 	};
 }
 
