@@ -513,6 +513,17 @@ async function initApp() {
 		// Update JSONL panel with new session path
 		setJsonlSessionPath(agent.sessionFile);
 		renderApp();
+		// Focus the input textarea after switching/creating a session.
+		// Must wait for Lit to finish rendering, then reach into the
+		// message-editor shadow DOM to focus the actual textarea.
+		requestAnimationFrame(() => {
+			const editor = chatPanel?.agentInterface?.querySelector("message-editor") as any;
+			if (editor) {
+				const textarea = editor.shadowRoot?.querySelector("textarea") ??
+					editor.textareaRef?.value;
+				textarea?.focus();
+			}
+		});
 	});
 
 	// Content change (messages refreshed from disk): lightweight re-render
@@ -597,7 +608,11 @@ async function initApp() {
 			if (editor) {
 				editor.value = result.text;
 				editor.requestUpdate();
-				requestAnimationFrame(() => editor.focus?.());
+				requestAnimationFrame(() => {
+					const textarea = editor.shadowRoot?.querySelector("textarea") ??
+						editor.textareaRef?.value;
+					textarea?.focus();
+				});
 			}
 		}
 	};
