@@ -143,7 +143,7 @@ const CODE_CSS = `\
 const CODE_BASH = `\
 $ npm run build
 
-> pi-web@0.1.0 build
+> pipane@0.1.0 build
 > vite build && tsc -p tsconfig.server.json
 
 vite v7.3.1 building for production...

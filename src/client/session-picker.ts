@@ -35,7 +35,7 @@ interface DirEntry {
 	path: string;
 }
 
-const PINNED_STORAGE_KEY = "pi-web-pinned-sessions";
+const PINNED_STORAGE_KEY = "pipane-pinned-sessions";
 
 function loadPinnedSessions(): Set<string> {
 	try {
@@ -1248,7 +1248,7 @@ export class SessionPicker extends LitElement {
 								<line x1="3" y1="18" x2="21" y2="18"></line>
 							</svg>
 						</button>
-						<span class="header-title">${this.burgerMenu?.isDevMode ? 'pi web · dev' : 'pi web'}</span>
+						<span class="header-title">${this.burgerMenu?.isDevMode ? 'pipane · dev' : 'pipane'}</span>
 					</div>
 					<div class="header-right">
 						<button class="new-btn" @click=${this.openFolderPicker}>+ NEW</button>

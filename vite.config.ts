@@ -44,9 +44,8 @@ export default defineConfig({
 	resolve: {
 		alias: [
 			{
-				// Resolve pi-web-ui JS/TS imports from TypeScript source so we only
-				// need to patch-package the .ts files (not compiled dist/).
-				// The CSS import (@mariozechner/pi-web-ui/app.css) must NOT match.
+				// Resolve pi-web-ui JS/TS imports from TypeScript source so we
+				// only need to patch-package the .ts files (not compiled dist/).
 				find: /^@mariozechner\/pi-web-ui$/,
 				replacement: path.resolve(
 					__dirname,

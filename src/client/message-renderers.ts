@@ -2,7 +2,7 @@
  * Custom message renderer for user messages that includes inline images.
  *
  * pi-coding-agent stores user messages with role "user" and content as an array
- * of TextContent and ImageContent blocks. The default pi-web-ui UserMessage
+ * of TextContent and ImageContent blocks. The default UserMessage
  * component only renders text from the content array and ignores ImageContent.
  * This renderer adds support for displaying those inline images.
  */

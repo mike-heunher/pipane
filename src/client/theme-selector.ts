@@ -1,5 +1,5 @@
 /**
- * Theme selector component for pi-web.
+ * Theme selector component for pipane.
  *
  * Manages two orthogonal settings:
  *   1. Color theme: "default" | "gruvbox" (stored as data-color-theme on <html>)

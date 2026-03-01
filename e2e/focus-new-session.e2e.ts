@@ -73,7 +73,7 @@ test.describe("Focus on new session", () => {
 		]);
 
 		// Step 1: Open the app and send a prompt to establish a project group
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.goto(`http://localhost:${harness.pipanePort}`);
 
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });

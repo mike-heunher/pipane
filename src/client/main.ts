@@ -15,7 +15,7 @@ import {
 	SettingsStore,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
-// Import pi-web-ui so its custom elements get registered (user-message, assistant-message, etc.)
+// Import pi-web-ui so its custom elements get registered
 import { html, render } from "lit";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { DummyStorageBackend } from "./dummy-storage.js";
@@ -55,7 +55,7 @@ const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean }
 traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
 // Token usage visibility toggle
-const TOKEN_USAGE_KEY = "pi-web-hide-token-usage";
+const TOKEN_USAGE_KEY = "pipane-hide-token-usage";
 function isTokenUsageHidden(): boolean {
 	return localStorage.getItem(TOKEN_USAGE_KEY) === "true";
 }

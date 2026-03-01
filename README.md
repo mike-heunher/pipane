@@ -1,12 +1,12 @@
-# pi-web
+# pipane
 
 A clean web interface for the **pi coding agent**.
 
-`pi-web` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
+`pipane` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
 
 ## Screenshot
 
-![pi-web screenshot](docs/assets/pi-web-screenshot.png)
+![pipane screenshot](docs/assets/pi-web-screenshot.png)
 
 ---
 
@@ -24,8 +24,8 @@ A clean web interface for the **pi coding agent**.
 ### 1) Clone the repo
 
 ```bash
-git clone https://github.com/mike-heunher/pi-web.git
-cd pi-web
+git clone https://github.com/mike-heunher/pipane.git
+cd pipane
 ```
 
 ### 2) Install dependencies
@@ -61,11 +61,11 @@ Open http://localhost:3001.
 
 ## Install as a global CLI
 
-If you want to run `pi-web` directly as a command:
+If you want to run `pipane` directly as a command:
 
 ```bash
-npm install -g pi-web
-pi-web
+npm install -g pipane
+pipane
 ```
 
 ---
@@ -76,7 +76,7 @@ pi-web
 - npm 10+
 - `pi` CLI available on your `PATH` (default)
 
-If `pi` is missing, `pi-web` can prompt to install it via:
+If `pi` is missing, `pipane` can prompt to install it via:
 
 ```bash
 npm install -g @mariozechner/pi-coding-agent
@@ -131,7 +131,7 @@ REST endpoints:
 
 ## Load tracing (frontend + backend)
 
-`pi-web` now emits a correlated load trace across browser and server.
+`pipane` now emits a correlated load trace across browser and server.
 
 - Frontend creates a `traceId` when the app boots.
 - The `traceId` is sent via:
@@ -153,7 +153,7 @@ flowchart LR
     UI["Vite + Lit UI<br/>(ChatPanel / pi-web-ui)"]
   end
 
-  subgraph Server["pi-web backend"]
+  subgraph Server["pipane backend"]
     WS["Express + WebSocket relay<br/>(port 3001)"]
   end
 

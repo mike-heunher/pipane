@@ -7,11 +7,11 @@ import path from "node:path";
 const repoRoot = process.cwd();
 
 describe("global npm CLI packaging", () => {
-	it("defines a pi-web bin entry and prepack build", () => {
+	it("defines a pipane bin entry and prepack build", () => {
 		const pkg = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 		expect(pkg.private).toBe(false);
-		expect(pkg.name).toBe("pi-web");
-		expect(pkg.bin?.["pi-web"]).toBe("bin/pi-web.js");
+		expect(pkg.name).toBe("pipane");
+		expect(pkg.bin?.["pipane"]).toBe("bin/pipane.js");
 		expect(pkg.scripts?.prepack).toBe("npm run build");
 		expect(pkg.files).toContain("dist/");
 		expect(pkg.files).toContain("bin/");
@@ -20,8 +20,8 @@ describe("global npm CLI packaging", () => {
 	});
 
 	it("launcher resolves the built server entry", () => {
-		const output = execFileSync(process.execPath, [path.join(repoRoot, "bin/pi-web.js")], {
-			env: { ...process.env, PI_WEB_PRINT_ENTRY: "1" },
+		const output = execFileSync(process.execPath, [path.join(repoRoot, "bin/pipane.js")], {
+			env: { ...process.env, PIPANE_PRINT_ENTRY: "1" },
 			encoding: "utf8",
 		}).trim();
 		expect(output).toBe(path.join(repoRoot, "dist/server/server.js"));

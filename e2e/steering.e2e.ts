@@ -1,7 +1,7 @@
 /**
  * E2E test for steering (queueing prompts while the agent is running).
  *
- * Uses the real pi-web stack with a mock LLM. The test:
+ * Uses the real pipane stack with a mock LLM. The test:
  * 1. Sends an initial prompt that triggers a slow bash tool call
  * 2. While the tool is executing, sends steering messages
  * 3. Verifies the steering queue appears in the UI
@@ -27,7 +27,7 @@ test.describe("Steering queue e2e", () => {
 	});
 
 	async function gotoFreshSession(page: import("@playwright/test").Page) {
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();

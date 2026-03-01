@@ -6,7 +6,7 @@ function randomId(len = 16): string {
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const TRACE_STORAGE_KEY = "pi-web-load-trace-id";
+const TRACE_STORAGE_KEY = "pipane-load-trace-id";
 
 const traceId = (() => {
 	const existing = sessionStorage.getItem(TRACE_STORAGE_KEY);

@@ -1,9 +1,9 @@
 /**
- * E2E test harness: starts a real pi-web server backed by a mock LLM.
+ * E2E test harness: starts a real pipane server backed by a mock LLM.
  *
  * - Spins up a mock OpenAI-compatible server (mock-llm-server.ts)
  * - Creates a temp directory with a models.json pointing at the mock
- * - Launches the real pi-web server with PI_CODING_AGENT_DIR set to the temp dir
+ * - Launches the real pipane server with PI_CODING_AGENT_DIR set to the temp dir
  * - Provides a Playwright-friendly API for tests
  */
 
@@ -14,8 +14,8 @@ import { createMockLlmServer, type MockLlmServer, type Scenario } from "./mock-l
 import { createServer } from "node:net";
 
 export interface E2EHarness {
-	/** The port the real pi-web server is listening on */
-	piWebPort: number;
+	/** The port the real pipane server is listening on */
+	pipanePort: number;
 	/** The mock LLM server */
 	mockLlm: MockLlmServer;
 	/** Override LLM scenarios at runtime */
@@ -169,16 +169,16 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 		}, null, 2),
 	);
 
-	// 4. Find a guaranteed free port for pi-web
-	const piWebPort = await getFreePort();
+	// 4. Find a guaranteed free port for pipane
+	const pipanePort = await getFreePort();
 
 	// 5. Build server path
 	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server/server.js");
 	if (!existsSync(serverScript)) {
-		throw new Error(`pi-web server not built. Run 'npm run build' first. Missing: ${serverScript}`);
+		throw new Error(`pipane server not built. Run 'npm run build' first. Missing: ${serverScript}`);
 	}
 
-	// 6. Start real pi-web server with a sanitized environment.
+	// 6. Start real pipane server with a sanitized environment.
 	//    Strip API keys and cloud credentials so pi only sees the mock provider.
 	//    This prevents ambient AWS/Anthropic/OpenAI credentials from leaking in.
 	const sanitizedEnv: Record<string, string> = {};
@@ -194,7 +194,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 
 	const env: Record<string, string> = {
 		...sanitizedEnv,
-		PORT: String(piWebPort),
+		PORT: String(pipanePort),
 		PI_CWD: projectDir,
 		PI_CODING_AGENT_DIR: agentDir,
 		NODE_ENV: "production",
@@ -214,15 +214,15 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	child.stderr?.on("data", (d) => { stderr += d.toString(); });
 
 	child.on("error", (err) => {
-		console.error("[pi-web] spawn error:", err);
+		console.error("[pipane] spawn error:", err);
 	});
 
 	// 7. Wait for server to be ready
 	try {
-		await waitForPort(piWebPort, 30000);
+		await waitForPort(pipanePort, 30000);
 	} catch (err) {
-		console.error("[pi-web] stdout:", stdout);
-		console.error("[pi-web] stderr:", stderr);
+		console.error("[pipane] stdout:", stdout);
+		console.error("[pipane] stderr:", stderr);
 		child.kill("SIGTERM");
 		await mockLlm.close();
 		throw err;
@@ -231,13 +231,13 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	// 8. Warm up the pi process pool by sending a probe prompt via WebSocket.
 	//    This ensures the first real test doesn't pay the pi cold-start cost.
 	try {
-		await warmUpPiProcess(piWebPort);
+		await warmUpPiProcess(pipanePort);
 	} catch (err) {
-		console.error("[pi-web] warm-up failed (non-fatal):", err);
+		console.error("[pipane] warm-up failed (non-fatal):", err);
 	}
 
 	return {
-		piWebPort,
+		pipanePort,
 		mockLlm,
 		setScenarios: (s) => mockLlm.setScenarios(s),
 		agentDir,

@@ -120,7 +120,7 @@ function generateSessionJsonl(sessionIdx: number, messagesPerSession: number): s
 }
 
 async function createFixture(opts: Options): Promise<{ agentDir: string; contents: string[]; label: string; cleanupDir: string }> {
-	const rootDir = await mkdtemp(path.join(os.tmpdir(), "pi-web-bench-"));
+	const rootDir = await mkdtemp(path.join(os.tmpdir(), "pipane-bench-"));
 	const agentDir = path.join(rootDir, ".pi-agent");
 	const sessionsDir = path.join(agentDir, "sessions");
 	await mkdir(sessionsDir, { recursive: true });

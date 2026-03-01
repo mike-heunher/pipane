@@ -1,5 +1,5 @@
 /**
- * pi-web backend server.
+ * pipane backend server.
  *
  * Architecture: sessions are either "detached" (read from JSONL on disk)
  * or "attached" (a pi RPC process is running a turn for them).
@@ -42,8 +42,8 @@ const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const AUTH_COOKIE_NAME = "pi_web_auth";
-const AUTH_TOKEN = process.env.PI_WEB_AUTH_TOKEN || randomBytes(24).toString("base64url");
+const AUTH_COOKIE_NAME = "pipane_auth";
+const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("base64url");
 const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
 const AUTH_URL = `http://${PUBLIC_HOSTNAME}:${PORT}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
 
@@ -66,12 +66,12 @@ function isLocalAddress(addr: string | undefined | null): boolean {
 }
 
 function isLocalRequest(req: Pick<IncomingMessage, "socket">): boolean {
-	if (process.env.PI_WEB_DISABLE_LOCAL_BYPASS === "1") return false;
+	if (process.env.PIPANE_DISABLE_LOCAL_BYPASS === "1") return false;
 	return isLocalAddress(req.socket.remoteAddress);
 }
 
 function setAuthCookie(res: Response): void {
-	const secure = process.env.PI_WEB_SECURE_COOKIE === "1" ? "; Secure" : "";
+	const secure = process.env.PIPANE_SECURE_COOKIE === "1" ? "; Secure" : "";
 	const maxAgeSeconds = 60 * 60 * 24 * 30;
 	res.setHeader("Set-Cookie", `${AUTH_COOKIE_NAME}=${encodeURIComponent(AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`);
 }
@@ -122,7 +122,7 @@ app.get("/auth", (req: Request, res: Response) => {
 	const token = typeof req.query.token === "string" ? req.query.token : undefined;
 	if (isLocalRequest(req) || token === AUTH_TOKEN) {
 		setAuthCookie(res);
-		res.type("html").send("<h3>pi-web: access granted</h3><p>You can close this tab.</p>");
+		res.type("html").send("<h3>pipane: access granted</h3><p>You can close this tab.</p>");
 		return;
 	}
 	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Invalid auth token.</p>");
@@ -136,7 +136,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 		next();
 		return;
 	}
-	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pi-web terminal.</p>");
+	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pipane terminal.</p>");
 });
 
 const traceStore = new LoadTraceStore();
@@ -248,7 +248,7 @@ app.get("/debug/pool", (_req, res) => {
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>pi-web pool debug</title>
+  <title>pipane pool debug</title>
   <style>
     body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 16px; }
     table { border-collapse: collapse; width: 100%; margin-top: 12px; }
@@ -259,7 +259,7 @@ app.get("/debug/pool", (_req, res) => {
   </style>
 </head>
 <body>
-  <h3>pi-web pool debug</h3>
+  <h3>pipane pool debug</h3>
   <div id="meta">loading…</div>
   <table>
     <thead>
@@ -346,7 +346,7 @@ if (PI_AVAILABLE) {
 }
 
 server.listen(PORT, () => {
-	console.log(`pi-web server listening on http://localhost:${PORT}`);
+	console.log(`pipane server listening on http://localhost:${PORT}`);
 	console.log(`[auth] Localhost is always allowed and will auto-set auth cookie.`);
 	console.log(`[auth] Remote browser auth URL: ${AUTH_URL}`);
 });

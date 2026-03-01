@@ -1,5 +1,5 @@
 /**
- * REST API endpoints for pi-web.
+ * REST API endpoints for pipane.
  *
  * Stateless handlers that read session data from JSONL files on disk.
  */

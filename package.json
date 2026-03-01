@@ -1,10 +1,10 @@
 {
-	"name": "pi-web",
+	"name": "pipane",
 	"version": "0.1.0",
 	"private": false,
 	"type": "module",
 	"bin": {
-		"pi-web": "bin/pi-web.js"
+		"pipane": "bin/pipane.js"
 	},
 	"files": [
 		"dist/",

@@ -23,7 +23,7 @@ test.describe("Input clear on send", () => {
 	});
 
 	async function gotoFreshSession(page: import("@playwright/test").Page) {
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();

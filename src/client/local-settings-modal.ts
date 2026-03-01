@@ -67,7 +67,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
     "cwdTitle": {
       "filters": [
         { "pattern": "^~/dev/", "replacement": "dev/" },
-        { "pattern": "^dev/pi-web$", "replacement": "pi-web (dev)" }
+        { "pattern": "^dev/pipane$", "replacement": "pipane (dev)" }
       ]
     }
   }

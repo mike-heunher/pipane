@@ -14,7 +14,7 @@ import path from "node:path";
 import { SessionIndex } from "./session-index.js";
 
 function makeTmpAgentDir(): string {
-	const root = mkdtempSync(path.join(os.tmpdir(), "pi-web-session-index-"));
+	const root = mkdtempSync(path.join(os.tmpdir(), "pipane-session-index-"));
 	mkdirSync(path.join(root, "sessions"), { recursive: true });
 	return root;
 }
@@ -56,7 +56,7 @@ describe("SessionIndex", () => {
 		expect(sessions[0].firstMessage).toBe("hello");
 		expect(sessions[0].lastUserPromptTime).toBe(new Date(1700000000000).toISOString());
 
-		const cachePath = path.join(agentDir, "cache", "pi-web-session-index-v1.json");
+		const cachePath = path.join(agentDir, "cache", "pipane-session-index-v1.json");
 		expect(statSync(cachePath).size).toBeGreaterThan(0);
 	});
 
@@ -71,7 +71,7 @@ describe("SessionIndex", () => {
 		const first = await index.listSessions();
 		expect(first[0].firstMessage).toBe("hello");
 
-		const cachePath = path.join(agentDir, "cache", "pi-web-session-index-v1.json");
+		const cachePath = path.join(agentDir, "cache", "pipane-session-index-v1.json");
 		const cacheBefore = statSync(cachePath).mtimeMs;
 
 		const second = await index.listSessions();
@@ -114,7 +114,7 @@ describe("SessionIndex", () => {
 	it("applies cwd display formatter when provided", async () => {
 		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
 		writeSessionJsonl(sessionPath, [
-			{ type: "session", id: "sess-a", cwd: "/Users/me/dev/pi-web", timestamp: "2026-01-01T10:00:00.000Z" },
+			{ type: "session", id: "sess-a", cwd: "/Users/me/dev/pipane", timestamp: "2026-01-01T10:00:00.000Z" },
 			{ type: "message", id: "m1", parentId: null, timestamp: "2026-01-01T10:00:02.000Z", message: { role: "user", timestamp: 1700000000000, content: "hello" } },
 		]);
 
@@ -126,8 +126,8 @@ describe("SessionIndex", () => {
 		const sessions = await index.listSessions();
 
 		expect(sessions).toHaveLength(1);
-		expect(sessions[0].cwd).toBe("/Users/me/dev/pi-web");
-		expect(sessions[0].cwdDisplay).toBe("~/dev/pi-web");
+		expect(sessions[0].cwd).toBe("/Users/me/dev/pipane");
+		expect(sessions[0].cwdDisplay).toBe("~/dev/pipane");
 	});
 
 	it("invalidates by extractor version", async () => {
@@ -140,7 +140,7 @@ describe("SessionIndex", () => {
 		const v1 = new SessionIndex({ agentDir, extractorVersion: "v1" });
 		await v1.listSessions();
 
-		const cachePath = path.join(agentDir, "cache", "pi-web-session-index-v1.json");
+		const cachePath = path.join(agentDir, "cache", "pipane-session-index-v1.json");
 		const cache1 = JSON.parse(readFileSync(cachePath, "utf8"));
 		expect(cache1.extractorVersion).toBe("v1");
 

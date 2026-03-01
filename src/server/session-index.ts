@@ -50,7 +50,7 @@ export class SessionIndex {
 	constructor(opts?: { agentDir?: string; extractorVersion?: string; cwdDisplayFormatter?: (cwd: string) => string }) {
 		this.agentDir = opts?.agentDir ?? getAgentDir();
 		this.extractorVersion = opts?.extractorVersion ?? DEFAULT_EXTRACTOR_VERSION;
-		this.cacheFilePath = path.join(this.agentDir, "cache", "pi-web-session-index-v1.json");
+		this.cacheFilePath = path.join(this.agentDir, "cache", "pipane-session-index-v1.json");
 		this.cwdDisplayFormatter = opts?.cwdDisplayFormatter;
 	}
 

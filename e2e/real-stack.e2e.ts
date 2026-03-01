@@ -1,9 +1,9 @@
 /**
- * E2E tests against the real pi-web stack with a mock LLM.
+ * E2E tests against the real pipane stack with a mock LLM.
  *
- * These tests start the real pi-web server (which spawns real pi RPC processes)
+ * These tests start the real pipane server (which spawns real pi RPC processes)
  * but point the LLM at a mock OpenAI-compatible endpoint. This validates the
- * full pipeline: UI → WebSocket → pi-web server → pi RPC → mock LLM → back to UI.
+ * full pipeline: UI → WebSocket → pipane server → pi RPC → mock LLM → back to UI.
  */
 
 import { test, expect } from "@playwright/test";
@@ -30,7 +30,7 @@ test.describe("Real stack e2e", () => {
 
 	/** Navigate to the app and start a fresh (virtual) session for a clean test. */
 	async function gotoFreshSession(page: import("@playwright/test").Page) {
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();

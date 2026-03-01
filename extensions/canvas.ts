@@ -1,5 +1,5 @@
 /**
- * Canvas tool extension for pi-web.
+ * Canvas tool extension for pipane.
  *
  * Registers a `canvas` tool that the LLM can call to display markdown
  * content in a side panel. Accepts either inline content or a file path.

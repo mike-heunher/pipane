@@ -97,7 +97,7 @@ test.describe("Session CWD stability", () => {
 		]);
 
 		// Step 1: Go to the app and send a first prompt to establish a project group
-		await page.goto(`http://localhost:${harness.piWebPort}`);
+		await page.goto(`http://localhost:${harness.pipanePort}`);
 
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });

@@ -16,7 +16,7 @@ describe("local-settings", () => {
 	let settingsPath: string;
 
 	beforeEach(() => {
-		tmpDir = mkdtempSync(path.join(os.tmpdir(), "pi-web-local-settings-"));
+		tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-local-settings-"));
 		settingsPath = path.join(tmpDir, ".piweb", "settings.json");
 	});
 
@@ -110,14 +110,14 @@ describe("local-settings", () => {
 				cwdTitle: {
 					filters: [
 						{ pattern: "^~/dev/", replacement: "dev/" },
-						{ pattern: "^dev/pi-web$", replacement: "pi-web (dev)" },
+						{ pattern: "^dev/pipane$", replacement: "pipane (dev)" },
 					],
 				},
 			},
 		}));
 		expect(saved.valid).toBe(true);
 
-		expect(store.formatCwdTitle("/Users/me/dev/pi-web")).toBe("pi-web (dev)");
+		expect(store.formatCwdTitle("/Users/me/dev/pipane")).toBe("pipane (dev)");
 		expect(store.formatCwdTitle("/Users/me/work/other")).toBe("~/work/other");
 	});
 
@@ -128,10 +128,10 @@ describe("local-settings", () => {
 	});
 
 	it("applyCwdFilters applies regex rules in order", () => {
-		const out = applyCwdFilters("~/dev/pi-web", [
+		const out = applyCwdFilters("~/dev/pipane", [
 			{ re: /^~\/dev\//, replacement: "dev/" },
 			{ re: /^dev\//, replacement: "workspace/" },
 		]);
-		expect(out).toBe("workspace/pi-web");
+		expect(out).toBe("workspace/pipane");
 	});
 });

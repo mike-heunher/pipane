@@ -1,5 +1,5 @@
 /**
- * WebSocket handler for pi-web.
+ * WebSocket handler for pipane.
  *
  * Architecture:
  * - Sessions are either "attached" (pi process running, full state in memory)

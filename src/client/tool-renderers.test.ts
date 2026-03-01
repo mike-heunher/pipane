@@ -2,7 +2,7 @@
  * Tests for custom tool renderers.
  *
  * Verifies that registerCodingAgentRenderers() overrides the built-in
- * bash renderer from pi-web-ui with our custom one (no outer card frame,
+ * bash renderer from the UI library with our custom one (no outer card frame,
  * icon/spinner in console header, isCustom: true).
  */
 

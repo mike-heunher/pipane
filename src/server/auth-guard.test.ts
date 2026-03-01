@@ -35,7 +35,7 @@ async function startServer(envOverrides: Record<string, string>): Promise<Runnin
 		...process.env,
 		PORT: String(port),
 		PI_CLI: "definitely-not-an-installed-pi-binary",
-		PI_WEB_AUTH_TOKEN: "test-auth-token",
+		PIPANE_AUTH_TOKEN: "test-auth-token",
 		...envOverrides,
 	};
 
@@ -49,7 +49,7 @@ async function startServer(envOverrides: Record<string, string>): Promise<Runnin
 		const timeout = setTimeout(() => reject(new Error("Timed out waiting for server startup")), 15000);
 		const onData = (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
-			if (text.includes("pi-web server listening")) {
+			if (text.includes("pipane server listening")) {
 				clearTimeout(timeout);
 				proc.stdout.off("data", onData);
 				proc.stderr.off("data", onData);
@@ -94,7 +94,7 @@ describe("auth guard", () => {
 	let server: RunningServer | null = null;
 
 	beforeAll(async () => {
-		server = await startServer({ PI_WEB_DISABLE_LOCAL_BYPASS: "1" });
+		server = await startServer({ PIPANE_DISABLE_LOCAL_BYPASS: "1" });
 	});
 
 	afterAll(async () => {
@@ -120,7 +120,7 @@ describe("auth guard", () => {
 		const good = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`);
 		expect(good.status).toBe(200);
 		const cookiePair = extractCookiePair(good.headers.get("set-cookie"));
-		expect(cookiePair.startsWith("pi_web_auth=")).toBe(true);
+		expect(cookiePair.startsWith("pipane_auth=")).toBe(true);
 
 		const authed = await fetch(`${server!.baseUrl}/api/sessions`, {
 			headers: { Cookie: cookiePair },
@@ -182,6 +182,6 @@ describe("localhost bypass", () => {
 	it("localhost is allowed and sets auth cookie automatically", async () => {
 		const res = await fetch(`${server!.baseUrl}/api/sessions`);
 		expect(res.status).toBe(200);
-		expect(res.headers.get("set-cookie") || "").toContain("pi_web_auth=");
+		expect(res.headers.get("set-cookie") || "").toContain("pipane_auth=");
 	});
 });

@@ -1,4 +1,4 @@
-# pi-web Agent Guidelines
+# pipane Agent Guidelines
 
 ## Testing
 
@@ -21,7 +21,7 @@ npm run test && npx playwright test --timeout 60000
 
 #### `e2e/real-stack.e2e.ts` — Real stack integration (4 tests)
 
-Starts the **real pi-web server** with real pi RPC processes, backed by a **mock OpenAI-compatible LLM** (`e2e/mock-llm-server.ts`). Tests the full pipeline: UI → WebSocket → pi-web → pi RPC → mock LLM → back to UI.
+Starts the **real pipane server** with real pi RPC processes, backed by a **mock OpenAI-compatible LLM** (`e2e/mock-llm-server.ts`). Tests the full pipeline: UI → WebSocket → pipane → pi RPC → mock LLM → back to UI.
 
 - Sending a prompt and seeing the streamed response
 - Tool call execution (read) with multi-turn continuation
@@ -30,7 +30,7 @@ Starts the **real pi-web server** with real pi RPC processes, backed by a **mock
 
 Infrastructure:
 - `e2e/mock-llm-server.ts` — Scenario-based mock `/v1/chat/completions` with SSE streaming. Match on user text and `hasToolResults` for multi-turn flows.
-- `e2e/harness.ts` — Creates temp `PI_CODING_AGENT_DIR` with `models.json` pointing at mock, starts real pi-web server.
+- `e2e/harness.ts` — Creates temp `PI_CODING_AGENT_DIR` with `models.json` pointing at mock, starts real pipane server.
 
 #### `e2e/ui-screenshots.e2e.ts` — Visual golden tests (5 tests)
 
