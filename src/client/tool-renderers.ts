@@ -11,6 +11,7 @@ import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import { icon } from "@mariozechner/mini-lit";
 import { html } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { ref } from "lit/directives/ref.js";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import css from "highlight.js/lib/languages/css";
@@ -264,6 +265,26 @@ function simpleDiff(oldText: string, newText: string): { lines: { type: "ctx" | 
 	return { lines: result };
 }
 
+/**
+ * Ref callback that prevents an element from shrinking during re-renders.
+ * Before Lit updates the DOM, capture the current height as min-height so
+ * the container never collapses while the new diff content is being painted.
+ * Once the tool is complete (no longer streaming), the min-height is cleared
+ * so the element can size naturally.
+ */
+function antiFlickerRef(el: Element | undefined) {
+	if (!el || !(el instanceof HTMLElement)) return;
+	// Pin current height so the element can't shrink during this render
+	const h = el.offsetHeight;
+	if (h > 0) {
+		el.style.minHeight = `${h}px`;
+		// Release after the browser has painted the new content
+		requestAnimationFrame(() => {
+			el.style.minHeight = "";
+		});
+	}
+}
+
 class EditRenderer implements ToolRenderer {
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
 		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
@@ -309,7 +330,7 @@ class EditRenderer implements ToolRenderer {
 
 		return {
 			content: html`
-				<div class="border border-border rounded-lg overflow-hidden">
+				<div ${ref(antiFlickerRef)} class="border border-border rounded-lg overflow-hidden">
 					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
 						<div class="flex items-center gap-2">
 							${statusIcon}

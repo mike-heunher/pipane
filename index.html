@@ -15,7 +15,72 @@
 		</script>
 	</head>
 	<body>
-		<div id="app"></div>
+		<div id="app">
+			<!-- Static skeleton shell: visible until JS renders the real app.
+			     Uses only inline styles so it works before any CSS loads. -->
+			<div id="skeleton-shell" style="display:flex;flex-direction:column;width:100%;height:100vh;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;">
+				<!-- Header bar -->
+				<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 1rem;border-bottom:1px solid var(--border, #e5e7eb);flex-shrink:0;">
+					<div style="display:flex;align-items:center;gap:0.5rem;">
+						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
+						<div class="skeleton-bar" style="width:56px;height:14px;border-radius:4px;"></div>
+					</div>
+					<div style="display:flex;gap:0.35rem;">
+						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
+						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
+						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
+					</div>
+				</div>
+				<!-- Body: sidebar + content -->
+				<div style="display:flex;flex:1;overflow:hidden;">
+					<!-- Sidebar skeleton -->
+					<div style="width:280px;flex-shrink:0;border-right:1px solid var(--border, #e5e7eb);padding:0;">
+						<!-- Sessions header -->
+						<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border, #e5e7eb);">
+							<div class="skeleton-bar" style="width:64px;height:12px;border-radius:3px;"></div>
+							<div class="skeleton-bar" style="width:44px;height:20px;border-radius:4px;"></div>
+						</div>
+						<!-- Search bar -->
+						<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border, #e5e7eb);">
+							<div class="skeleton-bar" style="width:100%;height:28px;border-radius:4px;"></div>
+						</div>
+						<!-- Skeleton session items -->
+						<div style="padding:0.25rem 0;">
+							<!-- Group header -->
+							<div style="padding:0.35rem 0.75rem;margin-top:0.25rem;">
+								<div class="skeleton-bar" style="width:72px;height:10px;border-radius:3px;"></div>
+							</div>
+							<!-- Session items (6 placeholders) -->
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:80%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:45%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:65%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:55%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:90%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:40%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:70%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:50%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:85%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:35%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+							<div class="skeleton-session-item"><div class="skeleton-bar" style="width:60%;height:11px;border-radius:3px;"></div><div class="skeleton-bar" style="width:48%;height:9px;border-radius:3px;margin-top:5px;"></div></div>
+						</div>
+					</div>
+					<!-- Main content area (empty) -->
+					<div style="flex:1;"></div>
+				</div>
+			</div>
+		</div>
+		<style>
+			/* Skeleton styles — inlined for instant paint before CSS bundle loads */
+			.skeleton-bar {
+				background: var(--muted, #e5e7eb);
+				animation: skeleton-pulse 1.5s ease-in-out infinite;
+			}
+			.dark .skeleton-bar {
+				background: var(--muted, #374151);
+			}
+			.skeleton-session-item {
+				padding: 0.4rem 0.75rem;
+			}
+			@keyframes skeleton-pulse {
+				0%, 100% { opacity: 0.6; }
+				50% { opacity: 0.25; }
+			}
+		</style>
 		<script type="module" src="/src/client/main.ts"></script>
 	</body>
 </html>

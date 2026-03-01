@@ -374,14 +374,22 @@ async function initApp() {
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
-	render(
-		html`
-			<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
-				<div class="text-muted-foreground">Connecting...</div>
-			</div>
-		`,
-		app,
-	);
+	// Leave the HTML skeleton shell visible while connecting.
+	// Only show a "Connecting..." overlay if WS takes more than 300ms.
+	let connectingOverlayTimer: ReturnType<typeof setTimeout> | undefined;
+	const skeletonShell = document.getElementById("skeleton-shell");
+	connectingOverlayTimer = setTimeout(() => {
+		// If the skeleton is still visible (JS hasn't rendered the real app yet),
+		// add a subtle connecting indicator on top of it
+		if (skeletonShell?.parentElement === app) {
+			const overlay = document.createElement("div");
+			overlay.id = "connecting-overlay";
+			overlay.style.cssText = "position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);color:var(--muted-foreground,#6b7280);font-size:0.8rem;z-index:10;";
+			overlay.textContent = "Connecting…";
+			skeletonShell.style.position = "relative";
+			skeletonShell.appendChild(overlay);
+		}
+	}, 300);
 
 	// Initialize storage
 	const settings = new SettingsStore();
@@ -407,6 +415,7 @@ async function initApp() {
 		endWsConnectSpan();
 	} catch (err) {
 		endWsConnectSpan();
+		clearTimeout(connectingOverlayTimer);
 		render(
 			html`
 				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
@@ -417,6 +426,8 @@ async function initApp() {
 		);
 		return;
 	}
+
+	clearTimeout(connectingOverlayTimer);
 
 	// Create ChatPanel
 	chatPanel = new ChatPanel();

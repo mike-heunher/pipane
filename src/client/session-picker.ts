@@ -362,6 +362,40 @@ export class SessionPicker extends LitElement {
 			font-size: 0.8rem;
 		}
 
+		/* ── Skeleton loading ─────────────────────────────────── */
+
+		@keyframes skeleton-pulse {
+			0%, 100% { opacity: 0.6; }
+			50% { opacity: 0.25; }
+		}
+
+		.skeleton-group-header {
+			padding: 0.35rem 0.75rem;
+			margin-top: 0.25rem;
+		}
+
+		.skeleton-bar {
+			background: var(--picker-muted);
+			border-radius: 3px;
+			animation: skeleton-pulse 1.5s ease-in-out infinite;
+			opacity: 0.3;
+		}
+
+		.skeleton-item {
+			padding: 0.4rem 0.75rem;
+		}
+
+		.skeleton-name {
+			height: 11px;
+			border-radius: 3px;
+			margin-bottom: 5px;
+		}
+
+		.skeleton-meta {
+			height: 9px;
+			border-radius: 3px;
+		}
+
 		/* ── Folder picker overlay ────────────────────────────────── */
 
 		.folder-picker {
@@ -525,6 +559,7 @@ export class SessionPicker extends LitElement {
 
 	@state() private sessions: SessionInfoDTO[] = [];
 	@state() private loading = true;
+	@state() private showSkeleton = false;
 	@state() private searchQuery = "";
 	@state() private expandedGroups = new Set<string>();
 	@state() private pinnedSessions = loadPinnedSessions();
@@ -544,9 +579,14 @@ export class SessionPicker extends LitElement {
 	private _fetchInFlight = false;
 	private _fetchDirty = false;
 	private _sessionsChangedDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+	private _skeletonGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	connectedCallback() {
 		super.connectedCallback();
+		// Only show skeleton after a 300ms grace period — avoids flicker on fast loads
+		this._skeletonGraceTimer = setTimeout(() => {
+			if (this.loading) this.showSkeleton = true;
+		}, 300);
 		this.refreshSessions();
 		if (this.agent) {
 			this.unsubSessionChange = this.agent.onSessionChange(() => {
@@ -583,6 +623,10 @@ export class SessionPicker extends LitElement {
 		if (this._sessionsChangedDebounceTimer) {
 			clearTimeout(this._sessionsChangedDebounceTimer);
 			this._sessionsChangedDebounceTimer = null;
+		}
+		if (this._skeletonGraceTimer) {
+			clearTimeout(this._skeletonGraceTimer);
+			this._skeletonGraceTimer = null;
 		}
 	}
 
@@ -944,15 +988,42 @@ export class SessionPicker extends LitElement {
 					/>
 				</div>
 				<div class="sessions-list">
-					${this.loading
-						? html`<div class="loading">Loading sessions…</div>`
-						: groups.length === 0
+					${this.loading && this.showSkeleton
+						? this.renderSkeletonSessions()
+						: this.loading
+							? nothing
+							: groups.length === 0
 							? html`<div class="empty">No sessions found</div>`
 							: repeat(groups, (g) => g.cwd, (group) => this.renderGroup(group, activeId))}
 				</div>
 
 				${this.showFolderPicker ? this.renderFolderPicker() : nothing}
 			</div>
+		`;
+	}
+
+	private renderSkeletonSessions(): TemplateResult {
+		// Skeleton placeholders that match the geometry of real session items.
+		// Widths vary to look natural.
+		const items = [
+			{ nameW: "80%", metaW: "45%" },
+			{ nameW: "65%", metaW: "55%" },
+			{ nameW: "90%", metaW: "40%" },
+			{ nameW: "70%", metaW: "50%" },
+			{ nameW: "85%", metaW: "35%" },
+			{ nameW: "60%", metaW: "48%" },
+		];
+		return html`
+			<!-- Skeleton group header -->
+			<div class="skeleton-group-header">
+				<div class="skeleton-bar" style="width:72px;height:10px;"></div>
+			</div>
+			${items.map((item) => html`
+				<div class="skeleton-item">
+					<div class="skeleton-bar skeleton-name" style="width:${item.nameW};"></div>
+					<div class="skeleton-bar skeleton-meta" style="width:${item.metaW};"></div>
+				</div>
+			`)}
 		`;
 	}
 
