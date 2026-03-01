@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-SESSION="pipane-dev"
+SESSION="pi-web-dev"
 DEV_PORT="${DEV_PORT:-8111}"
 BACKEND_PORT="${BACKEND_PORT:-18111}"
 PI_CWD="${PI_CWD:-$SCRIPT_DIR}"

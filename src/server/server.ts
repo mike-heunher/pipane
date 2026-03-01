@@ -33,7 +33,8 @@ import { WsHandler } from "./ws-handler.js";
 import { LoadTraceStore } from "./load-trace-store.js";
 import { LocalSettingsStore } from "./local-settings.js";
 
-const PORT = parseInt(process.env.PORT || "18111", 10);
+const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
+const PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
 const PI_CLI = process.env.PI_CLI;
 const PI_LAUNCH = resolvePiLaunch(PI_CLI);

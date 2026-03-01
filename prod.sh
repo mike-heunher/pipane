@@ -4,8 +4,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SESSION="pipane-prod"
+SESSION="pi-web-prod"
 BUILD_DIR="dist"
+
+# Stop mode: just kill the tmux session and exit
+if [[ "${1:-}" == "stop" ]]; then
+  tmux kill-session -t "$SESSION" 2>/dev/null && echo "✅ Stopped tmux session '$SESSION'" || echo "⚠️  No session '$SESSION' running"
+  exit 0
+fi
 
 export PORT="${PORT:-8222}"
 export PI_CWD="${PI_CWD:-$(pwd)}"

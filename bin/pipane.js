@@ -13,7 +13,7 @@ if (process.env.PIPANE_PRINT_ENTRY === "1") {
 
 const child = spawn(process.execPath, [serverEntry], {
 	stdio: "inherit",
-	env: process.env,
+	env: { ...process.env, NODE_ENV: process.env.NODE_ENV || "production" },
 });
 
 child.on("exit", (code) => {
