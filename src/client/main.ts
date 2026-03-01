@@ -360,8 +360,8 @@ const renderApp = () => {
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
 										.onAbort=${() => agent?.abort()}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
+										.extraToolbarButtons=${() => renderTokenUsage()}
 									></message-editor>
-									<div class="input-token-bar">${renderTokenUsage()}</div>
 								</div>
 							</div>
 						</div>

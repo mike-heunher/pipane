@@ -177,19 +177,12 @@ pi-message-list markdown-block {
 	}
 }
 
-/* ── Token usage bar below input ───────────────────────────────── */
-
-.input-token-bar {
-	min-height: 1.15rem;
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	padding: 0.1rem 0.25rem 0;
-}
+/* ── Token usage inline in toolbar ──────────────────────────────── */
 
 .input-token-usage {
 	font-size: 0.68rem;
 	color: var(--muted-foreground, #6b7280);
+	white-space: nowrap;
 }
 
 /* ── Canvas side panel ─────────────────────────────────────────── */
