@@ -462,6 +462,67 @@ describe("session-picker", () => {
 			expect(empty).not.toBeNull();
 			expect(empty!.textContent?.trim()).toBe("No sessions found");
 		});
+
+		it("does not clear search on repeated status updates while attached", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({ name: "Some session", cwd: "/home/user/app" }),
+			]);
+			agent.sessionStatus = "attached";
+
+			const el = await createPicker(agent);
+			const input = getSearchInput(el)!;
+			input.value = "keepme";
+			input.dispatchEvent(new Event("input"));
+			await el.updateComplete;
+
+			agent.emitStatusChange();
+			await el.updateComplete;
+			agent.emitStatusChange();
+			await el.updateComplete;
+
+			expect(getSearchInput(el)!.value).toBe("keepme");
+		});
+
+		it("clears search when status transitions into attached", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({ name: "Some session", cwd: "/home/user/app" }),
+			]);
+			agent.sessionStatus = "detached";
+
+			const el = await createPicker(agent);
+			const input = getSearchInput(el)!;
+			input.value = "clearme";
+			input.dispatchEvent(new Event("input"));
+			await el.updateComplete;
+
+			agent.sessionStatus = "attached";
+			agent.emitStatusChange();
+			await el.updateComplete;
+
+			expect(getSearchInput(el)!.value).toBe("");
+		});
+
+		it("clears search when selecting a different session", async () => {
+			const agent = new MockAgent();
+			const target = createSession({ id: "target-session", name: "Target", cwd: "/home/user/app" });
+			agent.setSessions([target]);
+			agent.sessionId = "active-session";
+			const switchSpy = vi.spyOn(agent, "switchSession");
+
+			const el = await createPicker(agent);
+			const input = getSearchInput(el)!;
+			input.value = "target";
+			input.dispatchEvent(new Event("input"));
+			await el.updateComplete;
+
+			getSessionItems(el)[0].click();
+			await el.updateComplete;
+
+			expect(getSearchInput(el)!.value).toBe("");
+			expect(switchSpy).toHaveBeenCalledWith(target.path);
+		});
 	});
 
 	describe("show more / truncation", () => {

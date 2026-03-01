@@ -630,6 +630,7 @@ export class SessionPicker extends LitElement {
 	private _fetchDirty = false;
 	private _sessionsChangedDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 	private _skeletonGraceTimer: ReturnType<typeof setTimeout> | null = null;
+	private _lastObservedSessionStatus: "virtual" | "attached" | "detached" | undefined;
 
 	connectedCallback() {
 		super.connectedCallback();
@@ -649,6 +650,7 @@ export class SessionPicker extends LitElement {
 			this.refreshSessions();
 		}
 		if (this.agent) {
+			this._lastObservedSessionStatus = this.agent.sessionStatus;
 			this.unsubSessionChange = this.agent.onSessionChange(() => {
 				// Merge optimistic/virtual immediately (no REST call needed)
 				this.mergeOptimisticSessions();
@@ -666,8 +668,12 @@ export class SessionPicker extends LitElement {
 				this.requestUpdate();
 			});
 			this.unsubStatusChange = this.agent.onStatusChange(() => {
-				// Clear search filter when a prompt is sent (session becomes attached/streaming)
-				if (this.agent.sessionStatus === "attached") {
+				const prev = this._lastObservedSessionStatus;
+				const next = this.agent.sessionStatus;
+				this._lastObservedSessionStatus = next;
+				// Clear only on transition into "attached" (prompt just sent),
+				// not on every status update while still attached.
+				if (next === "attached" && prev !== "attached") {
 					this.clearSearchFilter();
 				}
 			});
@@ -891,6 +897,7 @@ export class SessionPicker extends LitElement {
 	private async handleSessionClick(session: SessionInfoDTO) {
 		if (session.id === this.agent?.sessionId) return;
 		if (session.path.startsWith("__virtual__")) return; // Can't switch to another virtual session
+		this.clearSearchFilter();
 		// Collapse all expanded groups when picking a session
 		if (this.expandedGroups.size > 0) {
 			this.expandedGroups = new Set();
