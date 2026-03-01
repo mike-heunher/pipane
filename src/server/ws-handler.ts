@@ -826,7 +826,16 @@ export class WsHandler {
 			if (currentSession !== sessionRef) return;
 
 			// Apply event to the in-memory attached session
-			const changed = currentSession.applyEvent(data);
+			let changed = currentSession.applyEvent(data);
+
+			// After auto-compaction, the pi process rewrites the JSONL and calls
+			// replaceMessages() internally.  SessionJsonl doesn't know about this,
+			// so re-read the session from disk to pick up the compacted state.
+			if (data.type === "auto_compaction_end" && data.result) {
+				const { state } = readSessionFromDisk(sessionPath);
+				currentSession.replaceMessages(state.messages);
+				changed = true;
+			}
 
 			// Side-channel raw event for UI hooks (canvas/jsonl), not state updates
 			if (ws.readyState === WebSocket.OPEN) {

@@ -104,6 +104,19 @@ export class SessionJsonl {
 	get messages(): AgentMessage[] { return this._messages; }
 
 	/**
+	 * Replace the internal messages array (e.g. after auto-compaction rewrites
+	 * the session). Rebuilds the JSON and bumps the version.
+	 */
+	replaceMessages(messages: AgentMessage[]): void {
+		this._messages = messages;
+		this._streamMessage = null;
+		this._pendingToolCalls = [];
+		this._partialToolResults = {};
+		this._version++;
+		this.rebuildJson();
+	}
+
+	/**
 	 * Apply a streaming event from the pi process.
 	 * Returns true if state changed.
 	 */
