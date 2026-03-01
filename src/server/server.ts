@@ -375,10 +375,19 @@ if (PI_AVAILABLE) {
 }
 
 server.listen(PORT, () => {
+	log("");
+	log("        _                        ");
+	log("  _ __ (_)_ __   __ _ _ __   ___ ");
+	log(" | '_ \\| | '_ \\ / _` | '_ \\ / _ \\");
+	log(" | |_) | | |_) | (_| | | | |  __/");
+	log(" | .__/|_| .__/ \\__,_|_| |_|\\___|");
+	log(" |_|     |_|                      ");
+	log("");
 	log(`  Local:  http://localhost:${PORT}`);
 	log(`  Remote: ${AUTH_URL}`);
 	if (!process.env.PIPANE_AUTH_TOKEN) {
 		log(`\n  Auth token is random and changes on restart.`);
 		log(`  Set PIPANE_AUTH_TOKEN to use a fixed token.`);
 	}
+	log("");
 });
