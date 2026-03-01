@@ -1120,13 +1120,9 @@ export class WsAgentAdapter {
 		this._nextPromptModelOverride = m;
 		// Reflect selection in the UI immediately.
 		this._state.model = m;
-		// Keep thinking level in sync with model capabilities.
-		// Force thinking off only for models we can confidently identify as
-		// non-reasoning. For some providers (notably codex), metadata may omit
-		// `reasoning` even though the model supports thinking.
-		if (!this.modelSupportsThinking(m)) {
-			this._state.thinkingLevel = "off";
-		}
+		// Whenever the user selects a model, reset thinking to a consistent default.
+		// Use "medium" for reasoning-capable models, otherwise force "off".
+		this._state.thinkingLevel = this.modelSupportsThinking(m) ? "medium" : "off";
 		this.emitContentChange();
 	}
 
