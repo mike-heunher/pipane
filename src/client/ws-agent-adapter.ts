@@ -26,6 +26,7 @@ type WsCommand =
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
 	| { type: "get_commands" }
+	| { type: "reload_processes" }
 	| { type: "set_session_name"; sessionPath: string; name: string }
 	| { type: "fork"; sessionPath: string; entryId: string }
 	| { type: "subscribe_session"; sessionPath: string }
@@ -992,6 +993,7 @@ export class WsAgentAdapter {
 			"| `/new` | Start a new session |",
 			"| `/fork` | Fork session from a previous message |",
 			"| `/compact [instructions]` | Compact conversation history |",
+			"| `/reload` | Restart all pooled pi RPC processes |",
 		];
 
 		// Fetch extension commands, prompt templates, and skills from pi
@@ -1088,6 +1090,26 @@ export class WsAgentAdapter {
 			}
 			// Re-subscribe to get fresh messages after compaction
 			await this.subscribeToSession(this._sessionPath);
+			return true;
+		}
+
+		if (trimmed === "/reload") {
+			try {
+				const data = await this.send({ type: "reload_processes" }) as { killed?: number; draining?: number };
+				const killed = data?.killed ?? 0;
+				const draining = data?.draining ?? 0;
+				this._state.messages = [...this._state.messages, {
+					role: "assistant",
+					content: [{ type: "text", text: `Reload requested: killed ${killed} idle process(es), draining ${draining} running process(es).` }],
+				} as AgentMessage];
+				this.emitContentChange();
+			} catch (err: any) {
+				this._state.messages = [...this._state.messages, {
+					role: "assistant",
+					content: [{ type: "text", text: `Failed to reload pi processes: ${err?.message || "unknown error"}` }],
+				} as AgentMessage];
+				this.emitContentChange();
+			}
 			return true;
 		}
 

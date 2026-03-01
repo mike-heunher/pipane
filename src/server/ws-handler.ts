@@ -70,6 +70,8 @@ export class WsHandler {
 	private wsTraceIds = new Map<WebSocket, string>();
 	private busyProcesses = new Set<RpcProcess>();
 	private procEventCleanup = new Map<RpcProcess, () => void>();
+	/** Processes marked for graceful decommission after current turn ends. */
+	private decommissionProcesses = new Set<RpcProcess>();
 
 	/**
 	 * In-memory state for sessions with an attached pi process.
@@ -184,6 +186,7 @@ export class WsHandler {
 			exitCode: p.process.exitCode,
 			cwd: p.cwd,
 			busy: this.busyProcesses.has(p),
+			decommissioning: this.decommissionProcesses.has(p),
 			attachedSession: this.lifecycle.getAttachedSessionForProcess(p) ?? null,
 			pendingRequests: p.pendingRequests.size,
 		}));
@@ -331,6 +334,9 @@ export class WsHandler {
 					break;
 				case "get_commands":
 					await this.handleGetCommands(ws, id);
+					break;
+				case "reload_processes":
+					await this.handleReloadProcesses(ws, id);
 					break;
 				default:
 					ws.send(JSON.stringify({
@@ -554,6 +560,47 @@ export class WsHandler {
 		ws.send(JSON.stringify({ ...response, id, command: "get_commands" }));
 	}
 
+	private async handleReloadProcesses(ws: WebSocket, id: string): Promise<void> {
+		const all = this.pool.getAllProcesses();
+		let killed = 0;
+		let draining = 0;
+
+		for (const proc of all) {
+			if (proc.process.exitCode !== null) continue;
+
+			const sessionPath = this.lifecycle.getAttachedSessionForProcess(proc);
+			if (sessionPath) {
+				// Graceful path: keep running turns alive, but decommission the process
+				// once the turn ends (releaseProcess will terminate it).
+				if (!this.decommissionProcesses.has(proc)) {
+					this.decommissionProcesses.add(proc);
+					draining += 1;
+				}
+				continue;
+			}
+
+			// Idle/unattached process: terminate immediately.
+			const cleanup = this.procEventCleanup.get(proc);
+			if (cleanup) {
+				cleanup();
+				this.procEventCleanup.delete(proc);
+			}
+			this.busyProcesses.delete(proc);
+			this.decommissionProcesses.delete(proc);
+			proc.process.kill("SIGTERM");
+			killed += 1;
+		}
+
+		this.ensurePool();
+		ws.send(JSON.stringify({
+			id,
+			type: "response",
+			command: "reload_processes",
+			success: true,
+			data: { killed, draining },
+		}));
+	}
+
 	private async handleGetDefaultModel(ws: WebSocket, id: string): Promise<void> {
 		const proc = this.getAnyProcess();
 		const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
@@ -658,6 +705,11 @@ export class WsHandler {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
+	/** Busy + decommissioned processes are unavailable for reuse. */
+	private getUnavailableProcesses(): Set<RpcProcess> {
+		return new Set([...this.busyProcesses, ...this.decommissionProcesses]);
+	}
+
 	/**
 	 * Create a SessionJsonl for a session path.
 	 * Reads existing JSONL from disk to seed the initial messages.
@@ -708,10 +760,11 @@ export class WsHandler {
 		const start = Date.now();
 
 		while (true) {
-			const proc = this.pool.acquire(cwd, this.busyProcesses);
+			const unavailable = this.getUnavailableProcesses();
+			const proc = this.pool.acquire(cwd, unavailable);
 			if (proc) return proc;
 
-			const evicted = this.pool.evictIdleDifferentCwd(cwd, this.busyProcesses);
+			const evicted = this.pool.evictIdleDifferentCwd(cwd, unavailable);
 			if (evicted) {
 				await this.sleep(50);
 				continue;
@@ -728,7 +781,6 @@ export class WsHandler {
 	private releaseProcess(sessionPath: string): void {
 		const proc = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
 		if (proc) {
-			this.busyProcesses.delete(proc);
 			const cleanup = this.procEventCleanup.get(proc);
 			if (cleanup) {
 				cleanup();
@@ -745,10 +797,20 @@ export class WsHandler {
 		const { json, hash } = readSessionFromDisk(sessionPath);
 		this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
 		this.pushSnapshotToSubscribers(sessionPath, json, hash);
+
+		if (proc) {
+			const shouldDecommission = this.decommissionProcesses.has(proc);
+			if (shouldDecommission) {
+				this.decommissionProcesses.delete(proc);
+				console.log(`[pool] Decommissioning pi#${proc.id} after completed turn`);
+				proc.process.kill("SIGTERM");
+			}
+			this.busyProcesses.delete(proc);
+		}
 	}
 
 	private getAnyProcess(): RpcProcess {
-		let proc = this.pool.getAny(this.busyProcesses);
+		let proc = this.pool.getAny(this.getUnavailableProcesses());
 		if (!proc) {
 			proc = this.pool.spawn(this.defaultCwd);
 		}

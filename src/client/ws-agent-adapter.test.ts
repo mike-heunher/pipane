@@ -800,4 +800,31 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(a._pendingSessionSync.hash).toBe("h2");
 		});
 	});
+
+	describe("slash commands", () => {
+		it("/reload sends reload_processes, does not send a prompt, and adds a confirmation message", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			await adapter.prompt("/reload");
+			await new Promise((r) => setTimeout(r, 50));
+
+			const reloadMsgs = sent.filter((m) => m.type === "reload_processes");
+			expect(reloadMsgs).toHaveLength(1);
+			expect(sent.filter((m) => m.type === "prompt")).toHaveLength(0);
+
+			const last = adapter.state.messages.at(-1) as any;
+			expect(last?.content?.[0]?.text || "").toContain("Reload requested");
+		});
+
+		it("/help output includes /reload", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			await adapter.prompt("/help");
+			const last = adapter.state.messages.at(-1) as any;
+			const text = last?.content?.[0]?.text || "";
+			expect(text).toContain("`/reload`");
+		});
+	});
 });
