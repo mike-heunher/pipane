@@ -1,8 +1,8 @@
 /**
  * Tool renderers for pi coding agent tools.
  *
- * Registers renderers for Read, Edit, Write that show the tool name
- * and relevant parameters in the header.
+ * Registers renderers for Read, Edit, Write, Bash, Canvas that show
+ * tool name and relevant parameters with a gutter-thread collapsible layout.
  */
 
 import { registerToolRenderer } from "@mariozechner/pi-web-ui";
@@ -33,7 +33,7 @@ import php from "highlight.js/lib/languages/php";
 import swift from "highlight.js/lib/languages/swift";
 import kotlin from "highlight.js/lib/languages/kotlin";
 import scss from "highlight.js/lib/languages/scss";
-import { FileText, FilePen, FilePlus, SquareTerminal, Loader, Copy, PanelRight } from "lucide";
+import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight } from "lucide";
 import { showCanvas } from "./canvas-panel.js";
 
 // Register highlight.js languages
@@ -59,21 +59,14 @@ hljs.registerLanguage("swift", swift);
 hljs.registerLanguage("kotlin", kotlin);
 hljs.registerLanguage("scss", scss);
 
+// Intentionally a no-op: we currently want full, untruncated tool content in the UI.
+// Keep `_max` in the signature so call sites remain stable if we re-enable truncation later.
 function truncate(s: string, _max: number): string {
 	return s;
 }
 
 /**
  * Auto-scroll pinning for streaming tool output containers.
- *
- * - While streaming: pins scroll to the bottom unless the user scrolls up.
- *   Re-pins when the user scrolls back to the bottom.
- * - On completion: scrolls to the end once so finished tool calls always
- *   show the tail of the output.
- *
- * Uses a MutationObserver on the scrollable container to detect content
- * changes reliably (the ref callback alone can fire before Lit has
- * committed the inner text nodes).
  */
 function createScrollPin() {
 	let userScrolledUp = false;
@@ -81,7 +74,6 @@ function createScrollPin() {
 	let el: HTMLElement | null = null;
 	let observer: MutationObserver | null = null;
 	let scrollListenerInstalled = false;
-	/** Tracks whether we already did the one-time scroll-to-end on completion. */
 	let didCompleteScroll = false;
 
 	function isAtBottom(): boolean {
@@ -98,7 +90,6 @@ function createScrollPin() {
 		userScrolledUp = !isAtBottom();
 	}
 
-	/** Called by MutationObserver whenever child content changes. */
 	function onMutation() {
 		if (!el) return;
 		if (isStreaming && !userScrolledUp) {
@@ -110,7 +101,6 @@ function createScrollPin() {
 		if (!element || !(element instanceof HTMLElement)) return;
 
 		if (element !== el) {
-			// New element — reset state and install listeners
 			el = element;
 			scrollListenerInstalled = false;
 			observer?.disconnect();
@@ -129,8 +119,6 @@ function createScrollPin() {
 			observer.observe(el, { childList: true, subtree: true, characterData: true });
 		}
 
-		// When streaming just finished (transition to complete), scroll to end
-		// once so the user sees the tail of the output.
 		if (!isStreaming && !didCompleteScroll) {
 			didCompleteScroll = true;
 			requestAnimationFrame(() => scrollToEnd());
@@ -141,11 +129,9 @@ function createScrollPin() {
 		ref: refCb,
 		set streaming(v: boolean) {
 			if (isStreaming && !v) {
-				// Streaming just stopped — let refCb do the one-time completion scroll
 				didCompleteScroll = false;
 			}
 			if (!isStreaming && v) {
-				// Streaming just started — reset user scroll state
 				userScrolledUp = false;
 				didCompleteScroll = false;
 			}
@@ -204,11 +190,66 @@ function resultText(result: ToolResultMessage | undefined): string {
 	);
 }
 
+// ── Shared helpers ──────────────────────────────────────────────
+
+type ToolState = "complete" | "error" | "inprogress";
+
+/** Icon color class based on tool state. */
+function iconColorClass(state: ToolState): string {
+	return state === "complete"
+		? "text-green-600 dark:text-green-500"
+		: state === "error"
+			? "text-destructive"
+			: "text-foreground";
+}
+
+/** Gutter thread line color based on tool state. */
+function threadColorClass(state: ToolState): string {
+	return state === "complete"
+		? "bg-green-300 dark:bg-green-700"
+		: state === "error"
+			? "bg-destructive/40"
+			: "bg-border";
+}
+
+/** Toggle click handler: toggles the body and rotates the chevron. */
+function handleToggle(e: Event) {
+	const hdr = (e.currentTarget as HTMLElement);
+	const wrapper = hdr.closest(".tool-gutter-wrap");
+	if (!wrapper) return;
+	const body = wrapper.querySelector(".tool-body-collapsible") as HTMLElement;
+	const threadLine = wrapper.querySelector(".tool-thread-line") as HTMLElement;
+	const chv = hdr.querySelector(".tool-chevron") as HTMLElement;
+	if (!body) return;
+	const isHidden = body.style.display === "none";
+	body.style.display = isHidden ? "" : "none";
+	if (threadLine) threadLine.style.display = isHidden ? "" : "none";
+	if (chv) {
+		chv.style.transform = isHidden ? "rotate(90deg)" : "";
+	}
+}
+
+/**
+ * Ref callback that prevents an element from shrinking during re-renders.
+ */
+function antiFlickerRef(el: Element | undefined) {
+	if (!el || !(el instanceof HTMLElement)) return;
+	const h = el.offsetHeight;
+	if (h > 0) {
+		el.style.minHeight = `${h}px`;
+		requestAnimationFrame(() => {
+			el.style.minHeight = "";
+		});
+	}
+}
+
+// ── Renderers ───────────────────────────────────────────────────
+
 class ReadRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
@@ -224,13 +265,7 @@ class ReadRenderer implements ToolRenderer {
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
 
-		const iconColor = state === "complete"
-			? "text-green-600 dark:text-green-500"
-			: state === "error"
-				? "text-destructive"
-				: "text-foreground";
-
-		const statusIcon = html`<span class="inline-block ${iconColor}">${icon(FileText, "sm")}</span>`;
+		const statusIcon = html`<span class="inline-block ${iconColorClass(state)}">${icon(FileText, "sm")}</span>`;
 		const spinner = state === "inprogress"
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
@@ -238,27 +273,27 @@ class ReadRenderer implements ToolRenderer {
 		const content = output ? truncate(output, 4000) : "";
 		const language = getLanguageFromPath(path);
 		const highlighted = content && !isError ? highlightCode(content, language) : "";
+		const hasBody = !!content;
 
 		return {
 			content: html`
-				<div class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
-						<div class="flex items-center gap-2">
-							${statusIcon}
-							<span class="text-xs text-muted-foreground font-mono">${headerLabel}</span>
+				<div class="tool-gutter-wrap flex my-0">
+					<div class="tool-gutter flex flex-col items-center w-5 shrink-0 pt-0.5">
+						${statusIcon}
+						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
+							<span class="tool-header-label text-muted-foreground font-mono">${headerLabel}</span>
 							${spinner}
 						</div>
-						${content ? html`<button
-							@click=${async (e: Event) => {
-								try { await navigator.clipboard.writeText(output); } catch {}
-							}}
-							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
-							title="Copy output"
-						>${icon(Copy, "sm")}</button>` : ""}
+						${hasBody ? html`<div class="tool-body-collapsible">
+							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
+							</div>
+						</div>` : ""}
 					</div>
-					${content ? html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
-						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
-					</div>` : ""}
 				</div>
 			`,
 			isCustom: true,
@@ -270,7 +305,7 @@ class WriteRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
@@ -283,7 +318,6 @@ class WriteRenderer implements ToolRenderer {
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
 
-		// Build header: write(filename) — N bytes | error message
 		let headerLabel = filename ? `write(${filename})` : "write";
 		if (state === "error" && output) {
 			headerLabel += ` — ${truncate(output, 80)}`;
@@ -291,13 +325,7 @@ class WriteRenderer implements ToolRenderer {
 			headerLabel += ` — ${contentBytes.toLocaleString()} bytes`;
 		}
 
-		const iconColor = state === "complete"
-			? "text-green-600 dark:text-green-500"
-			: state === "error"
-				? "text-destructive"
-				: "text-foreground";
-
-		const statusIcon = html`<span class="inline-block ${iconColor}">${icon(FilePlus, "sm")}</span>`;
+		const statusIcon = html`<span class="inline-block ${iconColorClass(state)}">${icon(FilePlus, "sm")}</span>`;
 		const spinner = state === "inprogress"
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
@@ -305,27 +333,27 @@ class WriteRenderer implements ToolRenderer {
 		const language = getLanguageFromPath(path);
 		const displayContent = fileContent ? truncate(fileContent, 4000) : "";
 		const highlighted = displayContent && !isError ? highlightCode(displayContent, language) : "";
+		const hasBody = !!displayContent;
 
 		return {
 			content: html`
-				<div class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center justify-between px-3 py-1.5 bg-muted ${displayContent ? "border-b border-border" : ""}">
-						<div class="flex items-center gap-2 min-w-0">
-							${statusIcon}
-							<span class="text-xs ${isError ? "text-destructive" : "text-muted-foreground"} font-mono truncate">${headerLabel}</span>
+				<div class="tool-gutter-wrap flex my-0">
+					<div class="tool-gutter flex flex-col items-center w-5 shrink-0 pt-0.5">
+						${statusIcon}
+						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
+							<span class="tool-header-label ${isError ? "text-destructive" : "text-muted-foreground"} font-mono truncate">${headerLabel}</span>
 							${spinner}
 						</div>
-						${displayContent ? html`<button
-							@click=${async (e: Event) => {
-								try { await navigator.clipboard.writeText(fileContent); } catch {}
-							}}
-							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
-							title="Copy content"
-						>${icon(Copy, "sm")}</button>` : ""}
+						${hasBody ? html`<div class="tool-body-collapsible">
+							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+								<pre class="m-0 tool-body-code text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
+							</div>
+						</div>` : ""}
 					</div>
-					${displayContent ? html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
-						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
-					</div>` : ""}
 				</div>
 			`,
 			isCustom: true,
@@ -338,15 +366,12 @@ function simpleDiff(oldText: string, newText: string): { lines: { type: "ctx" | 
 	const newLines = newText.split("\n");
 	const result: { type: "ctx" | "del" | "add"; text: string }[] = [];
 
-	// Simple LCS-based diff
 	const m = oldLines.length, n = newLines.length;
-	// Build LCS table
 	const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
 	for (let i = 1; i <= m; i++)
 		for (let j = 1; j <= n; j++)
 			dp[i][j] = oldLines[i - 1] === newLines[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
 
-	// Backtrack
 	let i = m, j = n;
 	const ops: ("ctx" | "del" | "add")[] = [];
 	const texts: string[] = [];
@@ -364,31 +389,11 @@ function simpleDiff(oldText: string, newText: string): { lines: { type: "ctx" | 
 	return { lines: result };
 }
 
-/**
- * Ref callback that prevents an element from shrinking during re-renders.
- * Before Lit updates the DOM, capture the current height as min-height so
- * the container never collapses while the new diff content is being painted.
- * Once the tool is complete (no longer streaming), the min-height is cleared
- * so the element can size naturally.
- */
-function antiFlickerRef(el: Element | undefined) {
-	if (!el || !(el instanceof HTMLElement)) return;
-	// Pin current height so the element can't shrink during this render
-	const h = el.offsetHeight;
-	if (h > 0) {
-		el.style.minHeight = `${h}px`;
-		// Release after the browser has painted the new content
-		requestAnimationFrame(() => {
-			el.style.minHeight = "";
-		});
-	}
-}
-
 class EditRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
@@ -400,13 +405,7 @@ class EditRenderer implements ToolRenderer {
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
 
-		const iconColor = state === "complete"
-			? "text-green-600 dark:text-green-500"
-			: state === "error"
-				? "text-destructive"
-				: "text-foreground";
-
-		const statusIcon = html`<span class="inline-block ${iconColor}">${icon(FilePen, "sm")}</span>`;
+		const statusIcon = html`<span class="inline-block ${iconColorClass(state)}">${icon(FilePen, "sm")}</span>`;
 		const spinner = state === "inprogress"
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
@@ -415,40 +414,39 @@ class EditRenderer implements ToolRenderer {
 		const newText = parsed.newText || "";
 		const hasDiff = oldText || newText;
 
-		let diffContent: ReturnType<typeof html> | string = "";
+		let diffBody: ReturnType<typeof html> | string = "";
 		if (hasDiff) {
 			const diff = simpleDiff(oldText, newText);
-			diffContent = html`<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
-				<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs font-mono whitespace-pre-wrap">${diff.lines.map(l =>
+			diffBody = html`<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+				<pre class="m-0 tool-body-code font-mono whitespace-pre-wrap">${diff.lines.map(l =>
 					l.type === "del" ? html`<span class="text-red-500 dark:text-red-400">- ${l.text}\n</span>`
 					: l.type === "add" ? html`<span class="text-green-500 dark:text-green-400">+ ${l.text}\n</span>`
 					: html`<span class="text-muted-foreground">  ${l.text}\n</span>`
 				)}</pre>
 			</div>`;
 		} else if (output && isError) {
-			diffContent = html`<div class="overflow-auto max-h-64">
-				<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs text-destructive font-mono whitespace-pre-wrap">${truncate(output, 4000)}</pre>
+			diffBody = html`<div class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+				<pre class="m-0 tool-body-code text-destructive font-mono whitespace-pre-wrap">${truncate(output, 4000)}</pre>
 			</div>`;
 		}
 
+		const hasBody = !!(hasDiff || (output && isError));
+
 		return {
 			content: html`
-				<div ${ref(antiFlickerRef)} class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
-						<div class="flex items-center gap-2">
-							${statusIcon}
-							<span class="text-xs text-muted-foreground font-mono">${headerLabel}</span>
+				<div ${ref(antiFlickerRef)} class="tool-gutter-wrap flex my-0">
+					<div class="tool-gutter flex flex-col items-center w-5 shrink-0 pt-0.5">
+						${statusIcon}
+						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
+							<span class="tool-header-label text-muted-foreground font-mono">${headerLabel}</span>
 							${spinner}
 						</div>
-						${hasDiff ? html`<button
-							@click=${async (e: Event) => {
-								try { await navigator.clipboard.writeText(newText); } catch {}
-							}}
-							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
-							title="Copy new text"
-						>${icon(Copy, "sm")}</button>` : ""}
+						${hasBody ? html`<div class="tool-body-collapsible">${diffBody}</div>` : ""}
 					</div>
-					${diffContent}
 				</div>
 			`,
 			isCustom: true,
@@ -460,8 +458,7 @@ class BashRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
-		// When streaming with a result, it's a partial result (bash stdout streaming)
-		const state = result
+		const state: ToolState = result
 			? result.isError ? "error" : (isStreaming ? "inprogress" : "complete")
 			: "inprogress";
 		this.scrollPin.streaming = state === "inprogress";
@@ -481,45 +478,32 @@ class BashRenderer implements ToolRenderer {
 				: "";
 		const isError = result?.isError ?? false;
 
-		const iconColor = state === "complete"
-			? "text-green-600 dark:text-green-500"
-			: state === "error"
-				? "text-destructive"
-				: "text-foreground";
-
-		const statusIcon = html`<span class="inline-block ${iconColor}">${icon(SquareTerminal, "sm")}</span>`;
+		const statusIcon = html`<span class="inline-block ${iconColorClass(state)}">${icon(SquareTerminal, "sm")}</span>`;
 		const spinner = state === "inprogress"
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
 
+		// Bash always has a body (even if empty during streaming)
+		const hasBody = true;
+
 		return {
 			content: html`
-				<div class="border border-border rounded-lg overflow-hidden">
-					<div class="flex items-center justify-between px-3 py-1.5 bg-muted border-b border-border">
-						<div class="flex items-center gap-2 min-w-0">
-							${statusIcon}
-							<span class="text-xs text-muted-foreground font-mono truncate" title="${command}">${command || "console"}</span>
+				<div class="tool-gutter-wrap flex my-0">
+					<div class="tool-gutter flex flex-col items-center w-5 shrink-0 pt-0.5">
+						${statusIcon}
+						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
+							<span class="tool-header-label text-muted-foreground font-mono truncate" title="${command}">${command || "console"}</span>
 							${spinner}
 						</div>
-						<button
-							@click=${async (e: Event) => {
-								const btn = (e.currentTarget as HTMLElement);
-								const copyText = output ? (command ? `> ${command}\n\n${output}` : output) : command;
-								try {
-									await navigator.clipboard.writeText(copyText);
-									btn.setAttribute("data-copied", "true");
-									(btn as any).requestUpdate?.();
-									setTimeout(() => btn.removeAttribute("data-copied"), 1500);
-								} catch {}
-							}}
-							class="flex items-center gap-1 px-2 py-0.5 text-xs rounded hover:bg-accent text-muted-foreground hover:text-accent-foreground transition-colors"
-							title="Copy output"
-						>
-							${icon(Copy, "sm")}
-						</button>
-					</div>
-					<div ${ref(this.scrollPin.ref)} class="overflow-auto max-h-64">
-						<pre class="!bg-background !border-0 !rounded-none m-0 p-3 text-xs ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
+						<div class="tool-body-collapsible">
+							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
+							</div>
+						</div>
 					</div>
 				</div>
 			`,
