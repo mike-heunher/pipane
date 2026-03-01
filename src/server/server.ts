@@ -124,7 +124,7 @@ app.get("/auth", (req: Request, res: Response) => {
 	const token = typeof req.query.token === "string" ? req.query.token : undefined;
 	if (isLocalRequest(req) || token === AUTH_TOKEN) {
 		setAuthCookie(res);
-		res.type("html").send("<h3>pipane: access granted</h3><p>You can close this tab.</p>");
+		res.redirect("/");
 		return;
 	}
 	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Invalid auth token.</p>");
