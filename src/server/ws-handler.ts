@@ -1,10 +1,13 @@
 /**
  * WebSocket handler for pi-web.
  *
- * Multi-client model:
- * - Any number of clients can connect simultaneously
- * - Each client can subscribe to one session at a time
- * - Server compiles JSONL + streaming into canonical state and sends deltas
+ * Architecture:
+ * - Sessions are either "attached" (pi process running, full state in memory)
+ *   or "detached" (no in-memory state, read from JSONL on disk on demand).
+ * - Any number of clients can connect simultaneously.
+ * - Each client can subscribe to one session at a time.
+ * - Attached sessions push stream_delta or snapshot ops to subscribed clients.
+ * - Detached sessions are read from disk when a client subscribes.
  */
 
 import { WebSocket, type WebSocketServer } from "ws";
@@ -15,27 +18,24 @@ import { URL } from "node:url";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
+import {
+	AttachedSession,
+	readSessionFromDisk,
+	getSessionFileSize,
+	type SessionSnapshot,
+} from "./attached-session.js";
 import { getSessionCwd } from "./session-cwd.js";
-import { CompiledSessionStore } from "./compiled-session.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import type { LoadTraceStore } from "./load-trace-store.js";
 
 export interface WsHandlerOptions {
 	lifecycle: SessionLifecycle;
 	pool: ProcessPool;
-	compiledStore: CompiledSessionStore;
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
 	isRequestAuthorized: (req: IncomingMessage) => boolean;
 	traceStore?: LoadTraceStore;
-}
-
-interface TurnState {
-	proc: RpcProcess;
-	sessionPath: string;
-	ws: WebSocket;
-	turnId: string;
 }
 
 interface ClientState {
@@ -56,7 +56,6 @@ function debugTurn(stage: string, data: Record<string, any>) {
 export class WsHandler {
 	private lifecycle: SessionLifecycle;
 	private pool: ProcessPool;
-	private compiledStore: CompiledSessionStore;
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
@@ -66,8 +65,19 @@ export class WsHandler {
 	private clients = new Map<WebSocket, ClientState>();
 	private wsTraceIds = new Map<WebSocket, string>();
 	private busyProcesses = new Set<RpcProcess>();
-	private activeTurns = new Map<string, TurnState>();
 	private procEventCleanup = new Map<RpcProcess, () => void>();
+
+	/**
+	 * In-memory state for sessions with an attached pi process.
+	 * Keyed by session path. Created on attach, deleted on detach.
+	 */
+	private attachedSessions = new Map<string, AttachedSession>();
+
+	/**
+	 * Track file sizes for detached sessions that clients are subscribed to.
+	 * Used for change detection when the file watcher fires.
+	 */
+	private subscribedFileSizes = new Map<string, number>();
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -75,7 +85,6 @@ export class WsHandler {
 	constructor(options: WsHandlerOptions) {
 		this.lifecycle = options.lifecycle;
 		this.pool = options.pool;
-		this.compiledStore = options.compiledStore;
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
@@ -86,7 +95,6 @@ export class WsHandler {
 		this.lifecycle.subscribe((event) => {
 			switch (event.type) {
 				case "session_attached":
-					this.compiledStore.setStreaming(event.sessionPath, true);
 					this.broadcast({
 						type: "session_status_change",
 						sessionPath: event.sessionPath,
@@ -94,41 +102,18 @@ export class WsHandler {
 					});
 					break;
 				case "session_detached":
-					this.compiledStore.setStreaming(event.sessionPath, false);
 					this.broadcast({
 						type: "session_status_change",
 						sessionPath: event.sessionPath,
 						status: "done",
 					});
 					break;
-				case "steering_queue_update":
-					this.compiledStore.setSteeringQueue(event.sessionPath, event.queue);
+				case "steering_queue_update": {
+					const session = this.attachedSessions.get(event.sessionPath);
+					if (session) {
+						session.steeringQueue = [...event.queue];
+					}
 					break;
-			}
-		});
-
-		this.compiledStore.subscribe(({ sessionPath }) => {
-			for (const [ws, client] of this.clients) {
-				if (client.subscribedSession !== sessionPath) continue;
-				if (ws.readyState !== WebSocket.OPEN) continue;
-
-				const op = this.compiledStore.computeUpdateOp(
-					sessionPath,
-					client.lastVersion,
-					client.lastMessageCount,
-				);
-				if (!op) continue;
-
-				ws.send(JSON.stringify({
-					type: "session_update",
-					sessionPath,
-					...op,
-				}));
-
-				const latest = this.compiledStore.get(sessionPath);
-				if (latest) {
-					client.lastVersion = latest.version;
-					client.lastMessageCount = latest.messages.length;
 				}
 			}
 		});
@@ -156,8 +141,34 @@ export class WsHandler {
 		return this.wsTraceIds.get(ws);
 	}
 
+	/**
+	 * Called by the file watcher when a JSONL file changes on disk.
+	 * For detached sessions with subscribers, re-reads from disk and pushes a snapshot.
+	 * Ignores attached sessions (their state comes from streaming events).
+	 */
 	notifySessionFileChanged(sessionPath: string): void {
-		this.compiledStore.refreshIfChanged(sessionPath);
+		// If the session is attached, ignore — streaming events are authoritative
+		if (this.attachedSessions.has(sessionPath)) return;
+
+		// Check if any client is subscribed to this session
+		let hasSubscribers = false;
+		for (const [, client] of this.clients) {
+			if (client.subscribedSession === sessionPath) {
+				hasSubscribers = true;
+				break;
+			}
+		}
+		if (!hasSubscribers) return;
+
+		// Check if the file actually changed
+		const oldSize = this.subscribedFileSizes.get(sessionPath) ?? 0;
+		const newSize = getSessionFileSize(sessionPath);
+		if (newSize === oldSize) return;
+
+		// File changed — read from disk and push snapshot to subscribers
+		this.subscribedFileSizes.set(sessionPath, newSize);
+		const state = readSessionFromDisk(sessionPath);
+		this.pushSnapshotToSubscribers(sessionPath, state);
 	}
 
 	getDebugState() {
@@ -382,16 +393,34 @@ export class WsHandler {
 		}
 
 		client.subscribedSession = sessionPath;
-		const state = this.compiledStore.load(sessionPath);
-		client.lastVersion = state.version;
-		client.lastMessageCount = state.messages.length;
 
-		ws.send(JSON.stringify({
-			type: "session_update",
-			sessionPath,
-			op: "snapshot",
-			state,
-		}));
+		// If the session is attached, send from in-memory state
+		const attached = this.attachedSessions.get(sessionPath);
+		if (attached) {
+			const state = attached.toSnapshot();
+			client.lastVersion = attached.version;
+			client.lastMessageCount = state.messages.length;
+			ws.send(JSON.stringify({
+				type: "session_update",
+				sessionPath,
+				op: "snapshot",
+				state,
+			}));
+		} else {
+			// Detached — read from disk
+			const state = readSessionFromDisk(sessionPath);
+			client.lastVersion = 0;
+			client.lastMessageCount = state.messages.length;
+			// Track file size for change detection
+			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
+			ws.send(JSON.stringify({
+				type: "session_update",
+				sessionPath,
+				op: "snapshot",
+				state,
+			}));
+		}
+
 		ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
 	}
 
@@ -414,7 +443,9 @@ export class WsHandler {
 			if (!sessionPath) throw new Error("Failed to get session path from new session");
 
 			this.busyProcesses.add(proc);
-			this.compiledStore.setStreaming(sessionPath, true);
+
+			// Create attached session with empty state (new session)
+			this.createAttachedSession(sessionPath);
 
 			ws.send(JSON.stringify({
 				type: "session_attached",
@@ -446,7 +477,6 @@ export class WsHandler {
 		}
 
 		this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
-		this.activeTurns.set(sessionPath, { proc, sessionPath, ws, turnId });
 
 		const promptCmd: any = { type: "prompt", message: command.message };
 		if (command.images?.length > 0) {
@@ -555,7 +585,9 @@ export class WsHandler {
 		const proc = await this.acquireProcess(cwd);
 		await this.pool.waitForReady(proc);
 		this.busyProcesses.add(proc);
-		this.compiledStore.setStreaming(newSessionPath, true);
+
+		// Create attached session, seeded from the forked file
+		this.createAttachedSession(newSessionPath);
 
 		ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
 		this.lifecycle.attach(newSessionPath, proc);
@@ -579,8 +611,8 @@ export class WsHandler {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}
 
-		this.setupTurnEventForwarding(proc, newSessionPath, ws, makeTurnId());
-		this.activeTurns.set(newSessionPath, { proc, sessionPath: newSessionPath, ws, turnId: makeTurnId() });
+		const turnId = makeTurnId();
+		this.setupTurnEventForwarding(proc, newSessionPath, ws, turnId);
 
 		const promptCmd: any = { type: "prompt", message };
 		if (command.images?.length > 0) {
@@ -607,6 +639,21 @@ export class WsHandler {
 	}
 
 	/**
+	 * Create an AttachedSession for a session path.
+	 * Reads existing JSONL from disk to seed the initial messages.
+	 */
+	private createAttachedSession(sessionPath: string): AttachedSession {
+		const diskState = readSessionFromDisk(sessionPath);
+		const session = new AttachedSession({
+			messages: diskState.messages,
+			model: diskState.model,
+			thinkingLevel: diskState.thinkingLevel,
+		});
+		this.attachedSessions.set(sessionPath, session);
+		return session;
+	}
+
+	/**
 	 * Acquire a process for an existing session. Resolves the session's cwd
 	 * from its JSONL header and gets a process from the matching pool.
 	 */
@@ -618,7 +665,12 @@ export class WsHandler {
 		const proc = await this.acquireProcess(cwd);
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(sessionPath, proc);
-		this.compiledStore.setStreaming(sessionPath, true);
+
+		// Create attached session if it doesn't exist yet
+		if (!this.attachedSessions.has(sessionPath)) {
+			this.createAttachedSession(sessionPath);
+		}
+
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath });
 		console.log(`[ws] pi#${proc.id} attached to ${path.basename(sessionPath)} (cwd: ${cwd})`);
 		return proc;
@@ -639,8 +691,6 @@ export class WsHandler {
 			const proc = this.pool.acquire(cwd, this.busyProcesses);
 			if (proc) return proc;
 
-			// We're at capacity and have no process for this cwd.
-			// Try to evict one idle process from another cwd to free a slot.
 			const evicted = this.pool.evictIdleDifferentCwd(cwd, this.busyProcesses);
 			if (evicted) {
 				await this.sleep(50);
@@ -665,10 +715,16 @@ export class WsHandler {
 				this.procEventCleanup.delete(proc);
 			}
 		}
-		this.compiledStore.setStreaming(sessionPath, false);
+
+		// Delete the attached session — no more in-memory state
+		this.attachedSessions.delete(sessionPath);
+
 		this.lifecycle.detach(sessionPath);
-		this.activeTurns.delete(sessionPath);
-		this.pushSnapshotToSubscribers(sessionPath);
+
+		// Read final state from disk and push to subscribers
+		const finalState = readSessionFromDisk(sessionPath);
+		this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
+		this.pushSnapshotToSubscribers(sessionPath, finalState);
 	}
 
 	private getAnyProcess(): RpcProcess {
@@ -679,8 +735,7 @@ export class WsHandler {
 		return proc;
 	}
 
-	private pushSnapshotToSubscribers(sessionPath: string) {
-		const state = this.compiledStore.load(sessionPath);
+	private pushSnapshotToSubscribers(sessionPath: string, state: SessionSnapshot) {
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== WebSocket.OPEN) continue;
@@ -690,8 +745,35 @@ export class WsHandler {
 				op: "snapshot",
 				state,
 			}));
-			client.lastVersion = state.version;
+			client.lastVersion = 0;
 			client.lastMessageCount = state.messages.length;
+		}
+	}
+
+	/**
+	 * Push an update to all clients subscribed to an attached session.
+	 * Uses the AttachedSession's diff logic to pick snapshot vs stream_delta.
+	 */
+	private pushUpdateToSubscribers(sessionPath: string, session: AttachedSession) {
+		for (const [ws, client] of this.clients) {
+			if (client.subscribedSession !== sessionPath) continue;
+			if (ws.readyState !== WebSocket.OPEN) continue;
+
+			const op = session.computeUpdateOp(client.lastVersion, client.lastMessageCount);
+			if (!op) continue;
+
+			ws.send(JSON.stringify({
+				type: "session_update",
+				sessionPath,
+				...op,
+			}));
+
+			client.lastVersion = session.version;
+			if (op.op === "snapshot") {
+				client.lastMessageCount = op.state.messages.length;
+			} else {
+				// stream_delta doesn't change message count
+			}
 		}
 	}
 
@@ -700,6 +782,14 @@ export class WsHandler {
 		if (existingCleanup) {
 			existingCleanup();
 			this.procEventCleanup.delete(proc);
+		}
+
+		// Capture the AttachedSession object — if it gets deleted (detach),
+		// the handler becomes a no-op because we check for it.
+		const sessionRef = this.attachedSessions.get(sessionPath);
+		if (!sessionRef) {
+			console.error(`[turn] setupTurnEventForwarding called but no AttachedSession for ${sessionPath}`);
+			return;
 		}
 
 		const lineHandler = (line: string) => {
@@ -711,7 +801,13 @@ export class WsHandler {
 			}
 			if (data.type === "response" && data.id) return;
 
-			this.compiledStore.applyEvent(sessionPath, data);
+			// Guard: if the attached session was deleted (turn ended),
+			// this handler is stale — skip.
+			const currentSession = this.attachedSessions.get(sessionPath);
+			if (currentSession !== sessionRef) return;
+
+			// Apply event to the in-memory attached session
+			const changed = currentSession.applyEvent(data);
 
 			// Side-channel raw event for UI hooks (canvas/jsonl), not state updates
 			if (ws.readyState === WebSocket.OPEN) {
@@ -723,6 +819,11 @@ export class WsHandler {
 					? data.message.content
 					: (data.message.content || []).filter((c: any) => c.type === "text").map((c: any) => c.text).join(" ");
 				this.lifecycle.dequeueSteering(sessionPath, text);
+			}
+
+			// Push update to all subscribed clients
+			if (changed) {
+				this.pushUpdateToSubscribers(sessionPath, currentSession);
 			}
 
 			if (data.type === "agent_end") {

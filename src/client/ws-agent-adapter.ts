@@ -491,33 +491,6 @@ export class WsAgentAdapter {
 					this._state.pendingToolCalls = new Set(update.pendingToolCalls);
 				}
 				break;
-			case "append_messages":
-				this._state.streamMessage = null;
-				this._state.messages = [...this._state.messages, ...(update.messages ?? [])];
-				break;
-			case "patch": {
-				const changes = update.changes ?? {};
-				if ("streamMessage" in changes) this._state.streamMessage = changes.streamMessage ?? null;
-				if ("status" in changes) {
-					this._state.isStreaming = changes.status === "streaming";
-					this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
-				}
-				if (Array.isArray(changes.pendingToolCalls)) {
-					this._state.pendingToolCalls = new Set(changes.pendingToolCalls);
-				}
-				if (Array.isArray(changes.steeringQueue) && this._sessionPath) {
-					if (changes.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...changes.steeringQueue]);
-					else this._steeringQueues.delete(this._sessionPath);
-					this.emitSteeringQueueChange();
-				}
-				if ("error" in changes) this._state.error = changes.error;
-				if (this._restoreModelFromServer) {
-					if (changes.model) this._state.model = this.findModelMatch(changes.model) ?? this._state.model;
-					if (changes.thinkingLevel) this._state.thinkingLevel = changes.thinkingLevel;
-					this._restoreModelFromServer = false;
-				}
-				break;
-			}
 		}
 		this.emitContentChange();
 		this.emitStatusChange();
