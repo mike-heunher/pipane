@@ -9,13 +9,13 @@ import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { initThemes, createThemeSelector } from "./theme-selector.js";
 import {
 	AppStorage,
-	ChatPanel,
 	CustomProvidersStore,
 	ProviderKeysStore,
 	SessionsStore,
 	SettingsStore,
 	setAppStorage,
 } from "@mariozechner/pi-web-ui";
+// Import pi-web-ui so its custom elements get registered (user-message, assistant-message, etc.)
 import { html, render } from "lit";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { DummyStorageBackend } from "./dummy-storage.js";
@@ -23,26 +23,28 @@ import "./session-picker.js";
 import { registerCodingAgentRenderers } from "./tool-renderers.js";
 import "./message-renderers.js";
 import "./thinking-block-patch.js";
+import "./pi-message-list.js";
 import "./fork-modal.js";
-import type { ForkModal, ForkResult } from "./fork-modal.js";
+import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
 import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened } from "./canvas-panel.js";
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
+import { formatUsage } from "@mariozechner/pi-web-ui";
 
 registerCodingAgentRenderers();
 initThemes();
 
-let chatPanel: ChatPanel;
 let agent: WsAgentAdapter;
 let sidebarOpen = true;
 let steeringQueue: readonly string[] = [];
 let piInstallPromptOpen = false;
-let inputAreaObserver: ResizeObserver | null = null;
-let observedInputArea: Element | null = null;
 let chatJsonlJumpListenerInstalled = false;
+let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undefined;
+let autoScroll = true;
+let lastScrollTop = 0;
 
 traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
@@ -55,41 +57,19 @@ function setTokenUsageHidden(hidden: boolean) {
 	localStorage.setItem(TOKEN_USAGE_KEY, String(hidden));
 	document.documentElement.classList.toggle("hide-token-usage", hidden);
 }
-// Apply saved preference immediately
 if (isTokenUsageHidden()) {
 	document.documentElement.classList.add("hide-token-usage");
 }
 
 /**
- * Configure the AgentInterface to allow sending messages during streaming
- * and set up custom keyboard shortcuts, model picker, and input menu.
- *
- * Uses upstream extension points (added via patch-package) instead of
- * monkey-patching internal methods:
- *   - `allowSendDuringStreaming` on AgentInterface + MessageEditor
- *   - `onKeyDown` callback on MessageEditor (return true to suppress default)
- *   - `extraToolbarButtons` on MessageEditor (render custom buttons in toolbar)
+ * Configure message-editor's keyboard shortcuts, model picker, and input menu.
  */
-function patchAgentInterface() {
-	const ai = chatPanel.agentInterface;
-	if (!ai) return;
-
-	// Enable sending during streaming (bypasses isStreaming guard in sendMessage
-	// and shows send+stop buttons together in the editor)
-	(ai as any).allowSendDuringStreaming = true;
-
-	// Wait a frame for the editor to render, then configure it
-	requestAnimationFrame(() => configureMessageEditor(ai));
-}
-
-/**
- * Configure the message-editor via its public extension points.
- */
-function configureMessageEditor(ai: any) {
-	const editor = ai.querySelector("message-editor") as any;
+function configureMessageEditor() {
+	const editor = document.querySelector("message-editor") as any;
 	if (!editor) return;
 
-	// Custom keyboard handler: Cmd+Enter forks, default Enter/Escape handled by upstream
+	editor.allowSendDuringStreaming = true;
+
 	editor.onKeyDown = (e: KeyboardEvent): boolean => {
 		if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
 			e.preventDefault();
@@ -100,12 +80,11 @@ function configureMessageEditor(ai: any) {
 				editor.attachments = [];
 				handleForkAndPrompt(value, attachments);
 			}
-			return true; // suppress default Enter handling
+			return true;
 		}
-		return false; // let upstream handle Enter, Escape, etc.
+		return false;
 	};
 
-	// Custom model picker
 	editor.onModelSelect = async () => {
 		try {
 			const models = await agent.fetchAvailableModels();
@@ -116,10 +95,8 @@ function configureMessageEditor(ai: any) {
 		}
 	};
 
-	// Input menu button (injected once via DOM, still needs the ensureInputMenuButton helper)
 	ensureInputMenuButton(editor, () => agent?.sessionFile);
 
-	// Re-inject input menu after Lit re-renders (it can get removed)
 	const origUpdated = editor.updated?.bind(editor);
 	editor.updated = (changedProps: Map<string, any>) => {
 		origUpdated?.(changedProps);
@@ -127,53 +104,33 @@ function configureMessageEditor(ai: any) {
 	};
 }
 
-/** Watch the input area inside AgentInterface and sync its height to a CSS variable */
-function observeInputAreaHeight() {
-	const ai = chatPanel?.agentInterface;
-	if (!ai) return;
+function handleSend(input: string, attachments?: any[]) {
+	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+	const docTexts: string[] = [];
 
-	// Find the input area: try message-editor first, then fall back to last .shrink-0
-	let inputArea: Element | null = ai.querySelector("message-editor");
-	if (!inputArea) {
-		const shrinkElements = ai.querySelectorAll(".shrink-0");
-		inputArea = shrinkElements[shrinkElements.length - 1] ?? null;
-	}
-
-	if (!inputArea || inputArea === observedInputArea) return;
-
-	// Clean up previous observer
-	if (inputAreaObserver) inputAreaObserver.disconnect();
-
-	observedInputArea = inputArea;
-
-	const syncHeight = () => {
-		if (!observedInputArea) return;
-		// Walk up to find the containing shrink-0 wrapper (the actual bottom bar)
-		let el: Element | null = observedInputArea;
-		while (el && !el.classList.contains("shrink-0")) {
-			el = el.parentElement;
+	if (attachments && attachments.length > 0) {
+		for (const att of attachments) {
+			if (att.type === "image") {
+				images.push({ type: "image", data: att.content, mimeType: att.mimeType });
+			} else if (att.extractedText) {
+				docTexts.push(att.extractedText);
+			}
 		}
-		const target = el || observedInputArea;
-		const height = target.getBoundingClientRect().height;
-		if (height > 0) {
-			document.documentElement.style.setProperty("--input-area-height", `${height}px`);
-		}
-	};
-
-	inputAreaObserver = new ResizeObserver(() => syncHeight());
-	inputAreaObserver.observe(inputArea);
-
-	// Also observe the parent shrink-0 if different
-	let wrapper: Element | null = inputArea;
-	while (wrapper && !wrapper.classList.contains("shrink-0")) {
-		wrapper = wrapper.parentElement;
-	}
-	if (wrapper && wrapper !== inputArea) {
-		inputAreaObserver.observe(wrapper);
 	}
 
-	// Set initial value
-	syncHeight();
+	const fullInput = docTexts.length > 0
+		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
+		: input;
+
+	// Clear the editor after capturing the input
+	const editor = document.querySelector("message-editor") as any;
+	if (editor) {
+		editor.value = "";
+		editor.attachments = [];
+	}
+
+	autoScroll = true;
+	agent.prompt(fullInput, images.length > 0 ? images : undefined);
 }
 
 /**
@@ -189,10 +146,7 @@ function installChatJsonlJumpListener() {
 		const target = e.target as HTMLElement | null;
 		if (!target) return;
 
-		const ai = chatPanel?.agentInterface as HTMLElement | undefined;
-		if (!ai) return;
-
-		const messageList = ai.querySelector("message-list") as HTMLElement | null;
+		const messageList = document.querySelector("pi-message-list") as HTMLElement | null;
 		if (!messageList || !messageList.contains(target)) return;
 
 		let displayedMessageOrdinal = NaN;
@@ -202,14 +156,6 @@ function installChatJsonlJumpListener() {
 			displayedMessageOrdinal = Number(indexRaw);
 		}
 
-		// Fallback path if the upstream patch is not active in the current bundle:
-		// derive ordinal from direct children in message-list.
-		if (!Number.isFinite(displayedMessageOrdinal)) {
-			const listRoot = messageList.querySelector(":scope > div") as HTMLElement | null;
-			if (!listRoot) return;
-			const children = Array.from(listRoot.children) as HTMLElement[];
-			displayedMessageOrdinal = children.findIndex((el) => el === target || el.contains(target));
-		}
 		if (!Number.isFinite(displayedMessageOrdinal) || displayedMessageOrdinal < 0) return;
 
 		const toolEl = target.closest("tool-message") as any;
@@ -246,9 +192,65 @@ function renderSteeringQueue() {
 	`;
 }
 
+function renderTokenUsage() {
+	if (!agent) return "";
+	const state = agent.state;
+	const totals = state.messages
+		.filter((m: any) => m.role === "assistant")
+		.reduce((acc: any, msg: any) => {
+			const usage = msg.usage;
+			if (usage) {
+				acc.input += usage.input ?? usage.inputTokens ?? 0;
+				acc.output += usage.output ?? usage.outputTokens ?? 0;
+				acc.cacheRead += usage.cacheRead ?? 0;
+				acc.cacheWrite += usage.cacheWrite ?? 0;
+				acc.cost.total += usage.cost?.total ?? usage.totalCost ?? 0;
+			}
+			return acc;
+		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+
+	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
+	if (!hasTotals) return "";
+
+	try {
+		const text = formatUsage(totals);
+		return html`<div class="text-xs text-muted-foreground text-right h-5"><span>${text}</span></div>`;
+	} catch {
+		return "";
+	}
+}
+
+function handleScroll(e: Event) {
+	const el = e.target as HTMLElement;
+	if (!el) return;
+	const currentScrollTop = el.scrollTop;
+	const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
+
+	if (currentScrollTop !== 0 && currentScrollTop < lastScrollTop && distanceFromBottom > 50) {
+		autoScroll = false;
+	} else if (distanceFromBottom < 10) {
+		autoScroll = true;
+	}
+	lastScrollTop = currentScrollTop;
+}
+
+function scrollToBottomIfNeeded() {
+	if (!autoScroll) return;
+	requestAnimationFrame(() => {
+		const scrollArea = document.getElementById("chat-scroll-area");
+		if (scrollArea) {
+			scrollArea.scrollTop = scrollArea.scrollHeight;
+		}
+	});
+}
+
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
+
+	const state = agent?.state;
+	const messages = state?.messages ?? [];
+	const isStreaming = state?.isStreaming ?? false;
 
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
@@ -295,12 +297,12 @@ const renderApp = () => {
 				${sidebarOpen
 					? html`
 						<div class="shrink-0 border-r border-border bg-background overflow-hidden" style="width: 280px;">
-							<session-picker .agent=${agent}></session-picker>
+							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions}></session-picker>
 						</div>
 					`
 					: ""}
 				<div class="flex-1 overflow-hidden flex flex-col">
-					${agent?.sessionStatus === "virtual" && agent?.cwd && agent?.state?.messages?.length === 0
+					${agent?.sessionStatus === "virtual" && agent?.cwd && messages.length === 0
 						? html`
 							<div class="flex items-center gap-2 px-4 py-2 border-b border-border bg-accent/50 text-sm text-muted-foreground">
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
@@ -311,8 +313,35 @@ const renderApp = () => {
 						`
 						: ""}
 					<div class="flex-1 overflow-hidden flex">
-						<div class="flex-1 overflow-hidden relative">
-							${chatPanel}
+						<div class="flex-1 overflow-hidden relative flex flex-col">
+							<!-- Messages area -->
+							<div id="chat-scroll-area" class="flex-1 overflow-y-auto" @scroll=${handleScroll}>
+								<div class="max-w-3xl mx-auto p-4 pb-0">
+									<pi-message-list
+										.messages=${messages}
+										.isStreaming=${isStreaming}
+										.pendingToolCalls=${agent?.pendingToolCallIds ?? new Set()}
+									></pi-message-list>
+								</div>
+							</div>
+							<!-- Input area -->
+							<div class="shrink-0">
+								<div class="max-w-3xl mx-auto px-2">
+									<message-editor
+										.isStreaming=${isStreaming}
+										.allowSendDuringStreaming=${true}
+										.currentModel=${state?.model}
+										.thinkingLevel=${state?.thinkingLevel ?? "off"}
+										.showAttachmentButton=${true}
+										.showModelSelector=${true}
+										.showThinkingSelector=${true}
+										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
+										.onAbort=${() => agent?.abort()}
+										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
+									></message-editor>
+									${renderTokenUsage()}
+								</div>
+							</div>
 							${renderSteeringQueue()}
 						</div>
 						${isCanvasVisible()
@@ -329,23 +358,19 @@ const renderApp = () => {
 
 	render(appHtml, app);
 
-	// Re-observe after render in case DOM changed
+	// Post-render setup
 	requestAnimationFrame(() => {
-		observeInputAreaHeight();
+		configureMessageEditor();
+		scrollToBottomIfNeeded();
 		const canvasEl = document.getElementById("canvas-container");
-		if (canvasEl) {
-			initCanvas(canvasEl, renderApp);
-		}
+		if (canvasEl) initCanvas(canvasEl, renderApp);
 		const jsonlEl = document.getElementById("jsonl-container");
-		if (jsonlEl) {
-			initJsonlPanel(jsonlEl, renderApp);
-		}
+		if (jsonlEl) initJsonlPanel(jsonlEl, renderApp);
 	});
 };
 
 /**
  * Fork the current session and prompt in the new fork.
- * Handles image/document attachments the same way as sendMessage.
  */
 async function handleForkAndPrompt(input: string, attachments?: any[]) {
 	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -374,13 +399,9 @@ async function initApp() {
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
-	// Leave the HTML skeleton shell visible while connecting.
-	// Only show a "Connecting..." overlay if WS takes more than 300ms.
 	let connectingOverlayTimer: ReturnType<typeof setTimeout> | undefined;
 	const skeletonShell = document.getElementById("skeleton-shell");
 	connectingOverlayTimer = setTimeout(() => {
-		// If the skeleton is still visible (JS hasn't rendered the real app yet),
-		// add a subtle connecting indicator on top of it
 		if (skeletonShell?.parentElement === app) {
 			const overlay = document.createElement("div");
 			overlay.id = "connecting-overlay";
@@ -391,7 +412,7 @@ async function initApp() {
 		}
 	}, 300);
 
-	// Initialize storage
+	// Initialize storage (needed by upstream components)
 	const settings = new SettingsStore();
 	const providerKeys = new ProviderKeysStore();
 	const sessions = new SessionsStore();
@@ -429,64 +450,29 @@ async function initApp() {
 
 	clearTimeout(connectingOverlayTimer);
 
-	// Create ChatPanel
-	chatPanel = new ChatPanel();
-	await chatPanel.setAgent(agent as any);
+	const sessionsPrefetch = agent.listSessions().catch((err) => {
+		console.error("Failed to prefetch sessions:", err);
+		return undefined;
+	});
+
 	installChatJsonlJumpListener();
 
-	// Patch the AgentInterface to allow sending during streaming
-	patchAgentInterface();
-
-	// Fix: clear the streaming container on message_end to prevent the same
-	// assistant message from rendering in BOTH message-list AND the streaming
-	// container. The upstream AgentInterface only clears it on agent_end,
-	// but between message_end and agent_end (while tools are executing)
-	// the streaming container still holds the old streamMessage.
+	// Canvas tool: show side panel when tool_execution_end fires for "canvas"
 	agent.subscribe((ev) => {
-		// Update JSONL panel path when session gets created (virtual → attached)
 		if (ev.type === "agent_start" || ev.type === "agent_end") {
 			setJsonlSessionPath(agent.sessionFile);
 			refreshJsonlPanel();
 		}
 		if (ev.type === "message_end") {
 			refreshJsonlPanel();
-			const ai = chatPanel.agentInterface;
-			if (ai) {
-				const sc = ai.querySelector("streaming-message-container") as any;
-				if (sc) {
-					sc.setMessage(null, true);
-				}
-				// When an assistant message ends with toolUse, tools are about
-				// to execute. The streaming container was just cleared (to avoid
-				// duplicating text), so the tool calls now live only in the
-				// message-list. But MessageList hides pending tool calls when
-				// isStreaming=true (assuming StreamingMessageContainer shows them).
-				// Since we cleared the streaming container, tell the message-list
-				// to stop hiding pending tool calls so they remain visible with
-				// their spinner/in-progress state during execution.
-				// The next message_start will trigger a re-render that restores
-				// isStreaming=true on the message-list (when the streaming
-				// container takes over again).
-				const msg = (ev as any).message;
-				if (msg?.role === "assistant" && msg?.stopReason === "toolUse") {
-					const ml = ai.querySelector("message-list") as any;
-					if (ml) {
-						ml.isStreaming = false;
-						ml.requestUpdate();
-					}
-				}
-			}
 		}
 
-		// Canvas tool: show side panel when tool_execution_end fires for "canvas"
 		if (ev.type === "tool_execution_end" && (ev as any).toolName === "canvas") {
 			const details = (ev as any).result?.details;
 			if (details?.markdown) {
 				showCanvas(details.title || "Canvas", details.markdown);
-				// Mark this canvas as opened so restoreCanvasFromMessages won't reopen it
 				if (agent.sessionFile) {
 					const msgs = agent.state.messages;
-					// The tool result was just appended — find its index (last canvas toolResult)
 					for (let i = msgs.length - 1; i >= 0; i--) {
 						const m = msgs[i] as any;
 						if (m.role === "toolResult" && m.toolName === "canvas") {
@@ -499,68 +485,34 @@ async function initApp() {
 		}
 	});
 
-	// Session switch: update session on existing chat panel (don't recreate agent-interface)
+	// Session switch
 	agent.onSessionChange(async () => {
-		const ai = chatPanel.agentInterface;
-		if (ai) {
-			ai.session = agent as any;
-			ai.requestUpdate();
-		}
-		// Refresh steering queue for the new session (it's per-session now)
 		steeringQueue = agent.steeringQueue;
-		// Restore canvas if this session has one we haven't auto-opened yet
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
-		// Update JSONL panel with new session path
 		setJsonlSessionPath(agent.sessionFile);
+		autoScroll = true;
 		renderApp();
-		// Focus the input textarea after switching/creating a session.
-		// Must wait for Lit to finish rendering, then reach into the
-		// message-editor shadow DOM to focus the actual textarea.
 		requestAnimationFrame(() => {
-			const editor = chatPanel?.agentInterface?.querySelector("message-editor") as any;
-			if (editor) {
-				const textarea = editor.shadowRoot?.querySelector("textarea") ??
-					editor.textareaRef?.value;
-				textarea?.focus();
-			}
+			const editor = document.querySelector("message-editor") as any;
+			const textarea = editor?.shadowRoot?.querySelector("textarea") ?? editor?.textareaRef?.value;
+			textarea?.focus();
 		});
 	});
 
-	// Content change (messages refreshed from disk): lightweight re-render
+	// Content change — just re-render
 	agent.onContentChange(() => {
-		const ai = chatPanel.agentInterface;
-		if (ai) {
-			ai.session = agent as any;
-			ai.requestUpdate();
-			// Fix: when tools are executing (pendingToolCalls non-empty) but
-			// there's no stream message, the streaming container is empty and
-			// the tool calls live only in message-list. But AgentInterface
-			// passes isStreaming=true to message-list which causes it to hide
-			// pending tool calls (assuming StreamingMessageContainer shows them).
-			// After the render completes, correct this by telling message-list
-			// not to hide pending tool calls.
-			if (agent.state.isStreaming && agent.state.pendingToolCalls.size > 0 && !agent.state.streamMessage) {
-				ai.updateComplete.then(() => {
-					const ml = ai.querySelector("message-list") as any;
-					if (ml && ml.isStreaming) {
-						ml.isStreaming = false;
-						ml.requestUpdate();
-					}
-				});
-			}
-		}
-		// Restore canvas state from refreshed messages (won't reopen if already shown)
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
-		// Refresh JSONL panel
 		refreshJsonlPanel();
+		renderApp();
+		scrollToBottomIfNeeded();
 	});
 
-	// Status change (attached/detached): update header badge & abort button
+	// Status change
 	agent.onStatusChange(() => {
 		renderApp();
 	});
 
-	// Steering queue change: update the queue visualization
+	// Steering queue change
 	agent.onSteeringQueueChange(() => {
 		steeringQueue = agent.steeringQueue;
 		renderApp();
@@ -586,7 +538,7 @@ async function initApp() {
 		}
 	});
 
-	// Fork request handler (triggered by /fork command or keyboard shortcut)
+	// Fork request handler
 	const handleForkRequest = async () => {
 		if (!agent.sessionFile || agent.sessionStatus === "virtual") return;
 
@@ -594,23 +546,19 @@ async function initApp() {
 		document.body.appendChild(modal);
 
 		const result = await modal.open(agent);
-		if (!result) return; // cancelled
+		if (!result) return;
 
-		// Switch to the new forked session
 		if (result.newSessionPath) {
 			await agent.switchSession(result.newSessionPath);
 		}
 
-		// Pre-fill the editor with the selected message text
 		if (result.text) {
-			const ai = chatPanel.agentInterface;
-			const editor = ai?.querySelector("message-editor") as any;
+			const editor = document.querySelector("message-editor") as any;
 			if (editor) {
 				editor.value = result.text;
 				editor.requestUpdate();
 				requestAnimationFrame(() => {
-					const textarea = editor.shadowRoot?.querySelector("textarea") ??
-						editor.textareaRef?.value;
+					const textarea = editor.shadowRoot?.querySelector("textarea") ?? editor.textareaRef?.value;
 					textarea?.focus();
 				});
 			}
@@ -619,16 +567,30 @@ async function initApp() {
 
 	window.addEventListener("pi-fork-request", handleForkRequest);
 
-	// Load models and start with a virtual new session
+	// Load models
 	const endLoadModelSpan = traceSpanStart("frontend_load_default_model");
 	await agent.loadDefaultModel();
 	endLoadModelSpan();
 
+	prefetchedSessions = (await sessionsPrefetch) ?? undefined;
+
 	const endNewSessionSpan = traceSpanStart("frontend_new_session");
-	await agent.newSession();
+	if (prefetchedSessions && prefetchedSessions.length > 0) {
+		const mostRecent = prefetchedSessions.reduce((best, s) => {
+			const bestTime = best.lastUserPromptTime ? new Date(best.lastUserPromptTime).getTime() : new Date(best.modified).getTime();
+			const sTime = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
+			return sTime > bestTime ? s : best;
+		});
+		await agent.switchSession(mostRecent.path);
+	} else {
+		await agent.newSession();
+	}
 	endNewSessionSpan();
 
 	renderApp();
+
+	prefetchedSessions = undefined;
+
 	traceInstant("frontend_first_render_complete", {
 		sessionStatus: agent.sessionStatus,
 	});

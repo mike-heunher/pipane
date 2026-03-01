@@ -557,6 +557,14 @@ export class SessionPicker extends LitElement {
 	@property({ attribute: false })
 	agent!: WsAgentAdapter;
 
+	/**
+	 * Optional prefetched session list.  When provided, the picker skips
+	 * its initial REST call and renders immediately (no skeleton flash).
+	 * Subsequent refreshes still go through the normal fetch path.
+	 */
+	@property({ attribute: false })
+	prefetchedSessions: SessionInfoDTO[] | undefined;
+
 	@state() private sessions: SessionInfoDTO[] = [];
 	@state() private loading = true;
 	@state() private showSkeleton = false;
@@ -583,11 +591,21 @@ export class SessionPicker extends LitElement {
 
 	connectedCallback() {
 		super.connectedCallback();
-		// Only show skeleton after a 300ms grace period — avoids flicker on fast loads
-		this._skeletonGraceTimer = setTimeout(() => {
-			if (this.loading) this.showSkeleton = true;
-		}, 300);
-		this.refreshSessions();
+
+		// If the parent prefetched the session list, use it directly —
+		// skip the initial REST call entirely and never show a skeleton.
+		if (this.prefetchedSessions) {
+			this.sessions = this.prefetchedSessions;
+			this.loading = false;
+			// Clear so subsequent updates go through normal refresh
+			this.prefetchedSessions = undefined;
+		} else {
+			// Only show skeleton after a 300ms grace period — avoids flicker on fast loads
+			this._skeletonGraceTimer = setTimeout(() => {
+				if (this.loading) this.showSkeleton = true;
+			}, 300);
+			this.refreshSessions();
+		}
 		if (this.agent) {
 			this.unsubSessionChange = this.agent.onSessionChange(() => {
 				// Merge optimistic/virtual immediately (no REST call needed)
