@@ -329,6 +329,9 @@ export class WsHandler {
 				case "set_session_name":
 					await this.handleSetSessionName(ws, id, command);
 					break;
+				case "get_commands":
+					await this.handleGetCommands(ws, id);
+					break;
 				default:
 					ws.send(JSON.stringify({
 						id, type: "response", command: command.type, success: false,
@@ -543,6 +546,12 @@ export class WsHandler {
 		const proc = this.getAnyProcess();
 		const response = await this.pool.sendRpc(proc, { type: "get_available_models" });
 		ws.send(JSON.stringify({ ...response, id, command: "get_available_models" }));
+	}
+
+	private async handleGetCommands(ws: WebSocket, id: string): Promise<void> {
+		const proc = this.getAnyProcess();
+		const response = await this.pool.sendRpc(proc, { type: "get_commands" });
+		ws.send(JSON.stringify({ ...response, id, command: "get_commands" }));
 	}
 
 	private async handleGetDefaultModel(ws: WebSocket, id: string): Promise<void> {

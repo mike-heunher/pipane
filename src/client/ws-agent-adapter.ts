@@ -25,6 +25,7 @@ type WsCommand =
 	| { type: "abort"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
+	| { type: "get_commands" }
 	| { type: "set_session_name"; sessionPath: string; name: string }
 	| { type: "fork"; sessionPath: string; entryId: string }
 	| { type: "subscribe_session"; sessionPath: string }
@@ -971,9 +972,19 @@ export class WsAgentAdapter {
 		return "";
 	}
 
-	private showHelpMessage() {
-		const helpText = [
-			"**Available commands:**",
+	/** Fetch available slash commands from the server (extensions, prompts, skills) */
+	async fetchCommands(): Promise<Array<{ name: string; description?: string; source: string; location?: string }>> {
+		try {
+			const data = await this.send({ type: "get_commands" });
+			return data?.commands ?? [];
+		} catch {
+			return [];
+		}
+	}
+
+	private async showHelpMessage() {
+		const lines: string[] = [
+			"**Built-in commands:**",
 			"",
 			"| Command | Description |",
 			"|---------|-------------|",
@@ -981,6 +992,39 @@ export class WsAgentAdapter {
 			"| `/new` | Start a new session |",
 			"| `/fork` | Fork session from a previous message |",
 			"| `/compact [instructions]` | Compact conversation history |",
+		];
+
+		// Fetch extension commands, prompt templates, and skills from pi
+		const commands = await this.fetchCommands();
+
+		const extensionCmds = commands.filter(c => c.source === "extension");
+		const promptCmds = commands.filter(c => c.source === "prompt");
+		const skillCmds = commands.filter(c => c.source === "skill");
+
+		if (extensionCmds.length > 0) {
+			lines.push("", "**Extension commands:**", "", "| Command | Description |", "|---------|-------------|");
+			for (const cmd of extensionCmds) {
+				lines.push(`| \`/${cmd.name}\` | ${cmd.description || ""} |`);
+			}
+		}
+
+		if (promptCmds.length > 0) {
+			lines.push("", "**Prompt templates:**", "", "| Command | Description |", "|---------|-------------|");
+			for (const cmd of promptCmds) {
+				const loc = cmd.location ? ` *(${cmd.location})*` : "";
+				lines.push(`| \`/${cmd.name}\` | ${cmd.description || ""}${loc} |`);
+			}
+		}
+
+		if (skillCmds.length > 0) {
+			lines.push("", "**Skills:**", "", "| Command | Description |", "|---------|-------------|");
+			for (const cmd of skillCmds) {
+				const loc = cmd.location ? ` *(${cmd.location})*` : "";
+				lines.push(`| \`/${cmd.name}\` | ${cmd.description || ""}${loc} |`);
+			}
+		}
+
+		lines.push(
 			"",
 			"**Keyboard shortcuts:**",
 			"",
@@ -990,7 +1034,9 @@ export class WsAgentAdapter {
 			"| `Cmd+Enter` | Fork session and send message in the fork |",
 			"| `Shift+Enter` | New line |",
 			"| `Escape` | Abort current turn |",
-		].join("\n");
+		);
+
+		const helpText = lines.join("\n");
 
 		const helpMessage = {
 			role: "assistant" as const,
@@ -1005,7 +1051,7 @@ export class WsAgentAdapter {
 		if (!trimmed.startsWith("/")) return false;
 
 		if (trimmed === "/help") {
-			this.showHelpMessage();
+			await this.showHelpMessage();
 			return true;
 		}
 
