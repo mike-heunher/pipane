@@ -507,7 +507,7 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		this._state.messages = state.messages ?? [];
+		const messages: AgentMessage[] = state.messages ?? [];
 		this._state.streamMessage = state.streamMessage ?? null;
 		this._state.isStreaming = state.status === "streaming";
 		if (this._sessionStatus !== "virtual") {
@@ -515,13 +515,24 @@ export class WsAgentAdapter {
 		}
 		this._state.pendingToolCalls = new Set(state.pendingToolCalls ?? []);
 
-		// Update partial tool results
+		// Update partial tool results and inject synthetic toolResult messages
+		// so the UI's toolResultsById map picks them up for rendering.
 		this._partialToolResults.clear();
 		if (state.partialToolResults) {
 			for (const [id, partialResult] of Object.entries(state.partialToolResults as Record<string, any>)) {
 				this._partialToolResults.set(id, partialResult);
+				// Create a synthetic toolResult message so the tool renderer shows partial output
+				messages.push({
+					role: "toolResult",
+					toolCallId: id,
+					content: partialResult.content ?? [],
+					isError: false,
+					details: partialResult.details,
+					timestamp: Date.now(),
+				} as any);
 			}
 		}
+		this._state.messages = messages;
 
 		if (this._restoreModelFromServer) {
 			if (state.model) {

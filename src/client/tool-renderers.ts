@@ -334,7 +334,10 @@ class EditRenderer implements ToolRenderer {
 
 class BashRenderer implements ToolRenderer {
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
-		const state = result ? (result.isError ? "error" : "complete") : "inprogress";
+		// When streaming with a result, it's a partial result (bash stdout streaming)
+		const state = result
+			? result.isError ? "error" : (isStreaming ? "inprogress" : "complete")
+			: "inprogress";
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 

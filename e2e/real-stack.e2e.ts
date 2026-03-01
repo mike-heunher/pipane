@@ -148,6 +148,47 @@ test.describe("Real stack e2e", () => {
 		await expect(page.locator(".jsonl-entry-focused .jsonl-line-label")).toContainText("message (assistant)", { timeout: 5000 });
 	});
 
+	test("bash streaming output is visible during execution", async ({ page }) => {
+		harness.setScenarios([
+			{
+				match: "run the loop",
+				hasToolResults: false,
+				chunks: toolCallChunks(
+					"call_bash_1",
+					"bash",
+					{ command: "for i in 1 2 3; do echo \"dot_$i\"; sleep 0.3; done" },
+				),
+			},
+			{
+				// After tool result, respond with text
+				match: /.*/,
+				hasToolResults: true,
+				chunks: textChunks("The loop finished producing dots."),
+			},
+		]);
+
+		await page.goto(`http://localhost:${harness.piWebPort}`);
+
+		const editor = page.locator("message-editor");
+		await expect(editor).toBeVisible({ timeout: 10000 });
+		const textarea = editor.locator("textarea").first();
+		await textarea.fill("run the loop");
+		await textarea.press("Meta+Enter");
+
+		// Wait for tool-message to appear (the bash tool was called)
+		await expect(page.locator("tool-message").first()).toBeVisible({ timeout: 15000 });
+
+		// The partial output should be visible DURING execution — check for early dots
+		// before the tool completes. We look for any dot output appearing.
+		await expect(page.getByText("dot_1", { exact: false }).first()).toBeVisible({ timeout: 15000 });
+
+		// Wait for the final response after tool completion
+		await expect(page.getByText("loop finished producing dots", { exact: false }).first()).toBeVisible({ timeout: 15000 });
+
+		// All dots should be visible in the final result
+		await expect(page.getByText("dot_3", { exact: false }).first()).toBeVisible({ timeout: 10000 });
+	});
+
 	test("session appears in picker after prompt", async ({ page }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Sure, I'll help with that.") },
