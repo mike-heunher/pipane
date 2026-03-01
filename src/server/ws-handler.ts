@@ -427,18 +427,20 @@ export class WsHandler {
 			proc = await this.acquireForSession(sessionPath);
 		}
 
-		if (command.model) {
-			await this.pool.sendRpcChecked(proc, {
-				type: "set_model",
-				provider: command.model.provider,
-				modelId: command.model.modelId,
-			});
-			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-			const activeModel = modelState.data?.model;
-			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-			}
+		if (!command.model) {
+			throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
 		}
+		await this.pool.sendRpcChecked(proc, {
+			type: "set_model",
+			provider: command.model.provider,
+			modelId: command.model.modelId,
+		});
+		const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		const activeModel = modelState.data?.model;
+		if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+			throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+		}
+
 		if (command.thinkingLevel) {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}
@@ -559,18 +561,20 @@ export class WsHandler {
 		this.lifecycle.attach(newSessionPath, proc);
 		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
 
-		if (command.model) {
-			await this.pool.sendRpcChecked(proc, {
-				type: "set_model",
-				provider: command.model.provider,
-				modelId: command.model.modelId,
-			});
-			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-			const activeModel = modelState.data?.model;
-			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-			}
+		if (!command.model) {
+			throw new Error(`BUG: fork_prompt command received without model. sessionPath=${newSessionPath}`);
 		}
+		await this.pool.sendRpcChecked(proc, {
+			type: "set_model",
+			provider: command.model.provider,
+			modelId: command.model.modelId,
+		});
+		const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		const activeModel = modelState.data?.model;
+		if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+			throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+		}
+
 		if (command.thinkingLevel) {
 			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
 		}

@@ -114,7 +114,9 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	const mockLlm = await createMockLlmServer(scenarios);
 
 	// 2. Create temp directories
-	const tmpBase = path.join("/tmp", `pi-e2e-${Date.now()}`);
+	// Use crypto.randomUUID() to avoid collisions when multiple harnesses
+	// start in parallel within the same millisecond (Date.now() is not unique).
+	const tmpBase = path.join("/tmp", `pi-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
 	const agentDir = path.join(tmpBase, "agent");
 	const sessionsDir = path.join(agentDir, "sessions");
 	const projectDir = path.join(tmpBase, "project");

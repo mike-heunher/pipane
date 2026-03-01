@@ -694,7 +694,10 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
+		if (!this._state.model) {
+			throw new Error(`BUG: _state.model is undefined when sending prompt. sessionStatus=${this._sessionStatus}, sessionPath=${this._sessionPath}`);
+		}
+		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
 
 		if (this._sessionStatus === "virtual") {
 			const res = await this.send({
@@ -881,7 +884,10 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		const modelPayload = this._state.model ? { provider: this._state.model.provider, modelId: this._state.model.id } : undefined;
+		if (!this._state.model) {
+			throw new Error(`BUG: _state.model is undefined when sending fork_prompt. sessionPath=${this._sessionPath}`);
+		}
+		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
 
 		const data = await this.send({
 			type: "fork_prompt",
