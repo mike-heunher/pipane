@@ -30,6 +30,7 @@ import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, can
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { ensureInputMenuButton } from "./input-menu.js";
+import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 
 registerCodingAgentRenderers();
 initThemes();
@@ -42,6 +43,8 @@ let piInstallPromptOpen = false;
 let inputAreaObserver: ResizeObserver | null = null;
 let observedInputArea: Element | null = null;
 let chatJsonlJumpListenerInstalled = false;
+
+traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
 // Token usage visibility toggle
 const TOKEN_USAGE_KEY = "pi-web-hide-token-usage";
@@ -366,6 +369,8 @@ async function handleForkAndPrompt(input: string, attachments?: any[]) {
 }
 
 async function initApp() {
+	traceInstant("init_app_start");
+	sendNavigationTiming();
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
@@ -394,11 +399,14 @@ async function initApp() {
 	// Connect WebSocket
 	agent = new WsAgentAdapter();
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+	const wsUrl = `${wsProtocol}//${window.location.host}/ws?traceId=${encodeURIComponent(getLoadTraceId())}`;
 
+	const endWsConnectSpan = traceSpanStart("frontend_ws_connect");
 	try {
 		await agent.connect(wsUrl);
+		endWsConnectSpan();
 	} catch (err) {
+		endWsConnectSpan();
 		render(
 			html`
 				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
@@ -548,10 +556,18 @@ async function initApp() {
 	window.addEventListener("pi-fork-request", handleForkRequest);
 
 	// Load models and start with a virtual new session
+	const endLoadModelSpan = traceSpanStart("frontend_load_default_model");
 	await agent.loadDefaultModel();
+	endLoadModelSpan();
+
+	const endNewSessionSpan = traceSpanStart("frontend_new_session");
 	await agent.newSession();
+	endNewSessionSpan();
 
 	renderApp();
+	traceInstant("frontend_first_render_complete", {
+		sessionStatus: agent.sessionStatus,
+	});
 }
 
 initApp();

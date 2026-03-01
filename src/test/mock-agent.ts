@@ -64,6 +64,14 @@ export class MockAgent {
 		return () => this._statusChangeListeners.delete(fn);
 	}
 
+	get optimisticSessions(): SessionInfoDTO[] {
+		return [];
+	}
+
+	get virtualSessionInfo(): SessionInfoDTO | undefined {
+		return undefined;
+	}
+
 	async listSessions(): Promise<SessionInfoDTO[]> {
 		return this._sessions;
 	}

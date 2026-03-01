@@ -31,6 +31,7 @@ import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool } from "./process-pool.js";
 import { CompiledSessionStore } from "./compiled-session.js";
 import { WsHandler } from "./ws-handler.js";
+import { LoadTraceStore } from "./load-trace-store.js";
 
 const PORT = parseInt(process.env.PORT || "18111", 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
@@ -113,12 +114,36 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pi-web terminal.</p>");
 });
 
+const traceStore = new LoadTraceStore();
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+	const traceId = typeof req.headers["x-pi-trace-id"] === "string" ? req.headers["x-pi-trace-id"] : "";
+	if (!traceId) {
+		next();
+		return;
+	}
+	const start = performance.now();
+	res.on("finish", () => {
+		traceStore.record(traceId, {
+			ts: new Date().toISOString(),
+			source: "backend",
+			kind: "span",
+			name: `http ${req.method} ${req.path}`,
+			durationMs: Number((performance.now() - start).toFixed(2)),
+			attrs: {
+				statusCode: res.statusCode,
+			},
+		});
+	});
+	next();
+});
+
 // Serve static files in production
 const clientDist = path.resolve(__dirname, "../client");
 app.use(express.static(clientDist));
 
 // Register REST endpoints
-registerRestApi(app);
+registerRestApi(app, { traceStore });
 
 // ============================================================================
 // Core modules
@@ -165,6 +190,7 @@ const wsHandler = new WsHandler({
 		}
 	},
 	isRequestAuthorized: (req) => isAuthorizedRequest(req),
+	traceStore,
 });
 
 // Register WS handler

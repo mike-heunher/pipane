@@ -21,6 +21,7 @@
 
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
 
 export type SessionStatus = "virtual" | "detached" | "attached";
 
@@ -47,7 +48,7 @@ export class WsAgentAdapter {
 	private listeners = new Set<(e: AgentEvent) => void>();
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
-	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>();
+	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void; endSpan?: () => void }>();
 	private requestId = 0;
 	private _runningPromise: Promise<void> | undefined;
 	private _resolveRunning: (() => void) | undefined;
@@ -286,6 +287,7 @@ export class WsAgentAdapter {
 		if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
 			const pending = this.pendingRequests.get(data.id)!;
 			this.pendingRequests.delete(data.id);
+			pending.endSpan?.();
 			if (data.success) {
 				pending.resolve(data.data);
 			} else {
@@ -406,8 +408,6 @@ export class WsAgentAdapter {
 						messageCount: 1,
 						firstMessage: data.firstMessage || "(new session)",
 					});
-					// Immediately notify sidebar to refresh
-					for (const fn of this.sessionsChangedListeners) fn(data.sessionPath);
 				}
 			}
 			return;
@@ -590,18 +590,27 @@ export class WsAgentAdapter {
 		}
 
 		const id = `req_${++this.requestId}`;
+		const endSpan = traceSpanStart(`frontend_ws_command ${command.type}`);
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
+				endSpan();
 				reject(new Error(`Timeout waiting for response to ${command.type}`));
 			}, 30000);
 
 			this.pendingRequests.set(id, {
 				resolve: (data) => { clearTimeout(timeout); resolve(data); },
 				reject: (err) => { clearTimeout(timeout); reject(err); },
+				endSpan,
 			});
 
-			this.ws!.send(JSON.stringify({ ...command, id }));
+			this.ws!.send(JSON.stringify({
+				...command,
+				id,
+				__trace: {
+					traceId: getLoadTraceId(),
+				},
+			}));
 		});
 	}
 
@@ -838,7 +847,7 @@ export class WsAgentAdapter {
 	/** Get user messages from the current session for the fork selector. */
 	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
 		if (!this._sessionPath) return [];
-		const res = await fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`);
+		const res = await tracedFetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`, {}, "frontend_fetch_fork_messages");
 		if (!res.ok) throw new Error(`Failed to get fork messages: ${res.statusText}`);
 		const data = await res.json();
 		return data.messages ?? [];
@@ -897,7 +906,7 @@ export class WsAgentAdapter {
 	// ── Session management ─────────────────────────────────────────────────
 
 	async listSessions(): Promise<SessionInfoDTO[]> {
-		const res = await fetch("/api/sessions");
+		const res = await tracedFetch("/api/sessions", {}, "frontend_fetch_sessions");
 		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
 		const sessions: SessionInfoDTO[] = await res.json();
 
@@ -939,7 +948,7 @@ export class WsAgentAdapter {
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		const res = await fetch("/api/sessions", {
+		const res = await tracedFetch("/api/sessions", {
 			method: "DELETE",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ path: sessionPath }),
@@ -999,8 +1008,6 @@ export class WsAgentAdapter {
 
 		this.emitSessionChange();
 		this.emitStatusChange();
-		// Notify sidebar so the virtual session appears immediately in the correct group
-		for (const fn of this.sessionsChangedListeners) fn("");
 	}
 
 	/**

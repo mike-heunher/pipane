@@ -11,12 +11,14 @@ import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import { copyFile } from "node:fs/promises";
 import path from "node:path";
+import { URL } from "node:url";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
 import { getSessionCwd } from "./session-cwd.js";
 import { CompiledSessionStore } from "./compiled-session.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
+import type { LoadTraceStore } from "./load-trace-store.js";
 
 export interface WsHandlerOptions {
 	lifecycle: SessionLifecycle;
@@ -26,6 +28,7 @@ export interface WsHandlerOptions {
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
 	isRequestAuthorized: (req: IncomingMessage) => boolean;
+	traceStore?: LoadTraceStore;
 }
 
 interface TurnState {
@@ -58,8 +61,10 @@ export class WsHandler {
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
 	private isRequestAuthorized: (req: IncomingMessage) => boolean;
+	private traceStore?: LoadTraceStore;
 
 	private clients = new Map<WebSocket, ClientState>();
+	private wsTraceIds = new Map<WebSocket, string>();
 	private busyProcesses = new Set<RpcProcess>();
 	private activeTurns = new Map<string, TurnState>();
 	private procEventCleanup = new Map<RpcProcess, () => void>();
@@ -75,6 +80,7 @@ export class WsHandler {
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
 		this.isRequestAuthorized = options.isRequestAuthorized;
+		this.traceStore = options.traceStore;
 		this.piAvailable = checkCommandAvailable(this.piLaunch.command);
 
 		this.lifecycle.subscribe((event) => {
@@ -132,6 +138,24 @@ export class WsHandler {
 		return this.piAvailable;
 	}
 
+	private recordTrace(traceId: string | undefined, source: "frontend" | "backend", kind: "instant" | "span", name: string, durationMs?: number, attrs?: Record<string, any>) {
+		if (!traceId || !this.traceStore) return;
+		this.traceStore.record(traceId, {
+			ts: new Date().toISOString(),
+			source,
+			kind,
+			name,
+			durationMs,
+			attrs,
+		});
+	}
+
+	private getTraceIdForMessage(ws: WebSocket, command: any): string | undefined {
+		const fromCommand = command?.__trace?.traceId;
+		if (typeof fromCommand === "string" && fromCommand.length > 0) return fromCommand;
+		return this.wsTraceIds.get(ws);
+	}
+
 	notifySessionFileChanged(sessionPath: string): void {
 		this.compiledStore.refreshIfChanged(sessionPath);
 	}
@@ -167,6 +191,15 @@ export class WsHandler {
 			ws.close(1008, "Unauthorized");
 			return;
 		}
+
+		const reqUrl = req.url || "/ws";
+		const parsed = new URL(reqUrl, "http://localhost");
+		const traceId = parsed.searchParams.get("traceId") || undefined;
+		if (traceId) {
+			this.wsTraceIds.set(ws, traceId);
+			this.recordTrace(traceId, "backend", "instant", "ws connection open");
+		}
+
 		console.log("WebSocket client connected");
 		this.clients.set(ws, {
 			subscribedSession: null,
@@ -192,8 +225,11 @@ export class WsHandler {
 
 		ws.on("message", (raw) => this.handleMessage(ws, raw.toString()));
 		ws.on("close", () => {
+			const wsTraceId = this.wsTraceIds.get(ws);
+			this.recordTrace(wsTraceId, "backend", "instant", "ws connection close");
 			console.log("WebSocket client disconnected");
 			this.clients.delete(ws);
+			this.wsTraceIds.delete(ws);
 		});
 	}
 
@@ -215,6 +251,9 @@ export class WsHandler {
 		}
 
 		const id = command.id;
+		const traceId = this.getTraceIdForMessage(ws, command);
+		const commandStart = performance.now();
+		this.recordTrace(traceId, "backend", "instant", `ws command received: ${command.type}`);
 		try {
 			if (!this.piAvailable && command.type !== "install_pi" && command.type !== "get_session_statuses") {
 				ws.send(JSON.stringify({
@@ -282,7 +321,25 @@ export class WsHandler {
 		} catch (err: any) {
 			debugTurn("command_error", { commandType: command?.type, requestId: id, error: err?.message });
 			ws.send(JSON.stringify({ id, type: "response", command: command.type, success: false, error: err.message }));
+			this.recordTrace(
+				traceId,
+				"backend",
+				"span",
+				`ws command ${command.type}`,
+				Number((performance.now() - commandStart).toFixed(2)),
+				{ success: false, error: err?.message },
+			);
+			return;
 		}
+
+		this.recordTrace(
+			traceId,
+			"backend",
+			"span",
+			`ws command ${command.type}`,
+			Number((performance.now() - commandStart).toFixed(2)),
+			{ success: true },
+		);
 	}
 
 	private async handleInstallPi(ws: WebSocket, id: string): Promise<void> {

@@ -96,6 +96,22 @@ LLM/API keys are read from standard environment variables (for example `ANTHROPI
 
 ---
 
+## Load tracing (frontend + backend)
+
+`pi-web` now emits a correlated load trace across browser and server.
+
+- Frontend creates a `traceId` when the app boots.
+- The `traceId` is sent via:
+  - WebSocket query param (`/ws?traceId=...`)
+  - HTTP header (`x-pi-trace-id`) for REST calls
+  - frontend trace event endpoint (`POST /api/debug/load-trace/event`)
+- Backend records HTTP/WS spans and keeps traces in memory.
+
+Debug endpoints:
+
+- `GET /api/debug/load-trace/latest` — latest traces
+- `GET /api/debug/load-trace/:traceId` — one trace
+
 ## Architecture
 
 ```mermaid

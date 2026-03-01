@@ -540,19 +540,27 @@ export class SessionPicker extends LitElement {
 	private unsubGlobalStatus?: () => void;
 	private unsubStatusChange?: () => void;
 
+	// ── Single-flight coalescing fetch state ────────────────────────────────
+	private _fetchInFlight = false;
+	private _fetchDirty = false;
+	private _sessionsChangedDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
 	connectedCallback() {
 		super.connectedCallback();
-		this.loadSessions();
+		this.refreshSessions();
 		if (this.agent) {
 			this.unsubSessionChange = this.agent.onSessionChange(() => {
+				// Merge optimistic/virtual immediately (no REST call needed)
+				this.mergeOptimisticSessions();
 				this.requestUpdate();
-				this.loadSessions();
+				this.refreshSessions();
 			});
 			this.unsubSessionsChanged = this.agent.onSessionsChanged(() => {
 				// Immediately merge any optimistic sessions into the current list
 				// so they appear without waiting for the async REST call.
 				this.mergeOptimisticSessions();
-				this.loadSessions();
+				// Debounce the REST fetch — file watcher events arrive in bursts
+				this.debouncedRefreshSessions();
 			});
 			this.unsubGlobalStatus = this.agent.onGlobalStatusChange(() => {
 				this.requestUpdate();
@@ -572,6 +580,10 @@ export class SessionPicker extends LitElement {
 		this.unsubSessionsChanged?.();
 		this.unsubGlobalStatus?.();
 		this.unsubStatusChange?.();
+		if (this._sessionsChangedDebounceTimer) {
+			clearTimeout(this._sessionsChangedDebounceTimer);
+			this._sessionsChangedDebounceTimer = null;
+		}
 	}
 
 	/**
@@ -617,9 +629,37 @@ export class SessionPicker extends LitElement {
 		}
 	}
 
-	async loadSessions() {
+	/**
+	 * Debounced version of refreshSessions for file-watcher events.
+	 * Coalesces rapid-fire sessions_changed signals into a single fetch.
+	 */
+	private debouncedRefreshSessions() {
+		if (this._sessionsChangedDebounceTimer) {
+			clearTimeout(this._sessionsChangedDebounceTimer);
+		}
+		this._sessionsChangedDebounceTimer = setTimeout(() => {
+			this._sessionsChangedDebounceTimer = null;
+			this.refreshSessions();
+		}, 500);
+	}
+
+	/**
+	 * Single-flight, coalescing session list fetch.
+	 *
+	 * If a fetch is already in-flight, marks dirty so a re-fetch happens
+	 * when the current one completes. At most 1 request is in-flight
+	 * at any time, and at most 1 is queued behind it.
+	 */
+	async refreshSessions() {
+		if (this._fetchInFlight) {
+			this._fetchDirty = true;
+			return;
+		}
+
+		this._fetchInFlight = true;
 		const isInitial = this.sessions.length === 0;
 		if (isInitial) this.loading = true;
+
 		try {
 			this.sessions = await this.agent.listSessions();
 		} catch (err) {
@@ -627,6 +667,13 @@ export class SessionPicker extends LitElement {
 			this.sessions = [];
 		}
 		this.loading = false;
+		this._fetchInFlight = false;
+
+		// If something changed while we were fetching, re-fetch once more.
+		if (this._fetchDirty) {
+			this._fetchDirty = false;
+			this.refreshSessions();
+		}
 	}
 
 	private get knownCwds(): string[] {
@@ -805,7 +852,7 @@ export class SessionPicker extends LitElement {
 		} catch (err) {
 			console.error("Failed to delete session:", err);
 			// Restore the session on failure
-			await this.loadSessions();
+			await this.refreshSessions();
 		}
 	}
 
