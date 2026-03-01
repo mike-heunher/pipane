@@ -291,11 +291,16 @@ function renderTokenUsage() {
 	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
 	if (!hasTotals) return "";
 
+	// The last assistant message's totalTokens = current context size (input + output for that turn)
+	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage);
+	const lastUsage = assistantMsgs.length ? assistantMsgs[assistantMsgs.length - 1].usage : null;
+	const lastTotal = lastUsage?.totalTokens ?? 0;
+
 	try {
 		const parts: string[] = [];
 		const contextWindow = state.model?.contextWindow;
-		if (totals.input && contextWindow) {
-			const pct = Math.round((totals.input / contextWindow) * 100);
+		if (lastTotal && contextWindow) {
+			const pct = Math.round((lastTotal / contextWindow) * 100);
 			parts.push(`↑${pct}%/${fmtTok(contextWindow)}`);
 		} else if (totals.input) {
 			parts.push(`↑${fmtTok(totals.input)}`);
