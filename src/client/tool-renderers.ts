@@ -59,8 +59,8 @@ hljs.registerLanguage("swift", swift);
 hljs.registerLanguage("kotlin", kotlin);
 hljs.registerLanguage("scss", scss);
 
-function truncate(s: string, max: number): string {
-	return s.length > max ? s.slice(0, max) + "…" : s;
+function truncate(s: string, _max: number): string {
+	return s;
 }
 
 /**

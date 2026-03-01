@@ -177,6 +177,50 @@ pi-message-list markdown-block {
 	}
 }
 
+/* ── Compact thinking level icon button ─────────────────────────── */
+
+.thinking-icon-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2rem;
+	height: 2rem;
+	padding: 0 0.35rem;
+	border: none;
+	border-radius: 0.375rem;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+}
+
+.thinking-icon-btn:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
+.thinking-bars {
+	display: inline-flex;
+	align-items: flex-end;
+	gap: 1.5px;
+	height: 12px;
+}
+
+.thinking-bar {
+	width: 3px;
+	border-radius: 1px;
+	background: var(--border, #d1d5db);
+	transition: background 0.15s;
+}
+
+.thinking-bar:nth-child(1) { height: 4px; }
+.thinking-bar:nth-child(2) { height: 6px; }
+.thinking-bar:nth-child(3) { height: 9px; }
+.thinking-bar:nth-child(4) { height: 12px; }
+
+.thinking-bar.filled {
+	background: var(--primary, #2563eb);
+}
+
 /* ── Token usage inline in toolbar ──────────────────────────────── */
 
 .input-token-usage {

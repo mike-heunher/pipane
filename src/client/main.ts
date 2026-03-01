@@ -189,6 +189,48 @@ function renderSteeringQueue() {
 	`;
 }
 
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+
+function renderThinkingButton() {
+	if (!agent) return "";
+	const model = agent.state?.model;
+	if (!model || !(model as any).reasoning) return "";
+
+	const level = agent.state?.thinkingLevel ?? "off";
+	const idx = THINKING_LEVELS.indexOf(level);
+	const nextLevel = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+
+	// 4 bars, filled up to the current level (off=0, minimal=1, low=2, medium=3, high=4)
+	const filledBars = idx; // off=0, minimal=1, low=2, medium=3, high=4
+	const title = `Thinking: ${level} (click to switch to ${nextLevel})`;
+
+	return html`
+		<button
+			class="thinking-icon-btn"
+			@click=${() => agent?.setThinkingLevel(nextLevel)}
+			title=${title}
+		>
+			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/>
+				<path d="M9 21h6"/>
+			</svg>
+			<span class="thinking-bars" data-level="${filledBars}">
+				${[0, 1, 2, 3].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
+			</span>
+		</button>
+	`;
+}
+
+function renderToolbarExtras() {
+	return html`${renderThinkingButton()}${renderTokenUsage()}`;
+}
+
+function fmtTok(n: number): string {
+	if (n < 1000) return String(n);
+	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
+	return `${Math.round(n / 1000)}k`;
+}
+
 function renderTokenUsage() {
 	if (!agent) return "";
 	const state = agent.state;
@@ -210,8 +252,12 @@ function renderTokenUsage() {
 	if (!hasTotals) return "";
 
 	try {
-		const text = formatUsage(totals);
-		return html`<span class="input-token-usage">${text}</span>`;
+		const parts: string[] = [];
+		if (totals.input) parts.push(`↑${fmtTok(totals.input)}`);
+		if (totals.output) parts.push(`↓${fmtTok(totals.output)}`);
+		if (totals.cost?.total) parts.push(`$${totals.cost.total < 0.01 ? totals.cost.total.toFixed(4) : totals.cost.total < 1 ? totals.cost.total.toFixed(3) : totals.cost.total.toFixed(2)}`);
+		if (!parts.length) return "";
+		return html`<span class="input-token-usage">${parts.join(" ")}</span>`;
 	} catch {
 		return "";
 	}
@@ -356,11 +402,11 @@ const renderApp = () => {
 										.thinkingLevel=${state?.thinkingLevel ?? "off"}
 										.showAttachmentButton=${true}
 										.showModelSelector=${true}
-										.showThinkingSelector=${true}
+										.showThinkingSelector=${false}
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
 										.onAbort=${() => agent?.abort()}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
-										.extraToolbarButtons=${() => renderTokenUsage()}
+										.extraToolbarButtons=${() => renderToolbarExtras()}
 									></message-editor>
 								</div>
 							</div>

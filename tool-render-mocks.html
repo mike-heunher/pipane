@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tool Call Rendering Mocks</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #111111;
+    --muted: #f3f4f6;
+    --muted-fg: #6b7280;
+    --border: #e5e7eb;
+    --accent: rgba(0,0,0,0.05);
+    --green: #16a34a;
+    --green-bg: #dcfce7;
+    --red: #dc2626;
+    --red-bg: #fef2f2;
+    --primary: #2563eb;
+    --radius: 0.5rem;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f8f9fa;
+    color: var(--fg);
+    padding: 2rem;
+    line-height: 1.5;
+  }
+
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--muted-fg); font-weight: 500; }
+  h3 { font-size: 0.85rem; margin-bottom: 0.5rem; color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+
+  .mock-section {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    max-width: 720px;
+  }
+
+  .mock-section .description {
+    font-size: 0.8rem;
+    color: var(--muted-fg);
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tool-group { margin-bottom: 1.25rem; }
+  .tool-group:last-child { margin-bottom: 0; }
+
+  .mono { font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace; }
+
+  /* Icons as inline SVG */
+  .icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex-shrink: 0; }
+  .icon-sm { width: 14px; height: 14px; }
+  .icon svg { width: 100%; height: 100%; }
+
+  /* Diff colors */
+  .diff-add { color: #16a34a; }
+  .diff-del { color: #dc2626; }
+  .diff-ctx { color: var(--muted-fg); }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 1: Current baseline (for comparison)        */
+  /* ───────────────────────────────────────────────── */
+  .m1 .tool {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  .m1 .tool-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .m1 .tool-header-left { display: flex; align-items: center; gap: 8px; }
+  .m1 .tool-label { font-size: 0.75rem; color: var(--muted-fg); }
+  .m1 .tool-body {
+    max-height: 160px; overflow: auto;
+    padding: 12px; font-size: 0.75rem; white-space: pre-wrap;
+  }
+  .m1 .copy-btn {
+    border: none; background: none; color: var(--muted-fg); cursor: pointer;
+    padding: 2px 8px; border-radius: 4px; font-size: 0.75rem;
+  }
+  .m1 .copy-btn:hover { background: var(--accent); }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 2: Minimal inline — no box, just left accent */
+  /* ───────────────────────────────────────────────── */
+  .m2 .tool {
+    border-left: 3px solid var(--border);
+    padding: 4px 0 4px 12px;
+    margin: 4px 0;
+  }
+  .m2 .tool.complete { border-left-color: var(--green); }
+  .m2 .tool.error { border-left-color: var(--red); }
+  .m2 .tool-header {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 0.75rem; color: var(--muted-fg);
+    margin-bottom: 4px;
+  }
+  .m2 .tool-body {
+    font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 140px; overflow: auto;
+    color: var(--fg); padding: 0;
+    background: transparent;
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 3: Pill header + floating body              */
+  /* ───────────────────────────────────────────────── */
+  .m3 .tool { margin: 6px 0; }
+  .m3 .tool-header {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px 3px 8px;
+    border-radius: 999px;
+    background: var(--muted);
+    border: 1px solid var(--border);
+    font-size: 0.72rem; color: var(--muted-fg);
+    margin-bottom: 6px;
+  }
+  .m3 .tool-header.complete { background: var(--green-bg); border-color: #bbf7d0; }
+  .m3 .tool-header.complete .tool-label { color: var(--green); }
+  .m3 .tool-header.error { background: var(--red-bg); border-color: #fecaca; }
+  .m3 .tool-header.error .tool-label { color: var(--red); }
+  .m3 .tool-body {
+    margin-left: 12px;
+    font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 140px; overflow: auto;
+    background: var(--muted); border-radius: 0.375rem;
+    padding: 8px 12px;
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 4: macOS terminal style with traffic lights  */
+  /* ───────────────────────────────────────────────── */
+  .m4 .tool {
+    border-radius: 0.5rem;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+    border: 1px solid var(--border);
+  }
+  .m4 .tool-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    background: linear-gradient(to bottom, #fafafa, #f0f0f0);
+    border-bottom: 1px solid var(--border);
+  }
+  .m4 .tool-header-left { display: flex; align-items: center; gap: 8px; }
+  .m4 .dots { display: flex; gap: 5px; }
+  .m4 .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .m4 .dot-red { background: #ff5f57; }
+  .m4 .dot-yellow { background: #febc2e; }
+  .m4 .dot-green { background: #28c840; }
+  .m4 .dot.muted { background: #d1d5db; }
+  .m4 .tool-label {
+    font-size: 0.72rem; color: var(--muted-fg);
+    margin-left: 8px;
+  }
+  .m4 .tool-body {
+    padding: 12px; font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 160px; overflow: auto;
+    background: #1e1e1e; color: #d4d4d4;
+  }
+  .m4 .diff-add { color: #4ec9b0; }
+  .m4 .diff-del { color: #f14c4c; }
+  .m4 .diff-ctx { color: #808080; }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 5: GitHub-style file card with tabs          */
+  /* ───────────────────────────────────────────────── */
+  .m5 .tool {
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+  .m5 .tool-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px;
+    background: #f6f8fa;
+    border-bottom: 1px solid var(--border);
+  }
+  .m5 .tool-header-left { display: flex; align-items: center; gap: 8px; }
+  .m5 .file-icon { color: var(--muted-fg); }
+  .m5 .tool-label { font-size: 0.8rem; font-weight: 600; color: var(--fg); }
+  .m5 .tool-label small { font-weight: 400; color: var(--muted-fg); font-size: 0.72rem; margin-left: 4px; }
+  .m5 .badge {
+    font-size: 0.65rem; padding: 1px 6px; border-radius: 999px;
+    font-weight: 500;
+  }
+  .m5 .badge-green { background: var(--green-bg); color: var(--green); }
+  .m5 .badge-red { background: var(--red-bg); color: var(--red); }
+  .m5 .tool-body {
+    max-height: 160px; overflow: auto;
+    font-size: 0.75rem; white-space: pre;
+  }
+  .m5 .tool-body table { width: 100%; border-collapse: collapse; }
+  .m5 .tool-body .line-num {
+    padding: 0 12px; text-align: right; color: #adb5bd;
+    user-select: none; width: 1%; white-space: nowrap;
+    border-right: 1px solid var(--border);
+    font-size: 0.7rem;
+  }
+  .m5 .tool-body .line-content { padding: 0 12px; white-space: pre-wrap; }
+  .m5 .tool-body tr.add { background: #dafbe1; }
+  .m5 .tool-body tr.del { background: #ffebe9; }
+  .m5 .tool-body tr.add .line-content { color: #1a7f37; }
+  .m5 .tool-body tr.del .line-content { color: #cf222e; }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 6: Compact single-line with expandable       */
+  /* ───────────────────────────────────────────────── */
+  .m6 .tool {
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+  .m6 .tool-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .m6 .tool-row:hover { background: var(--muted); }
+  .m6 .chevron { font-size: 0.65rem; color: var(--muted-fg); transition: transform 0.15s; width: 12px; text-align: center; }
+  .m6 .chevron.open { transform: rotate(90deg); }
+  .m6 .status-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .m6 .status-dot.green { background: var(--green); }
+  .m6 .status-dot.red { background: var(--red); }
+  .m6 .status-dot.gray { background: #d1d5db; }
+  .m6 .tool-label { font-size: 0.75rem; color: var(--fg); flex: 1; }
+  .m6 .tool-meta { font-size: 0.68rem; color: var(--muted-fg); }
+  .m6 .tool-body {
+    border-top: 1px solid var(--border);
+    padding: 10px 12px; font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 160px; overflow: auto;
+    background: var(--muted);
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 7: VSCode-inspired with colored sidebar      */
+  /* ───────────────────────────────────────────────── */
+  .m7 .tool {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+  .m7 .tool-sidebar {
+    width: 4px; flex-shrink: 0;
+  }
+  .m7 .tool-sidebar.green { background: var(--green); }
+  .m7 .tool-sidebar.red { background: var(--red); }
+  .m7 .tool-sidebar.blue { background: var(--primary); }
+  .m7 .tool-main { flex: 1; min-width: 0; }
+  .m7 .tool-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 12px;
+    background: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .m7 .tool-header-left { display: flex; align-items: center; gap: 6px; }
+  .m7 .tool-label { font-size: 0.72rem; color: var(--fg); font-weight: 500; }
+  .m7 .tool-sublabel { font-size: 0.68rem; color: var(--muted-fg); }
+  .m7 .tool-actions { display: flex; gap: 2px; }
+  .m7 .tool-btn {
+    border: none; background: none; color: var(--muted-fg); cursor: pointer;
+    padding: 2px 6px; border-radius: 3px; font-size: 0.7rem;
+  }
+  .m7 .tool-btn:hover { background: var(--accent); color: var(--fg); }
+  .m7 .tool-body {
+    padding: 10px 12px; font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 140px; overflow: auto;
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 8: Card with icon badge + bottom status bar  */
+  /* ───────────────────────────────────────────────── */
+  .m8 .tool {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  .m8 .tool-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .m8 .icon-badge {
+    width: 32px; height: 32px; border-radius: 0.375rem;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .m8 .icon-badge.read { background: #dbeafe; color: #2563eb; }
+  .m8 .icon-badge.edit { background: #fef3c7; color: #d97706; }
+  .m8 .icon-badge.write { background: #d1fae5; color: #059669; }
+  .m8 .icon-badge.bash { background: #f3e8ff; color: #7c3aed; }
+  .m8 .icon-badge svg { width: 18px; height: 18px; }
+  .m8 .tool-info { flex: 1; min-width: 0; }
+  .m8 .tool-title { font-size: 0.8rem; font-weight: 600; }
+  .m8 .tool-path { font-size: 0.68rem; color: var(--muted-fg); margin-top: 1px; }
+  .m8 .tool-body {
+    padding: 10px 14px; font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 140px; overflow: auto;
+  }
+  .m8 .tool-footer {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 14px;
+    background: var(--muted);
+    border-top: 1px solid var(--border);
+    font-size: 0.68rem; color: var(--muted-fg);
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 9: Notion-style toggle blocks                */
+  /* ───────────────────────────────────────────────── */
+  .m9 .tool {
+    margin: 4px 0;
+    border-radius: 0.375rem;
+    transition: background 0.12s;
+  }
+  .m9 .tool:hover { background: var(--muted); }
+  .m9 .tool-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .m9 .toggle-icon {
+    width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+    color: var(--muted-fg); font-size: 0.65rem; border-radius: 3px;
+    transition: background 0.12s;
+  }
+  .m9 .toggle-icon:hover { background: var(--accent); }
+  .m9 .toggle-icon.open { transform: rotate(90deg); }
+  .m9 .tool-label { font-size: 0.8rem; color: var(--fg); }
+  .m9 .tool-label .param { color: var(--muted-fg); font-weight: 400; }
+  .m9 .status-icon { color: var(--green); }
+  .m9 .status-icon.error { color: var(--red); }
+  .m9 .tool-body {
+    margin-left: 28px; margin-right: 8px;
+    padding: 8px 12px; font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 160px; overflow: auto;
+    background: var(--muted); border-radius: 0.375rem;
+    margin-bottom: 4px;
+  }
+
+  /* ───────────────────────────────────────────────── */
+  /* MOCK 10: Tight inline with syntax-highlighted diff */
+  /* ───────────────────────────────────────────────── */
+  .m10 .tool {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  .m10 .tool-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 12px;
+    height: 32px;
+    background: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .m10 .tool-header-left { display: flex; align-items: center; gap: 6px; }
+  .m10 .tool-label { font-size: 0.72rem; font-weight: 600; color: var(--fg); }
+  .m10 .tool-tag {
+    font-size: 0.6rem; padding: 1px 5px; border-radius: 3px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  .m10 .tool-tag.read { background: #dbeafe; color: #1d4ed8; }
+  .m10 .tool-tag.edit { background: #fef3c7; color: #92400e; }
+  .m10 .tool-tag.write { background: #d1fae5; color: #065f46; }
+  .m10 .tool-tag.bash { background: #f3e8ff; color: #6b21a8; }
+  .m10 .tool-actions { display: flex; gap: 2px; align-items: center; }
+  .m10 .tool-btn {
+    border: none; background: none; color: var(--muted-fg); cursor: pointer;
+    padding: 2px 6px; border-radius: 3px; font-size: 0.68rem;
+    display: flex; align-items: center; gap: 3px;
+  }
+  .m10 .tool-btn:hover { background: var(--accent); color: var(--fg); }
+  .m10 .tool-body {
+    font-size: 0.72rem; white-space: pre-wrap;
+    max-height: 160px; overflow: auto;
+  }
+  .m10 .diff-line { padding: 0 12px; line-height: 1.65; }
+  .m10 .diff-line.add { background: #dafbe1; color: #1a7f37; }
+  .m10 .diff-line.del { background: #ffebe9; color: #cf222e; }
+  .m10 .diff-line.ctx { color: var(--muted-fg); }
+  .m10 .code-body { padding: 8px 12px; }
+
+  /* Shared spinner */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { animation: spin 1s linear infinite; }
+
+  /* SVG icon helpers */
+  .icon-green { color: var(--green); }
+  .icon-red { color: var(--red); }
+  .icon-muted { color: var(--muted-fg); }
+</style>
+</head>
+<body>
+
+<h1>Tool Call Rendering — 10 Design Mocks</h1>
+<h2>Each mock shows read, edit, bash, and write variations</h2>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 1: Current Baseline -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m1">
+  <h3>Mock 1 — Current Baseline</h3>
+  <p class="description">The existing design: bordered card, muted header bar, monospace label, copy button.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="icon icon-green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>
+          </span>
+          <span class="tool-label mono">read(main.ts, offset:350, limit:30)</span>
+        </div>
+        <button class="copy-btn">📋</button>
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container" class="canvas-container border-l border-border"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container" class="jsonl-container border-l border-border"&gt;&lt;/div&gt;`
+    : ""}
+      &lt;/div&gt;
+    &lt;/div&gt;</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="icon icon-green">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22h6a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M2 18l4-4 4 4"/></svg>
+          </span>
+          <span class="tool-label mono">edit(main.ts)</span>
+        </div>
+        <button class="copy-btn">📋</button>
+      </div>
+      <div class="tool-body mono"><span class="diff-ctx">  .thinkingLevel=${state?.thinkingLevel</span>
+<span class="diff-ctx">  ?? "off"}</span>
+<span class="diff-ctx">  .showAttachmentButton=${true}</span>
+<span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span>
+<span class="diff-ctx">  &gt;&lt;/message-editor&gt;</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 2: Minimal Left Accent -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m2">
+  <h3>Mock 2 — Minimal Left Accent</h3>
+  <p class="description">No box chrome. Just a colored left border indicating status. Ultra-minimal, content-first.</p>
+
+  <div class="tool-group">
+    <div class="tool complete">
+      <div class="tool-header mono">
+        <span class="icon icon-sm icon-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg></span>
+        read(main.ts, offset:350, limit:30)
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool complete">
+      <div class="tool-header mono">
+        <span class="icon icon-sm icon-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22h6a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M2 18l4-4 4 4"/></svg></span>
+        edit(main.ts)
+      </div>
+      <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool complete">
+      <div class="tool-header mono">
+        <span class="icon icon-sm icon-green"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m7 15 3-3-3-3"/><path d="M13 15h4"/></svg></span>
+        npm run build
+      </div>
+      <div class="tool-body mono">✓ built in 1.24s</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 3: Pill Header + Floating Body -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m3">
+  <h3>Mock 3 — Pill Header + Floating Body</h3>
+  <p class="description">Inline pill badge for tool name, body floats below. Status reflected in pill color.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header complete">
+        <span class="icon icon-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg></span>
+        <span class="tool-label mono">read(main.ts, offset:350, limit:30)</span>
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header complete">
+        <span class="icon icon-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22h6a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M2 18l4-4 4 4"/></svg></span>
+        <span class="tool-label mono">edit(main.ts)</span>
+      </div>
+      <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header error">
+        <span class="icon icon-sm"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m7 15 3-3-3-3"/><path d="M13 15h4"/></svg></span>
+        <span class="tool-label mono">npm run test</span>
+      </div>
+      <div class="tool-body mono" style="color: var(--red);">Error: 3 tests failed
+  ✗ tool-renderers.test.ts
+  ✗ session-picker.test.ts
+  ✗ ws-agent-adapter.test.ts</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 4: macOS Terminal Style -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m4">
+  <h3>Mock 4 — macOS Terminal Style</h3>
+  <p class="description">Traffic-light dots indicate status. Dark code body. Feels like a real terminal window.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <div class="dots">
+            <div class="dot dot-red"></div>
+            <div class="dot dot-yellow"></div>
+            <div class="dot dot-green"></div>
+          </div>
+          <span class="tool-label mono">read(main.ts, offset:350, limit:30)</span>
+        </div>
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container" class="canvas-container border-l border-border"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container" class="jsonl-container border-l border-border"&gt;&lt;/div&gt;`
+    : ""}</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <div class="dots">
+            <div class="dot dot-red"></div>
+            <div class="dot dot-yellow"></div>
+            <div class="dot dot-green"></div>
+          </div>
+          <span class="tool-label mono">edit(main.ts)</span>
+        </div>
+      </div>
+      <div class="tool-body mono"><span class="diff-ctx">  .thinkingLevel=${state?.thinkingLevel</span>
+<span class="diff-ctx">  ?? "off"}</span>
+<span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <div class="dots">
+            <div class="dot muted"></div>
+            <div class="dot muted"></div>
+            <div class="dot muted"></div>
+          </div>
+          <span class="tool-label mono">npm run build <span class="spinner" style="display:inline-block;">⟳</span></span>
+        </div>
+      </div>
+      <div class="tool-body mono">Building...
+<span style="color:#808080">vite v5.4.0 building for production...</span>
+<span style="color:#808080">transforming (142)...</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 5: GitHub File Card -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m5">
+  <h3>Mock 5 — GitHub File Card</h3>
+  <p class="description">GitHub-style diff with line numbers. File name is prominent. Badges for +/- counts.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="file-icon">📄</span>
+          <span class="tool-label">main.ts <small>offset:350, limit:30</small></span>
+        </div>
+        <span class="badge badge-green">read</span>
+      </div>
+      <div class="tool-body mono">
+        <table>
+          <tr><td class="line-num">350</td><td class="line-content">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`</td></tr>
+          <tr><td class="line-num">351</td><td class="line-content">    : ""}</td></tr>
+          <tr><td class="line-num">352</td><td class="line-content">  ${isJsonlPanelVisible()</td></tr>
+          <tr><td class="line-num">353</td><td class="line-content">    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`</td></tr>
+          <tr><td class="line-num">354</td><td class="line-content">    : ""}</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="file-icon">✏️</span>
+          <span class="tool-label">main.ts</span>
+        </div>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <span class="badge badge-green">+1</span>
+          <span class="badge badge-red">−1</span>
+        </div>
+      </div>
+      <div class="tool-body mono">
+        <table>
+          <tr><td class="line-num"></td><td class="line-content">  .onThinkingChange=${(level: any) =></td></tr>
+          <tr class="del"><td class="line-num"></td><td class="line-content">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</td></tr>
+          <tr class="add"><td class="line-num"></td><td class="line-content">+ .extraToolbarButtons=${() => renderTokenUsage()}</td></tr>
+          <tr><td class="line-num"></td><td class="line-content">  &gt;&lt;/message-editor&gt;</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 6: Compact Expandable Row -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m6">
+  <h3>Mock 6 — Compact Expandable Row</h3>
+  <p class="description">Single-line rows that expand on click. Status dot, tool label, and metadata all inline. Minimal vertical space when collapsed.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-row" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.chevron').classList.toggle('open')">
+        <span class="chevron">▶</span>
+        <span class="status-dot green"></span>
+        <span class="tool-label mono">read(main.ts, offset:350, limit:30)</span>
+        <span class="tool-meta">12 lines</span>
+      </div>
+      <div class="tool-body mono" style="display:none">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-row" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.chevron').classList.toggle('open')">
+        <span class="chevron open">▶</span>
+        <span class="status-dot green"></span>
+        <span class="tool-label mono">edit(main.ts)</span>
+        <span class="tool-meta">+1 −1</span>
+      </div>
+      <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-row" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.chevron').classList.toggle('open')">
+        <span class="chevron">▶</span>
+        <span class="status-dot green"></span>
+        <span class="tool-label mono">npm run build</span>
+        <span class="tool-meta">1.24s</span>
+      </div>
+      <div class="tool-body mono" style="display:none">✓ built in 1.24s</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-row">
+        <span class="chevron">▶</span>
+        <span class="status-dot gray"></span>
+        <span class="tool-label mono" style="color: var(--muted-fg);">write(config.json) — 2,048 bytes</span>
+        <span class="tool-meta"><span class="spinner" style="display:inline-block; font-size:0.7rem;">⟳</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 7: VSCode Sidebar Accent -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m7">
+  <h3>Mock 7 — VSCode Sidebar Accent</h3>
+  <p class="description">Thin colored sidebar strip. Clean header with tool type + file path separated. Multiple action buttons.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-sidebar green"></div>
+      <div class="tool-main">
+        <div class="tool-header">
+          <div class="tool-header-left">
+            <span class="tool-label">Read</span>
+            <span class="tool-sublabel mono">main.ts:350-380</span>
+          </div>
+          <div class="tool-actions">
+            <button class="tool-btn" title="Copy">📋</button>
+          </div>
+        </div>
+        <div class="tool-body mono">? html`&lt;div id="canvas-container" class="canvas-container border-l border-border"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-sidebar green"></div>
+      <div class="tool-main">
+        <div class="tool-header">
+          <div class="tool-header-left">
+            <span class="tool-label">Edit</span>
+            <span class="tool-sublabel mono">main.ts</span>
+          </div>
+          <div class="tool-actions">
+            <button class="tool-btn" title="Copy new">📋</button>
+          </div>
+        </div>
+        <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-sidebar blue"></div>
+      <div class="tool-main">
+        <div class="tool-header">
+          <div class="tool-header-left">
+            <span class="tool-label">Bash</span>
+            <span class="tool-sublabel mono">npm run build</span>
+          </div>
+          <div class="tool-actions">
+            <button class="tool-btn" title="Copy">📋</button>
+          </div>
+        </div>
+        <div class="tool-body mono">✓ built in 1.24s
+dist/server.js  45.2 kB
+dist/client.js  128.7 kB</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 8: Icon Badge Cards -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m8">
+  <h3>Mock 8 — Icon Badge Cards</h3>
+  <p class="description">Large colored icon badge. Title + path separated. Bottom status bar with metadata. Feels like a file manager.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="icon-badge read">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <div class="tool-info">
+          <div class="tool-title">Read File</div>
+          <div class="tool-path mono">main.ts — lines 350–380</div>
+        </div>
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+      <div class="tool-footer">
+        <span>✓ Complete</span>
+        <span>12 lines read</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="icon-badge edit">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22h6a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v10"/><path d="M14 2v6h6"/><path d="M2 18l4-4 4 4"/></svg>
+        </div>
+        <div class="tool-info">
+          <div class="tool-title">Edit File</div>
+          <div class="tool-path mono">main.ts</div>
+        </div>
+      </div>
+      <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+      <div class="tool-footer">
+        <span>✓ Complete</span>
+        <span>+1 −1 lines</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="icon-badge bash">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m7 15 3-3-3-3"/><path d="M13 15h4"/></svg>
+        </div>
+        <div class="tool-info">
+          <div class="tool-title">Terminal</div>
+          <div class="tool-path mono">npm run build</div>
+        </div>
+      </div>
+      <div class="tool-body mono">✓ built in 1.24s</div>
+      <div class="tool-footer">
+        <span>✓ Complete</span>
+        <span>exit 0 — 1.24s</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 9: Notion Toggle Blocks -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m9">
+  <h3>Mock 9 — Notion Toggle Blocks</h3>
+  <p class="description">Minimal borderless toggle blocks like Notion. Hover to see background. Inline expand/collapse. Very clean.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').classList.toggle('open')">
+        <span class="toggle-icon open">▶</span>
+        <span class="status-icon">✓</span>
+        <span class="tool-label"><strong>read</strong> <span class="param mono">main.ts:350–380</span></span>
+      </div>
+      <div class="tool-body mono">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').classList.toggle('open')">
+        <span class="toggle-icon open">▶</span>
+        <span class="status-icon">✓</span>
+        <span class="tool-label"><strong>edit</strong> <span class="param mono">main.ts</span></span>
+      </div>
+      <div class="tool-body mono"><span class="diff-del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</span>
+<span class="diff-add">+ .extraToolbarButtons=${() => renderTokenUsage()}</span></div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').classList.toggle('open')">
+        <span class="toggle-icon">▶</span>
+        <span class="status-icon">✓</span>
+        <span class="tool-label"><strong>bash</strong> <span class="param mono">npm run build</span></span>
+      </div>
+      <div class="tool-body mono" style="display:none">✓ built in 1.24s</div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'; this.querySelector('.toggle-icon').classList.toggle('open')">
+        <span class="toggle-icon">▶</span>
+        <span class="status-icon error">✗</span>
+        <span class="tool-label"><strong>bash</strong> <span class="param mono">npm run test</span> <span style="color:var(--red); font-size: 0.72rem;">— 3 failures</span></span>
+      </div>
+      <div class="tool-body mono" style="display:none; color: var(--red);">Error: 3 tests failed</div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- MOCK 10: Tight Tag + Syntax Diff -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="mock-section m10">
+  <h3>Mock 10 — Colored Tag + Line Diff</h3>
+  <p class="description">Compact 32px header with a colored tool-type tag. Line-by-line diff with full-width colored backgrounds (GitHub PR style). File name is the prominent label.</p>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="tool-tag read">READ</span>
+          <span class="tool-label mono">main.ts<span style="color:var(--muted-fg); font-weight:400"> :350–380</span></span>
+        </div>
+        <div class="tool-actions">
+          <button class="tool-btn" title="Copy">📋 Copy</button>
+        </div>
+      </div>
+      <div class="tool-body">
+        <div class="code-body mono">? html`&lt;div id="canvas-container"&gt;&lt;/div&gt;`
+    : ""}
+  ${isJsonlPanelVisible()
+    ? html`&lt;div id="jsonl-container"&gt;&lt;/div&gt;`
+    : ""}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="tool-tag edit">EDIT</span>
+          <span class="tool-label mono">main.ts</span>
+        </div>
+        <div class="tool-actions">
+          <button class="tool-btn" title="Copy new text">📋 Copy</button>
+        </div>
+      </div>
+      <div class="tool-body mono">
+        <div class="diff-line ctx">  .onThinkingChange=${(level: any) =></div>
+        <div class="diff-line ctx">    agent?.setThinkingLevel(level)}</div>
+        <div class="diff-line del">- &lt;div class="input-token-bar"&gt;${renderTokenUsage()}&lt;/div&gt;</div>
+        <div class="diff-line add">+ .extraToolbarButtons=${() => renderTokenUsage()}</div>
+        <div class="diff-line ctx">  &gt;&lt;/message-editor&gt;</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="tool-tag bash">BASH</span>
+          <span class="tool-label mono">npm run build</span>
+        </div>
+        <div class="tool-actions">
+          <button class="tool-btn" title="Copy">📋 Copy</button>
+        </div>
+      </div>
+      <div class="tool-body">
+        <div class="code-body mono">✓ built in 1.24s
+dist/server.js  45.2 kB
+dist/client.js  128.7 kB</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tool-group">
+    <div class="tool">
+      <div class="tool-header">
+        <div class="tool-header-left">
+          <span class="tool-tag write">WRITE</span>
+          <span class="tool-label mono">config.json<span style="color:var(--muted-fg); font-weight:400"> — 2,048 bytes</span></span>
+        </div>
+        <div class="tool-actions">
+          <button class="tool-btn" title="Copy">📋 Copy</button>
+        </div>
+      </div>
+      <div class="tool-body">
+        <div class="code-body mono">{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "strict": true
+  }
+}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
