@@ -36,6 +36,25 @@ import { LocalSettingsStore } from "./local-settings.js";
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
 const PI_CWD = process.env.PI_CWD || process.cwd();
+
+// Quiet mode: only show URLs unless --verbose or PIPANE_VERBOSE=1
+const VERBOSE = process.argv.includes("--verbose") || process.env.PIPANE_VERBOSE === "1";
+if (!VERBOSE) {
+	const origLog = console.log;
+	const origError = console.error;
+	const origWarn = console.warn;
+	// Suppress all console output; we'll use _log for the few lines we want
+	console.log = () => {};
+	console.error = () => {};
+	console.warn = () => {};
+	(globalThis as any)._pipaneLog = origLog;
+} else {
+	(globalThis as any)._pipaneLog = console.log;
+}
+/** Always prints, even in quiet mode */
+function log(...args: any[]) {
+	(globalThis as any)._pipaneLog(...args);
+}
 const PI_CLI = process.env.PI_CLI;
 const PI_LAUNCH = resolvePiLaunch(PI_CLI);
 const PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
@@ -356,7 +375,10 @@ if (PI_AVAILABLE) {
 }
 
 server.listen(PORT, () => {
-	console.log(`pipane server listening on http://localhost:${PORT}`);
-	console.log(`[auth] Localhost is always allowed and will auto-set auth cookie.`);
-	console.log(`[auth] Remote browser auth URL: ${AUTH_URL}`);
+	log(`  Local:  http://localhost:${PORT}`);
+	log(`  Remote: ${AUTH_URL}`);
+	if (!process.env.PIPANE_AUTH_TOKEN) {
+		log(`\n  Auth token is random and changes on restart.`);
+		log(`  Set PIPANE_AUTH_TOKEN to use a fixed token.`);
+	}
 });

@@ -11,7 +11,8 @@ if (process.env.PIPANE_PRINT_ENTRY === "1") {
 	process.exit(0);
 }
 
-const child = spawn(process.execPath, [serverEntry], {
+// Pass through CLI args (e.g. --verbose)
+const child = spawn(process.execPath, [serverEntry, ...process.argv.slice(2)], {
 	stdio: "inherit",
 	env: { ...process.env, NODE_ENV: process.env.NODE_ENV || "production" },
 });
