@@ -1069,7 +1069,23 @@ export class WsAgentAdapter {
 		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
 			if (!this._sessionPath) return true;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
-			await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
+			// Show a loading indicator while compaction runs (LLM summarization can take a while)
+			this._state.isStreaming = true;
+			this._state.messages = [...this._state.messages, {
+				role: "compactionSummary",
+				summary: "",
+				tokensBefore: 0,
+				timestamp: Date.now(),
+				_compacting: true,
+			} as any];
+			this.emitStatusChange();
+			this.emitContentChange();
+			try {
+				await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
+			} finally {
+				this._state.isStreaming = false;
+				this.emitStatusChange();
+			}
 			// Re-subscribe to get fresh messages after compaction
 			await this.subscribeToSession(this._sessionPath);
 			return true;
