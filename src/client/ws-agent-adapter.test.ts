@@ -680,9 +680,18 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
 			adapter.setThinkingLevel("high");
 
-			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
+			adapter.setModel({ provider: "openai", id: "gpt-4o-mini", reasoning: false } as any);
 
 			expect(adapter.state.thinkingLevel).toBe("off");
+		});
+
+		it("keeps thinking level for gpt-5.3-codex when reasoning metadata is missing", () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			adapter.setThinkingLevel("high");
+
+			adapter.setModel({ provider: "openai-codex", id: "gpt-5.3-codex" } as any);
+
+			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
 		it("emits content change when setThinkingLevel is called", () => {

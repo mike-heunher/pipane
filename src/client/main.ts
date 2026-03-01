@@ -191,10 +191,20 @@ function renderSteeringQueue() {
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 
+function modelSupportsThinking(model: any): boolean {
+	if (!model) return false;
+	if (typeof model.reasoning === "boolean") return model.reasoning;
+	const provider = String(model.provider ?? "").toLowerCase();
+	const id = String(model.id ?? "").toLowerCase();
+	if (provider === "openai-codex") return true;
+	if (provider === "openai" && id.startsWith("gpt-5")) return true;
+	return false;
+}
+
 function renderThinkingButton() {
 	if (!agent) return "";
 	const model = agent.state?.model;
-	if (!model || !(model as any).reasoning) return "";
+	if (!modelSupportsThinking(model)) return "";
 
 	const level = agent.state?.thinkingLevel ?? "off";
 	const idx = THINKING_LEVELS.indexOf(level);
