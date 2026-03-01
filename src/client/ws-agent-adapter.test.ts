@@ -533,7 +533,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.messages[1].role).toBe("assistant");
 		});
 
-		it("streaming message_end appends to messages", () => {
+		it("message_end is no longer processed by updateState (state comes from session_sync)", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
 
@@ -541,6 +541,7 @@ describe("WsAgentAdapter prompt routing", () => {
 				{ role: "user", content: "test", timestamp: 999 },
 			];
 
+			// updateState no longer handles message_end — state comes from session_sync
 			(adapter as any).updateState({
 				type: "message_end",
 				message: {
@@ -550,8 +551,8 @@ describe("WsAgentAdapter prompt routing", () => {
 				},
 			});
 
-			expect(adapter.state.messages).toHaveLength(2);
-			expect(adapter.state.messages[1].role).toBe("assistant");
+			// Message NOT appended — updateState only handles agent_start/end/turn_end
+			expect(adapter.state.messages).toHaveLength(1);
 		});
 
 		it("turn_end does NOT append tool results (they arrive via message_end)", () => {

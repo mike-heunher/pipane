@@ -1,22 +1,15 @@
 /**
  * WebSocket-backed Agent adapter.
  *
- * Architecture: the server is the single source of truth for message state.
- * Messages are delivered via two mechanisms, both over WebSocket:
+ * Architecture: the server is the single source of truth for ALL state.
+ * The server maintains a flat messages array that includes everything:
+ * committed messages, the in-flight stream message, and partial tool results.
  *
- * - `session_messages` push: full message list (on subscribe, after turn
- *   completes, and when external clients modify the JSONL file).
- * - Streaming events (`message_start`, `message_update`, `message_end`,
- *   `turn_end`, etc.): incremental updates during an active turn.
+ * State arrives via `session_sync` (full snapshot or SHA-256-verified delta).
+ * The client just renders the messages array. No splitting, no fixups.
  *
- * The client never reads JSONL files directly. It subscribes to a session
- * via the `subscribe_session` WS command and receives all state from the server.
- *
- * Model and thinking level are client-side state until a message is sent,
- * at which point they are passed to the server along with the prompt.
- *
- * Virtual sessions (new, unsaved) have no JSONL file and don't persist
- * until the first message is sent.
+ * The only client-side state is model/thinkingLevel selection (until sent
+ * with the next prompt) and UI concerns like the steering queue.
  */
 
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
@@ -70,6 +63,12 @@ export class WsAgentAdapter {
 		error: undefined,
 	};
 
+	/**
+	 * Pending tool call IDs — kept as a simple set for query by tool renderers.
+	 * Populated from the server's session_sync state.
+	 */
+	private _pendingToolCallIds = new Set<string>();
+
 	// ── Steering queue (per-session) ───────────────────────────────────────
 	/** Per-session steering queues keyed by session path. */
 	private _steeringQueues = new Map<string, string[]>();
@@ -99,10 +98,18 @@ export class WsAgentAdapter {
 	private _globalStatusListeners = new Set<() => void>();
 
 	/**
-	 * Partial tool results from tool_execution_update events, keyed by toolCallId.
-	 * Populated from the server's session state (via session_sync).
+	 * Monotonically increasing nonce, bumped on every session change.
+	 * Used to detect stale async responses from prompt/fork commands
+	 * that resolve after the user navigated to a different session.
 	 */
-	private _partialToolResults = new Map<string, any>();
+	private _sessionNonce = 0;
+
+	/**
+	 * True while a `__new__` prompt is in flight (between sending the prompt
+	 * and receiving the response). Used by the `session_attached` handler to
+	 * distinguish a valid virtual→attached transition from a stale message.
+	 */
+	private _pendingNewPrompt = false;
 
 	/** Current synced JSON string from server */
 	private _syncJson = "";
@@ -119,9 +126,9 @@ export class WsAgentAdapter {
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
 
-	/** Get partial tool results for tools currently executing */
-	get partialToolResults(): ReadonlyMap<string, any> {
-		return this._partialToolResults;
+	/** Get pending tool call IDs */
+	get pendingToolCallIds(): ReadonlySet<string> {
+		return this._pendingToolCallIds;
 	}
 
 	get steeringQueue(): readonly string[] {
@@ -393,7 +400,15 @@ export class WsAgentAdapter {
 			if (data.sessionPath) {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
 			}
-			if (data.sessionPath === this._sessionPath || this._sessionStatus === "virtual") {
+			// Only adopt this session if:
+			// - It matches the session we're currently viewing, OR
+			// - We're in virtual state AND we have a pending __new__ prompt.
+			//   Without this second check, a stale session_attached from a
+			//   previous prompt could hijack a new virtual session the user
+			//   just created while the old turn was still running.
+			const shouldAdopt = data.sessionPath === this._sessionPath
+				|| (this._sessionStatus === "virtual" && this._pendingNewPrompt);
+			if (shouldAdopt) {
 				if (this._sessionStatus === "virtual" && data.sessionPath) {
 					this._sessionPath = data.sessionPath;
 					const filename = path.basename(data.sessionPath, ".jsonl");
@@ -442,7 +457,7 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
-				this._partialToolResults.clear();
+				this._pendingToolCallIds.clear();
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
@@ -507,32 +522,19 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		const messages: AgentMessage[] = state.messages ?? [];
-		this._state.streamMessage = state.streamMessage ?? null;
-		this._state.isStreaming = state.status === "streaming";
+		// The server sends a flat messages array with everything merged in.
+		// Just use it directly — no splitting, no fixups.
+		this._state.messages = state.messages ?? [];
+		this._state.isStreaming = state.isStreaming ?? false;
 		if (this._sessionStatus !== "virtual") {
 			this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
 		}
-		this._state.pendingToolCalls = new Set(state.pendingToolCalls ?? []);
+		this._pendingToolCallIds = new Set(state.pendingToolCalls ?? []);
+		this._state.pendingToolCalls = this._pendingToolCallIds;
 
-		// Update partial tool results and inject synthetic toolResult messages
-		// so the UI's toolResultsById map picks them up for rendering.
-		this._partialToolResults.clear();
-		if (state.partialToolResults) {
-			for (const [id, partialResult] of Object.entries(state.partialToolResults as Record<string, any>)) {
-				this._partialToolResults.set(id, partialResult);
-				// Create a synthetic toolResult message so the tool renderer shows partial output
-				messages.push({
-					role: "toolResult",
-					toolCallId: id,
-					content: partialResult.content ?? [],
-					isError: false,
-					details: partialResult.details,
-					timestamp: Date.now(),
-				} as any);
-			}
-		}
-		this._state.messages = messages;
+		// Keep streamMessage null — we don't use the two-zone split anymore.
+		// Everything is in the flat messages array.
+		this._state.streamMessage = null;
 
 		if (this._restoreModelFromServer) {
 			if (state.model) {
@@ -558,12 +560,16 @@ export class WsAgentAdapter {
 		this.emitStatusChange();
 	}
 
+	/**
+	 * Legacy event handler — only used for backward-compat agent_event side-channel.
+	 * The primary state path is session_sync, which delivers the full flat state.
+	 * This only handles agent_start/agent_end for streaming status and running promise.
+	 */
 	private updateState(event: AgentEvent) {
 		switch (event.type) {
 			case "agent_start":
 				this._state.isStreaming = true;
 				this._state.error = undefined;
-				this._state.streamMessage = null;
 				this._runningPromise = new Promise((resolve) => {
 					this._resolveRunning = resolve;
 				});
@@ -574,51 +580,18 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
-				this._partialToolResults.clear();
+				this._pendingToolCallIds.clear();
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
-				// Note: sync state (_syncJson/_syncHash) is NOT cleared here.
-				// The server will push a final session_sync after detach.
 				this.emitStatusChange();
 				break;
 
-			case "message_start":
-				this._state.streamMessage = event.message;
-				break;
-
-			case "message_update":
-				this._state.streamMessage = event.message;
-				break;
-
-			case "message_end":
-				this._state.streamMessage = null;
-				this._state.messages = [...this._state.messages, event.message];
-				break;
-
 			case "turn_end":
-				// Extract error message if present. Tool results are NOT
-				// appended here — they are already delivered via individual
-				// message_end events. The authoritative state comes from the
-				// session_messages snapshot pushed after agent_end.
 				if (event.message.role === "assistant" && (event.message as any).errorMessage) {
 					this._state.error = (event.message as any).errorMessage;
 				}
 				break;
-
-			case "tool_execution_start": {
-				const s = new Set(this._state.pendingToolCalls);
-				s.add(event.toolCallId);
-				this._state.pendingToolCalls = s;
-				break;
-			}
-
-			case "tool_execution_end": {
-				const s = new Set(this._state.pendingToolCalls);
-				s.delete(event.toolCallId);
-				this._state.pendingToolCalls = s;
-				break;
-			}
 		}
 	}
 
@@ -738,25 +711,40 @@ export class WsAgentAdapter {
 		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
 
 		if (this._sessionStatus === "virtual") {
-			const res = await this.send({
-				type: "prompt",
-				sessionPath: "__new__",
-				cwd: this._pendingCwd,
-				message: text,
-				model: modelPayload,
-				thinkingLevel: this._state.thinkingLevel,
-				images,
-			});
-			const newSessionPath = res?.newSessionPath;
-			if (newSessionPath && !this._sessionPath) {
-				this._sessionPath = newSessionPath;
-				const filename = path.basename(newSessionPath, ".jsonl");
-				const parts = filename.split("_");
-				this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
-				this._sessionStatus = "attached";
-				this.subscribeToSession(newSessionPath);
-				this.emitSessionChange();
-				this.emitStatusChange();
+			// Capture session nonce before the await. The prompt RPC blocks
+			// until the pi process finishes the entire turn (after agent_end),
+			// so the user may navigate away (e.g. create a new session) during
+			// the await. If the nonce changed, the response is stale — ignore it.
+			const nonce = this._sessionNonce;
+			this._pendingNewPrompt = true;
+			try {
+				const res = await this.send({
+					type: "prompt",
+					sessionPath: "__new__",
+					cwd: this._pendingCwd,
+					message: text,
+					model: modelPayload,
+					thinkingLevel: this._state.thinkingLevel,
+					images,
+				});
+				if (this._sessionNonce !== nonce) {
+					// User navigated away during the prompt — discard stale response
+					console.log("[ws-adapter] Discarding stale prompt response (session changed during await)");
+					return;
+				}
+				const newSessionPath = res?.newSessionPath;
+				if (newSessionPath && !this._sessionPath) {
+					this._sessionPath = newSessionPath;
+					const filename = path.basename(newSessionPath, ".jsonl");
+					const parts = filename.split("_");
+					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+					this._sessionStatus = "attached";
+					this.subscribeToSession(newSessionPath);
+					this.emitSessionChange();
+					this.emitStatusChange();
+				}
+			} finally {
+				this._pendingNewPrompt = false;
 			}
 			return;
 		}
@@ -927,6 +915,7 @@ export class WsAgentAdapter {
 		}
 		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
 
+		const nonce = this._sessionNonce;
 		const data = await this.send({
 			type: "fork_prompt",
 			sessionPath: this._sessionPath,
@@ -936,7 +925,11 @@ export class WsAgentAdapter {
 			images,
 		});
 
-		// Switch to the new forked session
+		// Switch to the new forked session (only if user hasn't navigated away)
+		if (this._sessionNonce !== nonce) {
+			console.log("[ws-adapter] Discarding stale fork_prompt response (session changed during await)");
+			return;
+		}
 		if (data?.newSessionPath) {
 			this._sessionPath = data.newSessionPath;
 			const filename = path.basename(data.newSessionPath, ".jsonl");
@@ -1002,6 +995,8 @@ export class WsAgentAdapter {
 
 	/** Switch to an existing session (load messages from server cache) */
 	async switchSession(sessionPath: string): Promise<void> {
+		this._sessionNonce++;
+		this._pendingNewPrompt = false;
 		this._sessionPath = sessionPath;
 		// Extract session ID from filename
 		const filename = path.basename(sessionPath, ".jsonl");
@@ -1015,7 +1010,7 @@ export class WsAgentAdapter {
 		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
-		this._partialToolResults.clear();
+		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";
 		this._state.error = undefined;
@@ -1038,6 +1033,8 @@ export class WsAgentAdapter {
 
 	/** Create a new virtual session (no JSONL file until first message) */
 	async newSession(cwd?: string): Promise<void> {
+		this._sessionNonce++;
+		this._pendingNewPrompt = false;
 		this._sessionId = crypto.randomUUID();
 		this._sessionPath = undefined;
 		this._sessionName = undefined;
@@ -1048,7 +1045,7 @@ export class WsAgentAdapter {
 		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
-		this._partialToolResults.clear();
+		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";
 		this._state.error = undefined;
