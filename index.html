@@ -6,11 +6,15 @@
 		<link rel="icon" type="image/png" href="/favicon.png" />
 		<title>pi web</title>
 		<script>
-			// Apply dark/light theme before first paint to avoid flash
+			// Apply theme before first paint so the initial skeleton matches user prefs.
 			(function() {
 				var t = localStorage.getItem("theme") || "system";
+				var colorTheme = localStorage.getItem("color-theme") || "default";
 				var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-				if (dark) document.documentElement.classList.add("dark");
+				var root = document.documentElement;
+
+				if (dark) root.classList.add("dark");
+				if (colorTheme && colorTheme !== "default") root.setAttribute("data-color-theme", colorTheme);
 			})();
 		</script>
 	</head>
@@ -18,9 +22,9 @@
 		<div id="app">
 			<!-- Static skeleton shell: visible until JS renders the real app.
 			     Uses only inline styles so it works before any CSS loads. -->
-			<div id="skeleton-shell" style="display:flex;flex-direction:column;width:100%;height:100vh;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;">
+			<div id="skeleton-shell" style="display:flex;flex-direction:column;width:100%;height:100vh;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--sk-background, #ffffff);color:var(--sk-muted-foreground, #6b7280);">
 				<!-- Header bar -->
-				<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 1rem;border-bottom:1px solid var(--border, #e5e7eb);flex-shrink:0;">
+				<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 1rem;border-bottom:1px solid var(--sk-border, #e5e7eb);flex-shrink:0;">
 					<div style="display:flex;align-items:center;gap:0.5rem;">
 						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
 						<div class="skeleton-bar" style="width:56px;height:14px;border-radius:4px;"></div>
@@ -34,14 +38,14 @@
 				<!-- Body: sidebar + content -->
 				<div style="display:flex;flex:1;overflow:hidden;">
 					<!-- Sidebar skeleton -->
-					<div style="width:280px;flex-shrink:0;border-right:1px solid var(--border, #e5e7eb);padding:0;">
+					<div style="width:280px;flex-shrink:0;border-right:1px solid var(--sk-border, #e5e7eb);padding:0;">
 						<!-- Sessions header -->
-						<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;border-bottom:1px solid var(--border, #e5e7eb);">
+						<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;border-bottom:1px solid var(--sk-border, #e5e7eb);">
 							<div class="skeleton-bar" style="width:64px;height:12px;border-radius:3px;"></div>
 							<div class="skeleton-bar" style="width:44px;height:20px;border-radius:4px;"></div>
 						</div>
 						<!-- Search bar -->
-						<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--border, #e5e7eb);">
+						<div style="padding:0.5rem 0.75rem;border-bottom:1px solid var(--sk-border, #e5e7eb);">
 							<div class="skeleton-bar" style="width:100%;height:28px;border-radius:4px;"></div>
 						</div>
 						<!-- Skeleton session items -->
@@ -66,12 +70,39 @@
 		</div>
 		<style>
 			/* Skeleton styles — inlined for instant paint before CSS bundle loads */
-			.skeleton-bar {
-				background: var(--muted, #e5e7eb);
-				animation: skeleton-pulse 1.5s ease-in-out infinite;
+			:root {
+				--sk-background: #ffffff;
+				--sk-border: #e5e7eb;
+				--sk-muted: #e5e7eb;
+				--sk-muted-foreground: #6b7280;
 			}
-			.dark .skeleton-bar {
-				background: var(--muted, #374151);
+			.dark {
+				--sk-background: #111827;
+				--sk-border: #374151;
+				--sk-muted: #374151;
+				--sk-muted-foreground: #9ca3af;
+			}
+			[data-color-theme="gruvbox"] {
+				--sk-background: #fbf1c7;
+				--sk-border: #bdae93;
+				--sk-muted: #ebdbb2;
+				--sk-muted-foreground: #7c6f64;
+			}
+			.dark[data-color-theme="gruvbox"],
+			[data-color-theme="gruvbox"].dark {
+				--sk-background: #282828;
+				--sk-border: #665c54;
+				--sk-muted: #504945;
+				--sk-muted-foreground: #a89984;
+			}
+			html, body, #app {
+				height: 100%;
+				margin: 0;
+				background: var(--sk-background, #ffffff);
+			}
+			.skeleton-bar {
+				background: var(--sk-muted, #e5e7eb);
+				animation: skeleton-pulse 1.5s ease-in-out infinite;
 			}
 			.skeleton-session-item {
 				padding: 0.4rem 0.75rem;

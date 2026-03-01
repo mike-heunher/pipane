@@ -1,7 +1,7 @@
 /** @vitest-environment node */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -64,6 +64,42 @@ describe("local-settings", () => {
 
 		expect(result.valid).toBe(false);
 		expect(result.errors.join("\n")).toContain("invalid regex");
+	});
+
+	it("reloadFromDiskIfValid applies valid external edits", () => {
+		const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+		store.save(JSON.stringify({
+			version: 1,
+			sidebar: { cwdTitle: { filters: [{ pattern: "^~/dev/", replacement: "dev/" }] } },
+		}));
+
+		mkdirSync(path.dirname(settingsPath), { recursive: true });
+		writeFileSync(settingsPath, JSON.stringify({
+			version: 1,
+			sidebar: { cwdTitle: { filters: [{ pattern: "^~/work/", replacement: "work/" }] } },
+		}), "utf8");
+
+		const changed = store.reloadFromDiskIfValid();
+		expect(changed).toBe(true);
+		expect(store.errors).toEqual([]);
+		expect(store.formatCwdTitle(`${tmpDir}/work/app`)).toContain("work/");
+	});
+
+	it("reloadFromDiskIfValid ignores invalid external edits and keeps last good config", () => {
+		const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+		store.save(JSON.stringify({
+			version: 1,
+			sidebar: { cwdTitle: { filters: [{ pattern: "^~/dev/", replacement: "dev/" }] } },
+		}));
+
+		mkdirSync(path.dirname(settingsPath), { recursive: true });
+		writeFileSync(settingsPath, "{ not-json", "utf8");
+
+		const changed = store.reloadFromDiskIfValid();
+		expect(changed).toBe(false);
+		expect(store.errors.join("\n")).toContain("Invalid JSON");
+		// Last good in-memory config should still be active.
+		expect(store.formatCwdTitle(`${tmpDir}/dev/app`)).toContain("dev/");
 	});
 
 	it("formats cwd with home prefix replacement and configured filters", () => {

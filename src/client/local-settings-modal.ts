@@ -236,6 +236,8 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 			}
 			setStatus("Saved. JSON was auto-formatted.", "ok");
 			opts?.onSaved?.();
+			close();
+			return;
 		} catch (err) {
 			setStatus(err instanceof Error ? err.message : String(err), "error");
 		} finally {

@@ -168,7 +168,19 @@ const clientDist = path.resolve(__dirname, "../../client");
 app.use(express.static(clientDist));
 
 // Register REST endpoints
-registerRestApi(app, { traceStore });
+registerRestApi(app, {
+	traceStore,
+	onLocalSettingsReloaded: () => {
+		wss.clients.forEach((client) => {
+			if (client.readyState === WebSocket.OPEN) {
+				client.send(JSON.stringify({
+					type: "sessions_changed",
+					file: "__local_settings__",
+				}));
+			}
+		});
+	},
+});
 
 // ============================================================================
 // Core modules

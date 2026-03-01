@@ -5,7 +5,7 @@
  */
 
 import type { Express } from "express";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, watchFile } from "node:fs";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { buildSessionContext, parseSessionEntries } from "@mariozechner/pi-coding-agent";
@@ -15,12 +15,32 @@ import { LocalSettingsStore } from "./local-settings.js";
 
 interface RegisterRestApiOptions {
 	traceStore?: LoadTraceStore;
+	onLocalSettingsReloaded?: () => void;
 }
 
 const localSettingsStore = new LocalSettingsStore();
 const sessionIndex = new SessionIndex({
 	cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
 });
+
+let localSettingsWatcherStarted = false;
+
+function startLocalSettingsWatcher(onLocalSettingsReloaded?: () => void) {
+	if (localSettingsWatcherStarted) return;
+	localSettingsWatcherStarted = true;
+
+	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+	watchFile(localSettingsStore.path, { interval: 500 }, () => {
+		if (debounceTimer) clearTimeout(debounceTimer);
+		debounceTimer = setTimeout(async () => {
+			const changed = localSettingsStore.reloadFromDiskIfValid();
+			if (!changed) return;
+			await sessionIndex.invalidateAll();
+			onLocalSettingsReloaded?.();
+		}, 150);
+	});
+}
 
 async function readJsonBody(req: any): Promise<any> {
 	const chunks: Buffer[] = [];
@@ -31,6 +51,7 @@ async function readJsonBody(req: any): Promise<any> {
 
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}) {
 	const traceStore = options.traceStore;
+	startLocalSettingsWatcher(options.onLocalSettingsReloaded);
 
 	app.post("/api/debug/load-trace/event", async (req, res) => {
 		try {
@@ -127,6 +148,7 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 			}
 
 			await sessionIndex.invalidateAll();
+			options.onLocalSettingsReloaded?.();
 			res.json(result);
 		} catch (err: any) {
 			res.status(500).json({ error: err.message });

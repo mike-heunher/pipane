@@ -143,6 +143,46 @@ export class LocalSettingsStore {
 		this.loadErrors = [];
 	}
 
+	/**
+	 * Reload settings from disk, but only apply when the on-disk content is valid.
+	 * Invalid edits are reported in `errors` but do not clobber the last good config.
+	 *
+	 * Returns true when the effective in-memory settings changed.
+	 */
+	reloadFromDiskIfValid(): boolean {
+		const prevFormatted = formatSettingsJson(this.currentSettings);
+
+		if (!existsSync(this.settingsPath)) {
+			const next = structuredClone(DEFAULT_SETTINGS);
+			const changed = prevFormatted !== formatSettingsJson(next);
+			this.currentSettings = next;
+			this.compiledFilters = [];
+			this.loadErrors = [];
+			return changed;
+		}
+
+		let content: string;
+		try {
+			content = readFileSync(this.settingsPath, "utf8");
+		} catch (err: any) {
+			this.loadErrors = [
+				`Failed to read local settings at ${this.settingsPath}: ${String(err?.message ?? err)}`,
+			];
+			return false;
+		}
+
+		const result = this.validate(content);
+		if (!result.valid || !result.settings) {
+			this.loadErrors = result.errors;
+			return false;
+		}
+
+		this.currentSettings = result.settings;
+		this.compiledFilters = compileFilters(result.settings);
+		this.loadErrors = [];
+		return prevFormatted !== formatSettingsJson(this.currentSettings);
+	}
+
 	validate(content: string): LocalSettingsValidationResult {
 		let parsed: any;
 		try {
