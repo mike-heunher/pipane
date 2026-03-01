@@ -1,6 +1,6 @@
 # pipane
 
-A clean web interface for the **pi coding agent**.
+A clean web interface for the **pi coding agent**. Open any pi conversation in pipane, open any pipane conversation in pi -- full interop.
 
 `pipane` runs a local backend that launches `pi` in RPC mode and streams agent messages to a browser UI over WebSocket.
 
@@ -12,10 +12,9 @@ A clean web interface for the **pi coding agent**.
 
 ## What you get
 
-- Chat-style UI for `pi`
-- Real-time tool calls and streaming output
-- Session picker and model picker
-- Automatic `pi` install prompt if the CLI is missing
+- Session list and clean UI for `pi`
+- Real-time tool calls and streaming output, nicely crafted
+- A nice session picker
 
 ---
 
