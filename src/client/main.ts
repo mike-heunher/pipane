@@ -181,7 +181,7 @@ function renderSteeringQueue() {
 				<div class="steering-queue-item">
 					<span class="steering-queue-index">${i + 1}</span>
 					<span class="steering-queue-text">${msg.length > 120 ? msg.slice(0, 120) + "…" : msg}</span>
-					<button class="steering-queue-remove" onclick=${() => { agent.removeSteering(i); }} title="Remove from queue">
+					<button class="steering-queue-remove" @click=${() => { agent.removeSteering(i); }} title="Remove from queue">
 						<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 							<line x1="18" y1="6" x2="6" y2="18"></line>
 							<line x1="6" y1="6" x2="18" y2="18"></line>
@@ -338,8 +338,10 @@ const renderApp = () => {
 									></pi-message-list>
 								</div>
 							</div>
+							<!-- Steering queue (between messages and input) -->
+							${renderSteeringQueue()}
 							<!-- Input area -->
-							<div class="shrink-0">
+							<div class="shrink-0 pt-2.5">
 								<div class="max-w-3xl mx-auto px-2">
 									<message-editor
 										.isStreaming=${isStreaming}
@@ -356,7 +358,6 @@ const renderApp = () => {
 									${renderTokenUsage()}
 								</div>
 							</div>
-							${renderSteeringQueue()}
 						</div>
 						${isCanvasVisible()
 							? html`<div id="canvas-container" class="canvas-container border-l border-border"></div>`

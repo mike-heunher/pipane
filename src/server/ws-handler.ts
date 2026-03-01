@@ -116,6 +116,7 @@ export class WsHandler {
 					const session = this.attachedSessions.get(event.sessionPath);
 					if (session) {
 						session.steeringQueue = [...event.queue];
+						this.pushUpdateToSubscribers(event.sessionPath, session);
 					}
 					break;
 				}

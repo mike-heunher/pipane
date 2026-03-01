@@ -88,16 +88,12 @@ agent-interface streaming-message-container markdown-block {
 /* ── Steering queue overlay ─────────────────────────────────────── */
 
 .steering-queue {
-	position: absolute;
-	bottom: var(--input-area-height, 90px);
-	left: 50%;
-	transform: translateX(-50%);
+	flex-shrink: 0;
 	width: 100%;
 	max-width: 48rem;
-	padding: 0 1rem;
+	margin: 0 auto;
+	padding: 0.5rem 1rem 0.25rem;
 	box-sizing: border-box;
-	z-index: 20;
-	pointer-events: none;
 }
 
 .steering-queue-header {
@@ -121,7 +117,6 @@ agent-interface streaming-message-container markdown-block {
 	border-radius: 0.375rem;
 	background: color-mix(in srgb, var(--primary, #2563eb) 8%, var(--background, #fff));
 	border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 20%, transparent);
-	pointer-events: auto;
 	animation: steering-slide-in 0.2s ease-out;
 }
 
