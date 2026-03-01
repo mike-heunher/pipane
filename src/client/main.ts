@@ -45,6 +45,7 @@ let chatJsonlJumpListenerInstalled = false;
 let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undefined;
 let autoScroll = true;
 let lastScrollTop = 0;
+let ignoreScrollEvents = false;
 
 traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
@@ -223,6 +224,12 @@ function renderTokenUsage() {
 function handleScroll(e: Event) {
 	const el = e.target as HTMLElement;
 	if (!el) return;
+
+	// After a session switch or programmatic scroll-to-bottom, ignore scroll
+	// events until the programmatic scroll settles. This prevents the browser's
+	// intermediate scroll adjustments from disabling autoScroll.
+	if (ignoreScrollEvents) return;
+
 	const currentScrollTop = el.scrollTop;
 	const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
 
@@ -236,11 +243,18 @@ function handleScroll(e: Event) {
 
 function scrollToBottomIfNeeded() {
 	if (!autoScroll) return;
+	ignoreScrollEvents = true;
 	requestAnimationFrame(() => {
 		const scrollArea = document.getElementById("chat-scroll-area");
 		if (scrollArea) {
 			scrollArea.scrollTop = scrollArea.scrollHeight;
+			lastScrollTop = scrollArea.scrollTop;
 		}
+		// Re-enable scroll event handling after the programmatic scroll settles.
+		// Use a second rAF to ensure the browser has processed the scroll.
+		requestAnimationFrame(() => {
+			ignoreScrollEvents = false;
+		});
 	});
 }
 
@@ -491,6 +505,8 @@ async function initApp() {
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		setJsonlSessionPath(agent.sessionFile);
 		autoScroll = true;
+		lastScrollTop = 0;
+		ignoreScrollEvents = false;
 		renderApp();
 		requestAnimationFrame(() => {
 			const editor = document.querySelector("message-editor") as any;
