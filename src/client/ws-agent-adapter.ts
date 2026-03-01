@@ -22,6 +22,7 @@
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
+import { applySyncOp, type SyncOp } from "../shared/jsonl-sync.js";
 
 export type SessionStatus = "virtual" | "detached" | "attached";
 
@@ -97,6 +98,17 @@ export class WsAgentAdapter {
 	private _globalSessionStatus = new Map<string, "running" | "done">();
 	private _globalStatusListeners = new Set<() => void>();
 
+	/**
+	 * Partial tool results from tool_execution_update events, keyed by toolCallId.
+	 * Populated from the server's session state (via session_sync).
+	 */
+	private _partialToolResults = new Map<string, any>();
+
+	/** Current synced JSON string from server */
+	private _syncJson = "";
+	/** Current synced hash */
+	private _syncHash = "";
+
 	private _sessionListeners = new Set<() => void>();
 	private _contentListeners = new Set<() => void>();
 	private _statusListeners = new Set<() => void>();
@@ -106,6 +118,11 @@ export class WsAgentAdapter {
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
+
+	/** Get partial tool results for tools currently executing */
+	get partialToolResults(): ReadonlyMap<string, any> {
+		return this._partialToolResults;
+	}
 
 	get steeringQueue(): readonly string[] {
 		if (!this._sessionPath) return [];
@@ -330,11 +347,11 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Unified state update op from server (authoritative)
-		if (data.type === "session_update") {
+		// Hash-verified session sync from server (authoritative)
+		if (data.type === "session_sync") {
 			const sp = data.sessionPath as string;
 			if (sp !== this._sessionPath) return;
-			this.applySessionUpdate(data);
+			this.applySessionSync(data);
 			return;
 		}
 
@@ -425,11 +442,12 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
+				this._partialToolResults.clear();
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
 				this.emitStatusChange();
-				// Server pushes final session_messages automatically after detach —
+				// Server pushes final session_sync automatically after detach —
 				// no need to fetch from disk.
 			}
 			return;
@@ -457,41 +475,74 @@ export class WsAgentAdapter {
 		this.emit(event);
 	}
 
-	private applySessionUpdate(update: any) {
-		switch (update.op) {
-			case "snapshot": {
-				const state = update.state ?? {};
-				this._state.messages = state.messages ?? [];
-				this._state.streamMessage = state.streamMessage ?? null;
-				this._state.isStreaming = state.status === "streaming";
-				if (this._sessionStatus !== "virtual") {
-					this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
-				}
-				this._state.pendingToolCalls = new Set(state.pendingToolCalls ?? []);
-				if (this._restoreModelFromServer) {
-					if (state.model) {
-						this._state.model = this.findModelMatch(state.model) ?? this._state.model;
-					}
-					if (state.thinkingLevel) {
-						this._state.thinkingLevel = state.thinkingLevel;
-					}
-					this._restoreModelFromServer = false;
-				}
-				if (Array.isArray(state.steeringQueue) && this._sessionPath) {
-					if (state.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...state.steeringQueue]);
-					else this._steeringQueues.delete(this._sessionPath);
-					this.emitSteeringQueueChange();
-				}
-				if (state.error) this._state.error = state.error;
-				break;
+	private async applySessionSync(syncMsg: any) {
+		const syncOp: SyncOp = {
+			op: syncMsg.op,
+			...(syncMsg.op === "full"
+				? { data: syncMsg.data, hash: syncMsg.hash }
+				: { patches: syncMsg.patches, hash: syncMsg.hash, baseHash: syncMsg.baseHash }),
+		};
+
+		const result = await applySyncOp(this._syncJson, this._syncHash, syncOp);
+		if (!result) {
+			// Hash verification failed — request a full sync by re-subscribing
+			console.error("[ws-adapter] Sync verification failed, re-subscribing");
+			if (this._sessionPath) {
+				this._syncJson = "";
+				this._syncHash = "";
+				this.subscribeToSession(this._sessionPath);
 			}
-			case "stream_delta":
-				this._state.streamMessage = update.streamMessage ?? null;
-				if (Array.isArray(update.pendingToolCalls)) {
-					this._state.pendingToolCalls = new Set(update.pendingToolCalls);
-				}
-				break;
+			return;
 		}
+
+		this._syncJson = result.data;
+		this._syncHash = result.hash;
+
+		// Parse the synced state and apply it
+		let state: any;
+		try {
+			state = JSON.parse(result.data);
+		} catch {
+			console.error("[ws-adapter] Failed to parse synced state");
+			return;
+		}
+
+		this._state.messages = state.messages ?? [];
+		this._state.streamMessage = state.streamMessage ?? null;
+		this._state.isStreaming = state.status === "streaming";
+		if (this._sessionStatus !== "virtual") {
+			this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
+		}
+		this._state.pendingToolCalls = new Set(state.pendingToolCalls ?? []);
+
+		// Update partial tool results
+		this._partialToolResults.clear();
+		if (state.partialToolResults) {
+			for (const [id, partialResult] of Object.entries(state.partialToolResults as Record<string, any>)) {
+				this._partialToolResults.set(id, partialResult);
+			}
+		}
+
+		if (this._restoreModelFromServer) {
+			if (state.model) {
+				this._state.model = this.findModelMatch(state.model) ?? this._state.model;
+			}
+			if (state.thinkingLevel) {
+				this._state.thinkingLevel = state.thinkingLevel;
+			}
+			this._restoreModelFromServer = false;
+		}
+		if (Array.isArray(state.steeringQueue) && this._sessionPath) {
+			if (state.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...state.steeringQueue]);
+			else this._steeringQueues.delete(this._sessionPath);
+			this.emitSteeringQueueChange();
+		}
+		if (state.error) {
+			this._state.error = state.error;
+		} else {
+			this._state.error = undefined;
+		}
+
 		this.emitContentChange();
 		this.emitStatusChange();
 	}
@@ -512,9 +563,12 @@ export class WsAgentAdapter {
 				this._state.isStreaming = false;
 				this._state.streamMessage = null;
 				this._state.pendingToolCalls = new Set();
+				this._partialToolResults.clear();
 				this._resolveRunning?.();
 				this._runningPromise = undefined;
 				this._resolveRunning = undefined;
+				// Note: sync state (_syncJson/_syncHash) is NOT cleared here.
+				// The server will push a final session_sync after detach.
 				this.emitStatusChange();
 				break;
 
@@ -950,10 +1004,13 @@ export class WsAgentAdapter {
 		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
+		this._partialToolResults.clear();
+		this._syncJson = "";
+		this._syncHash = "";
 		this._state.error = undefined;
 
-		// Subscribe to this session on the server — it will push session_messages
-		// with messages, model, and thinkingLevel.
+		// Subscribe to this session on the server — it will push session_sync
+		// with the full state.
 		await this.subscribeToSession(sessionPath);
 
 		// If the session is currently running on the server, restore streaming state
@@ -980,6 +1037,9 @@ export class WsAgentAdapter {
 		this._state.isStreaming = false;
 		this._state.streamMessage = null;
 		this._state.pendingToolCalls = new Set();
+		this._partialToolResults.clear();
+		this._syncJson = "";
+		this._syncHash = "";
 		this._state.error = undefined;
 
 		// Unsubscribe from any previous session

@@ -138,7 +138,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Serve static files in production
-const clientDist = path.resolve(__dirname, "../client");
+const clientDist = path.resolve(__dirname, "../../client");
 app.use(express.static(clientDist));
 
 // Register REST endpoints
@@ -151,7 +151,7 @@ registerRestApi(app, { traceStore });
 const lifecycle = new SessionLifecycle();
 
 // Resolve canvas extension path relative to project root
-const canvasExtension = path.resolve(__dirname, "../../extensions/canvas.ts");
+const canvasExtension = path.resolve(__dirname, "../../../extensions/canvas.ts");
 
 const pool = new ProcessPool(
 	{

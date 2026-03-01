@@ -25,6 +25,8 @@ export interface SessionSnapshot {
 	streamMessage: AgentMessage | null;
 	status: "idle" | "streaming";
 	pendingToolCalls: string[];
+	/** Partial tool results from tool_execution_update events, keyed by toolCallId */
+	partialToolResults: Record<string, any>;
 	model: { provider: string; modelId: string } | null;
 	thinkingLevel: string;
 	steeringQueue: string[];
@@ -37,7 +39,7 @@ export interface SessionSnapshot {
  */
 export type SessionUpdateOp =
 	| { op: "snapshot"; state: SessionSnapshot }
-	| { op: "stream_delta"; streamMessage: AgentMessage | null; pendingToolCalls: string[] };
+	| { op: "stream_delta"; streamMessage: AgentMessage | null; pendingToolCalls: string[]; partialToolResults: Record<string, any> };
 
 // ── Attached session ───────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ export class AttachedSession {
 	messages: AgentMessage[];
 	streamMessage: AgentMessage | null = null;
 	pendingToolCalls: string[] = [];
+	/** Partial tool results from tool_execution_update, keyed by toolCallId */
+	partialToolResults: Record<string, any> = {};
 	model: { provider: string; modelId: string } | null;
 	thinkingLevel: string;
 	steeringQueue: string[] = [];
@@ -121,10 +125,27 @@ export class AttachedSession {
 				return false;
 			}
 
+			case "tool_execution_update": {
+				const toolCallId = (event as any).toolCallId as string;
+				const partialResult = (event as any).partialResult;
+				if (toolCallId && partialResult) {
+					this.partialToolResults = { ...this.partialToolResults, [toolCallId]: partialResult };
+					this._streamDirty = true;
+					this._version++;
+					return true;
+				}
+				return false;
+			}
+
 			case "tool_execution_end": {
 				const toolCallId = (event as any).toolCallId as string;
 				if (toolCallId) {
 					this.pendingToolCalls = this.pendingToolCalls.filter(id => id !== toolCallId);
+					// Clear partial result for this tool
+					if (toolCallId in this.partialToolResults) {
+						const { [toolCallId]: _, ...rest } = this.partialToolResults;
+						this.partialToolResults = rest;
+					}
 					this._streamDirty = true;
 					this._version++;
 					return true;
@@ -146,6 +167,7 @@ export class AttachedSession {
 			streamMessage: this.streamMessage,
 			status: "streaming",
 			pendingToolCalls: this.pendingToolCalls,
+			partialToolResults: this.partialToolResults,
 			model: this.model,
 			thinkingLevel: this.thinkingLevel,
 			steeringQueue: this.steeringQueue,
@@ -180,6 +202,7 @@ export class AttachedSession {
 				op: "stream_delta",
 				streamMessage: this.streamMessage,
 				pendingToolCalls: this.pendingToolCalls,
+				partialToolResults: this.partialToolResults,
 			};
 		}
 
@@ -217,6 +240,7 @@ export function readSessionFromDisk(sessionPath: string): SessionSnapshot {
 		streamMessage: null,
 		status: "idle",
 		pendingToolCalls: [],
+		partialToolResults: {},
 		model,
 		thinkingLevel,
 		steeringQueue: [],

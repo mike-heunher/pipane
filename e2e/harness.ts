@@ -173,7 +173,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	const piWebPort = await getFreePort();
 
 	// 5. Build server path
-	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server.js");
+	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server/server.js");
 	if (!existsSync(serverScript)) {
 		throw new Error(`pi-web server not built. Run 'npm run build' first. Missing: ${serverScript}`);
 	}

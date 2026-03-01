@@ -19,7 +19,7 @@
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
 		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && vite build && tsc -p tsconfig.server.json",
-		"start": "NODE_ENV=production node dist/server/server.js",
+		"start": "NODE_ENV=production node dist/server/server/server.js",
 		"prod": "./prod.sh",
 		"check": "tsc --noEmit",
 		"test": "vitest run",

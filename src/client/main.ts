@@ -445,6 +445,25 @@ async function initApp() {
 				if (sc) {
 					sc.setMessage(null, true);
 				}
+				// When an assistant message ends with toolUse, tools are about
+				// to execute. The streaming container was just cleared (to avoid
+				// duplicating text), so the tool calls now live only in the
+				// message-list. But MessageList hides pending tool calls when
+				// isStreaming=true (assuming StreamingMessageContainer shows them).
+				// Since we cleared the streaming container, tell the message-list
+				// to stop hiding pending tool calls so they remain visible with
+				// their spinner/in-progress state during execution.
+				// The next message_start will trigger a re-render that restores
+				// isStreaming=true on the message-list (when the streaming
+				// container takes over again).
+				const msg = (ev as any).message;
+				if (msg?.role === "assistant" && msg?.stopReason === "toolUse") {
+					const ml = ai.querySelector("message-list") as any;
+					if (ml) {
+						ml.isStreaming = false;
+						ml.requestUpdate();
+					}
+				}
 			}
 		}
 
@@ -491,6 +510,22 @@ async function initApp() {
 		if (ai) {
 			ai.session = agent as any;
 			ai.requestUpdate();
+			// Fix: when tools are executing (pendingToolCalls non-empty) but
+			// there's no stream message, the streaming container is empty and
+			// the tool calls live only in message-list. But AgentInterface
+			// passes isStreaming=true to message-list which causes it to hide
+			// pending tool calls (assuming StreamingMessageContainer shows them).
+			// After the render completes, correct this by telling message-list
+			// not to hide pending tool calls.
+			if (agent.state.isStreaming && agent.state.pendingToolCalls.size > 0 && !agent.state.streamMessage) {
+				ai.updateComplete.then(() => {
+					const ml = ai.querySelector("message-list") as any;
+					if (ml && ml.isStreaming) {
+						ml.isStreaming = false;
+						ml.requestUpdate();
+					}
+				});
+			}
 		}
 		// Restore canvas state from refreshed messages (won't reopen if already shown)
 		restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);

@@ -19,11 +19,11 @@ import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
 import {
-	AttachedSession,
+	SessionJsonl,
 	readSessionFromDisk,
 	getSessionFileSize,
-	type SessionSnapshot,
-} from "./attached-session.js";
+	type SessionState,
+} from "./session-jsonl.js";
 import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import type { LoadTraceStore } from "./load-trace-store.js";
@@ -40,8 +40,12 @@ export interface WsHandlerOptions {
 
 interface ClientState {
 	subscribedSession: string | null;
+	/** Client's last known version of the session */
 	lastVersion: number;
-	lastMessageCount: number;
+	/** Client's current JSONL string (for computing diffs) */
+	lastJson: string;
+	/** Client's current hash (for verifying diffs) */
+	lastHash: string;
 }
 
 let nextTurnId = 0;
@@ -71,7 +75,7 @@ export class WsHandler {
 	 * In-memory state for sessions with an attached pi process.
 	 * Keyed by session path. Created on attach, deleted on detach.
 	 */
-	private attachedSessions = new Map<string, AttachedSession>();
+	private attachedSessions = new Map<string, SessionJsonl>();
 
 	/**
 	 * Track file sizes for detached sessions that clients are subscribed to.
@@ -167,8 +171,8 @@ export class WsHandler {
 
 		// File changed — read from disk and push snapshot to subscribers
 		this.subscribedFileSizes.set(sessionPath, newSize);
-		const state = readSessionFromDisk(sessionPath);
-		this.pushSnapshotToSubscribers(sessionPath, state);
+		const { json, hash } = readSessionFromDisk(sessionPath);
+		this.pushSnapshotToSubscribers(sessionPath, json, hash);
 	}
 
 	getDebugState() {
@@ -215,7 +219,8 @@ export class WsHandler {
 		this.clients.set(ws, {
 			subscribedSession: null,
 			lastVersion: 0,
-			lastMessageCount: 0,
+			lastJson: "",
+			lastHash: "",
 		});
 
 		ws.send(JSON.stringify({
@@ -387,7 +392,8 @@ export class WsHandler {
 		if (!sessionPath) {
 			client.subscribedSession = null;
 			client.lastVersion = 0;
-			client.lastMessageCount = 0;
+			client.lastJson = "";
+			client.lastHash = "";
 			ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
 			return;
 		}
@@ -397,27 +403,31 @@ export class WsHandler {
 		// If the session is attached, send from in-memory state
 		const attached = this.attachedSessions.get(sessionPath);
 		if (attached) {
-			const state = attached.toSnapshot();
+			// Send full sync
+			client.lastJson = attached.json;
+			client.lastHash = attached.hash;
 			client.lastVersion = attached.version;
-			client.lastMessageCount = state.messages.length;
 			ws.send(JSON.stringify({
-				type: "session_update",
+				type: "session_sync",
 				sessionPath,
-				op: "snapshot",
-				state,
+				op: "full",
+				data: attached.json,
+				hash: attached.hash,
 			}));
 		} else {
 			// Detached — read from disk
-			const state = readSessionFromDisk(sessionPath);
+			const { json, hash } = readSessionFromDisk(sessionPath);
+			client.lastJson = json;
+			client.lastHash = hash;
 			client.lastVersion = 0;
-			client.lastMessageCount = state.messages.length;
 			// Track file size for change detection
 			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
 			ws.send(JSON.stringify({
-				type: "session_update",
+				type: "session_sync",
 				sessionPath,
-				op: "snapshot",
-				state,
+				op: "full",
+				data: json,
+				hash,
 			}));
 		}
 
@@ -639,15 +649,15 @@ export class WsHandler {
 	}
 
 	/**
-	 * Create an AttachedSession for a session path.
+	 * Create a SessionJsonl for a session path.
 	 * Reads existing JSONL from disk to seed the initial messages.
 	 */
-	private createAttachedSession(sessionPath: string): AttachedSession {
-		const diskState = readSessionFromDisk(sessionPath);
-		const session = new AttachedSession({
-			messages: diskState.messages,
-			model: diskState.model,
-			thinkingLevel: diskState.thinkingLevel,
+	private createAttachedSession(sessionPath: string): SessionJsonl {
+		const { state } = readSessionFromDisk(sessionPath);
+		const session = new SessionJsonl({
+			messages: state.messages,
+			model: state.model,
+			thinkingLevel: state.thinkingLevel,
 		});
 		this.attachedSessions.set(sessionPath, session);
 		return session;
@@ -722,9 +732,9 @@ export class WsHandler {
 		this.lifecycle.detach(sessionPath);
 
 		// Read final state from disk and push to subscribers
-		const finalState = readSessionFromDisk(sessionPath);
+		const { json, hash } = readSessionFromDisk(sessionPath);
 		this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
-		this.pushSnapshotToSubscribers(sessionPath, finalState);
+		this.pushSnapshotToSubscribers(sessionPath, json, hash);
 	}
 
 	private getAnyProcess(): RpcProcess {
@@ -735,45 +745,44 @@ export class WsHandler {
 		return proc;
 	}
 
-	private pushSnapshotToSubscribers(sessionPath: string, state: SessionSnapshot) {
+	private pushSnapshotToSubscribers(sessionPath: string, json: string, hash: string) {
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== WebSocket.OPEN) continue;
 			ws.send(JSON.stringify({
-				type: "session_update",
+				type: "session_sync",
 				sessionPath,
-				op: "snapshot",
-				state,
+				op: "full",
+				data: json,
+				hash,
 			}));
+			client.lastJson = json;
+			client.lastHash = hash;
 			client.lastVersion = 0;
-			client.lastMessageCount = state.messages.length;
 		}
 	}
 
 	/**
 	 * Push an update to all clients subscribed to an attached session.
-	 * Uses the AttachedSession's diff logic to pick snapshot vs stream_delta.
+	 * Uses the hash-verified diff protocol for efficient incremental sync.
 	 */
-	private pushUpdateToSubscribers(sessionPath: string, session: AttachedSession) {
+	private pushUpdateToSubscribers(sessionPath: string, session: SessionJsonl) {
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== WebSocket.OPEN) continue;
 
-			const op = session.computeUpdateOp(client.lastVersion, client.lastMessageCount);
-			if (!op) continue;
+			const syncOp = session.computeSyncOp(client.lastJson, client.lastHash, client.lastVersion);
+			if (!syncOp) continue;
 
 			ws.send(JSON.stringify({
-				type: "session_update",
+				type: "session_sync",
 				sessionPath,
-				...op,
+				...syncOp,
 			}));
 
+			client.lastJson = session.json;
+			client.lastHash = session.hash;
 			client.lastVersion = session.version;
-			if (op.op === "snapshot") {
-				client.lastMessageCount = op.state.messages.length;
-			} else {
-				// stream_delta doesn't change message count
-			}
 		}
 	}
 
@@ -784,11 +793,11 @@ export class WsHandler {
 			this.procEventCleanup.delete(proc);
 		}
 
-		// Capture the AttachedSession object — if it gets deleted (detach),
+		// Capture the SessionJsonl object — if it gets deleted (detach),
 		// the handler becomes a no-op because we check for it.
 		const sessionRef = this.attachedSessions.get(sessionPath);
 		if (!sessionRef) {
-			console.error(`[turn] setupTurnEventForwarding called but no AttachedSession for ${sessionPath}`);
+			console.error(`[turn] setupTurnEventForwarding called but no SessionJsonl for ${sessionPath}`);
 			return;
 		}
 
