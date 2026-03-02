@@ -341,6 +341,8 @@ test.afterAll(async () => {
 });
 
 test("walkthrough — build todo app + parallel bash counter", async ({ page }) => {
+	test.skip(!process.env.RUN_WALKTHROUGH, "Skipped unless RUN_WALKTHROUGH=1 is set");
+
 	test.setTimeout(180000);
 
 	const screenshotDir = path.resolve(import.meta.dirname, "screenshots");
