@@ -42,12 +42,16 @@ message-editor > div {
 	box-shadow: none !important;
 }
 
-/* Toolbar gets a tinted background */
+/* Toolbar gets a tinted background (full-width via negative margin + padding) */
 message-editor > div > .px-2.pb-2 {
 	background: color-mix(in srgb, var(--muted, #f3f4f6) 50%, var(--background, #fff));
 	border-radius: 0;
 	padding-top: 0.35rem;
 	padding-bottom: 0.35rem;
+	margin-left: -0.5rem;
+	margin-right: -0.5rem;
+	padding-left: 1rem;
+	padding-right: 1rem;
 }
 
 /* ── Burger menu dropdown (portalled to document.body) ──────────────── */
