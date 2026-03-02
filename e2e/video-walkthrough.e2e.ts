@@ -257,6 +257,11 @@ async function startRealServer(): Promise<RealServer> {
 		}
 	}
 
+	// Force thinking level to medium for the walkthrough
+	const piSettings = JSON.parse(fs.readFileSync(path.join(agentDir, "settings.json"), "utf-8"));
+	piSettings.defaultThinkingLevel = "medium";
+	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify(piSettings, null, 2));
+
 	// Seed fake old sessions so the sidebar looks populated
 	seedFakeSessions(sessionsDir);
 
