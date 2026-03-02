@@ -19,7 +19,7 @@ Walkthrough (GIF):
 ## Quickstarts
 
 ```bash
-npm install -g TBD XXX TODO
+npm install -g pipane
 ```
 
 If `pi` is missing, install it like this:
