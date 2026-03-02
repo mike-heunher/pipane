@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
 import { resolvePiLaunch } from "./pi-launch.js";
@@ -32,6 +32,7 @@ import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
 import { LoadTraceStore } from "./load-trace-store.js";
 import { LocalSettingsStore } from "./local-settings.js";
+import { fetchLatestVersion, compareSemver } from "./update-check.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -62,6 +63,17 @@ const PI_MAX_PROCESSES = parseInt(process.env.PI_MAX_PROCESSES || "24", 10);
 const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Read own version from package.json
+const PKG_JSON_PATH = path.resolve(__dirname, "../../../package.json");
+const PKG_VERSION: string = (() => {
+	try {
+		return JSON.parse(readFileSync(PKG_JSON_PATH, "utf-8")).version ?? "unknown";
+	} catch {
+		return "unknown";
+	}
+})();
+const PKG_NAME = "pipane";
 
 const AUTH_COOKIE_NAME = "pipane_auth";
 const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("base64url");
@@ -374,7 +386,7 @@ if (PI_AVAILABLE) {
 	console.log(`[pi] ${makePiNotFoundMessage(PI_LAUNCH.command)}`);
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
 	log("");
 	log("        _                        ");
 	log("  _ __ (_)_ __   __ _ _ __   ___ ");
@@ -382,6 +394,7 @@ server.listen(PORT, () => {
 	log(" | |_) | | |_) | (_| | | | |  __/");
 	log(" | .__/|_| .__/ \\__,_|_| |_|\\___|");
 	log(" |_|     |_|                      ");
+	log(`  v${PKG_VERSION}`);
 	log("");
 	log(`  Local:  http://localhost:${PORT}`);
 	log(`  Remote: ${AUTH_URL}`);
@@ -390,4 +403,12 @@ server.listen(PORT, () => {
 		log(`  Set PIPANE_AUTH_TOKEN to use a fixed token.`);
 	}
 	log("");
+
+	// Non-blocking update check
+	const latest = await fetchLatestVersion(PKG_NAME);
+	if (latest && compareSemver(PKG_VERSION, latest) < 0) {
+		log(`  Update available: v${PKG_VERSION} → v${latest}`);
+		log(`  Run \`npm install -g ${PKG_NAME}\` to upgrade.`);
+		log("");
+	}
 });
