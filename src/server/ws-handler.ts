@@ -13,6 +13,7 @@
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import { copyFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
 import { getAgentDir } from "@mariozechner/pi-coding-agent";
@@ -648,7 +649,8 @@ export class WsHandler {
 		const newSessionPath = path.join(sessionsDir, newFilename);
 		await copyFile(sessionPath, newSessionPath);
 
-		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
+		const forkCwd = getSessionCwd(sessionPath);
+		const cwd = (forkCwd && existsSync(forkCwd)) ? forkCwd : this.defaultCwd;
 		const proc = await this.acquireProcess(cwd);
 		await this.pool.waitForReady(proc);
 		this.busyProcesses.add(proc);
@@ -733,7 +735,8 @@ export class WsHandler {
 		const existing = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
 		if (existing) return existing;
 
-		const cwd = getSessionCwd(sessionPath) || this.defaultCwd;
+		const sessionCwd = getSessionCwd(sessionPath);
+		const cwd = (sessionCwd && existsSync(sessionCwd)) ? sessionCwd : this.defaultCwd;
 		const proc = await this.acquireProcess(cwd);
 		this.busyProcesses.add(proc);
 		this.lifecycle.attach(sessionPath, proc);

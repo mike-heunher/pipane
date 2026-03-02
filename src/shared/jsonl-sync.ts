@@ -47,15 +47,24 @@ export type SyncOp = FullSync | DeltaSync;
  */
 export async function computeHash(data: string): Promise<string> {
 	if (typeof globalThis.crypto?.subtle?.digest === "function") {
-		// Browser or Node 20+
+		// Browser or Node 20+ (requires secure context in browsers)
 		const encoded = new TextEncoder().encode(data);
 		const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", encoded);
 		const hashArray = new Uint8Array(hashBuffer);
 		return Array.from(hashArray).map(b => b.toString(16).padStart(2, "0")).join("");
 	}
 	// Node.js fallback
-	const { createHash } = await import("node:crypto");
-	return createHash("sha256").update(data, "utf8").digest("hex");
+	if (typeof globalThis.process !== "undefined") {
+		const { createHash } = await import("node:crypto");
+		return createHash("sha256").update(data, "utf8").digest("hex");
+	}
+	// Browser insecure context fallback (no SubtleCrypto) — use simple FNV-1a
+	let h = 0x811c9dc5;
+	for (let i = 0; i < data.length; i++) {
+		h ^= data.charCodeAt(i);
+		h = Math.imul(h, 0x01000193);
+	}
+	return (h >>> 0).toString(16).padStart(8, "0");
 }
 
 // Note: computeHashSync is NOT in this shared module because it depends on
