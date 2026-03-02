@@ -5,8 +5,8 @@
  * tool name and relevant parameters with a gutter-thread collapsible layout.
  */
 
-import { registerToolRenderer } from "@mariozechner/pi-web-ui";
-import type { ToolRenderer, ToolRenderResult } from "@mariozechner/pi-web-ui";
+import { registerToolRenderer, setFallbackToolRenderer } from "@mariozechner/pi-web-ui";
+import type { ToolRenderer, ToolRenderResult, FallbackToolRenderer } from "@mariozechner/pi-web-ui";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import { icon } from "@mariozechner/mini-lit";
 import { html } from "lit";
@@ -33,7 +33,7 @@ import php from "highlight.js/lib/languages/php";
 import swift from "highlight.js/lib/languages/swift";
 import kotlin from "highlight.js/lib/languages/kotlin";
 import scss from "highlight.js/lib/languages/scss";
-import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight } from "lucide";
+import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight, Puzzle } from "lucide";
 import { showCanvas } from "./canvas-panel.js";
 import { notifyToolToggled } from "./auto-collapse.js";
 
@@ -573,10 +573,91 @@ class CanvasRenderer implements ToolRenderer {
 	}
 }
 
+class GenericFallbackRenderer implements FallbackToolRenderer {
+	private scrollPin = createScrollPin();
+
+	render(toolName: string, params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
+		this.scrollPin.streaming = state === "inprogress";
+
+		let parsed: any = {};
+		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
+
+		// Build a compact parameter summary for the header
+		const paramKeys = Object.keys(parsed);
+		let paramSummary = "";
+		if (paramKeys.length === 1) {
+			const val = parsed[paramKeys[0]];
+			const display = typeof val === "string" ? val : JSON.stringify(val);
+			paramSummary = display.length > 60 ? display.slice(0, 57) + "…" : display;
+		} else if (paramKeys.length > 1) {
+			paramSummary = paramKeys.join(", ");
+		}
+
+		const headerLabel = paramSummary ? `${toolName}(${paramSummary})` : toolName;
+
+		const output = resultText(result);
+		const isError = result?.isError ?? false;
+
+		// Format params as JSON for body
+		let paramsJson = "";
+		if (params) {
+			try {
+				paramsJson = JSON.stringify(parsed, null, 2);
+			} catch {
+				paramsJson = String(params);
+			}
+		}
+
+		// Build body content: params + output
+		let bodyContent = "";
+		if (paramsJson && paramsJson !== "{}" && output) {
+			bodyContent = `> ${paramsJson}\n\n${output}`;
+		} else if (output) {
+			bodyContent = output;
+		} else if (paramsJson && paramsJson !== "{}") {
+			bodyContent = paramsJson;
+		}
+
+		const statusIcon = html`<span class="inline-block ${iconColorClass(state)}">${icon(Puzzle, "sm")}</span>`;
+		const spinner = state === "inprogress"
+			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
+			: "";
+
+		const hasBody = !!bodyContent || state === "inprogress";
+		const highlighted = bodyContent ? highlightCode(bodyContent, "json") : "";
+
+		return {
+			content: html`
+				<div class="tool-gutter-wrap flex my-0">
+					<div class="tool-gutter flex flex-col items-center w-5 shrink-0 pt-0.5">
+						${statusIcon}
+						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
+							<span class="tool-header-label text-muted-foreground font-mono truncate" title="${toolName}">${headerLabel}</span>
+							${spinner}
+						</div>
+						${hasBody ? html`<div class="tool-body-collapsible">
+							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
+								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : bodyContent}</pre>
+							</div>
+						</div>` : ""}
+					</div>
+				</div>
+			`,
+			isCustom: true,
+		};
+	}
+}
+
 export function registerCodingAgentRenderers() {
 	registerToolRenderer("read", new ReadRenderer());
 	registerToolRenderer("write", new WriteRenderer());
 	registerToolRenderer("edit", new EditRenderer());
 	registerToolRenderer("bash", new BashRenderer());
 	registerToolRenderer("canvas", new CanvasRenderer());
+	setFallbackToolRenderer(new GenericFallbackRenderer());
 }
