@@ -24,6 +24,6 @@ describe("global npm CLI packaging", () => {
 			env: { ...process.env, PIPANE_PRINT_ENTRY: "1" },
 			encoding: "utf8",
 		}).trim();
-		expect(output).toBe(path.join(repoRoot, "dist/server/server.js"));
+		expect(output).toBe(path.join(repoRoot, "dist/server/server/server.js"));
 	});
 });

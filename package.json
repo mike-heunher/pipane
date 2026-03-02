@@ -1,6 +1,6 @@
 {
 	"name": "pipane",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "A clean web interface for the pi coding agent — chat UI with real-time tool calls, streaming output, session management, and model picker",
 	"private": false,
 	"type": "module",
