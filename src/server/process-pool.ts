@@ -15,6 +15,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
+import { existsSync } from "node:fs";
 
 export interface RpcProcess {
 	id: number;
@@ -88,6 +89,10 @@ export class ProcessPool {
 	 * Does not wait for readiness — call waitForReady() separately.
 	 */
 	spawn(cwd: string): RpcProcess {
+		if (!existsSync(cwd)) {
+			throw new Error(`Cannot spawn pi process: directory does not exist: ${cwd}`);
+		}
+
 		const procId = ++this.nextProcId;
 		console.log(`[pool] Spawning pi process #${procId} (cwd: ${cwd})...`);
 
@@ -138,6 +143,26 @@ export class ProcessPool {
 				proc.lastResponseTime = Date.now();
 				pending.resolve(data);
 			}
+		});
+
+		child.on("error", (err) => {
+			console.error(`[pool] pi#${proc.id} spawn error: ${err.message}`);
+
+			// Remove from pool
+			const poolForCwd = this.pools.get(cwd);
+			if (poolForCwd) {
+				const idx = poolForCwd.indexOf(proc);
+				if (idx !== -1) poolForCwd.splice(idx, 1);
+				if (poolForCwd.length === 0) this.pools.delete(cwd);
+			}
+
+			// Reject any pending requests
+			for (const [, pending] of proc.pendingRequests) {
+				pending.reject(new Error(`pi process #${proc.id} failed to spawn: ${err.message}`));
+			}
+			proc.pendingRequests.clear();
+
+			this.onProcessExit?.(proc);
 		});
 
 		child.on("exit", (code) => {

@@ -253,4 +253,13 @@ describe("ProcessPool", () => {
 			expect(victim.process.kill).not.toHaveBeenCalled();
 		});
 	});
+
+	describe("spawn validation", () => {
+		it("throws when cwd does not exist", () => {
+			const pool = new ProcessPool(makeSpawnConfig(), { maxProcesses: 4, prewarmCount: 0 });
+			expect(() => pool.spawn("/nonexistent/path/that/does/not/exist")).toThrow(
+				"Cannot spawn pi process: directory does not exist"
+			);
+		});
+	});
 });
