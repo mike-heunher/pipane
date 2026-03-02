@@ -993,6 +993,7 @@ export class WsAgentAdapter {
 			"| `/new` | Start a new session |",
 			"| `/fork` | Fork session from a previous message |",
 			"| `/compact [instructions]` | Compact conversation history |",
+			"| `/name <name>` | Set session display name |",
 			"| `/reload` | Restart all pooled pi RPC processes |",
 		];
 
@@ -1090,6 +1091,36 @@ export class WsAgentAdapter {
 			}
 			// Re-subscribe to get fresh messages after compaction
 			await this.subscribeToSession(this._sessionPath);
+			return true;
+		}
+
+		if (trimmed.startsWith("/name ")) {
+			const name = trimmed.slice(6).trim();
+			if (!name) return true;
+			if (!this._sessionPath) {
+				this._state.messages = [...this._state.messages, {
+					role: "assistant",
+					content: [{ type: "text", text: "Cannot set name: no active session. Send a message first." }],
+				} as AgentMessage];
+				this.emitContentChange();
+				return true;
+			}
+			try {
+				await this.send({ type: "set_session_name", sessionPath: this._sessionPath, name });
+				this._sessionName = name;
+				this._state.messages = [...this._state.messages, {
+					role: "assistant",
+					content: [{ type: "text", text: `Session renamed to **${name}**` }],
+				} as AgentMessage];
+				this.emitContentChange();
+				this.emitSessionChange();
+			} catch (err: any) {
+				this._state.messages = [...this._state.messages, {
+					role: "assistant",
+					content: [{ type: "text", text: `Failed to rename session: ${err?.message || "unknown error"}` }],
+				} as AgentMessage];
+				this.emitContentChange();
+			}
 			return true;
 		}
 
