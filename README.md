@@ -22,7 +22,7 @@ Walkthrough (GIF):
 npm install -g TBD XXX TODO
 ```
 
-If `pi` is missing, `pipane` can prompt to install it via:
+If `pi` is missing, install it like this:
 
 ```bash
 npm install -g @mariozechner/pi-coding-agent
