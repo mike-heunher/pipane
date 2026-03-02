@@ -271,6 +271,10 @@ function fmtTok(n: number): string {
 	return `${Math.round(n / 1000)}k`;
 }
 
+// Cache the last rendered token usage HTML to avoid flicker during session switches
+// (messages are cleared to [] before the new session_sync arrives).
+let lastTokenUsageHtml: ReturnType<typeof html> | "" = "";
+
 function renderTokenUsage() {
 	if (!agent) return "";
 	const state = agent.state;
@@ -289,7 +293,15 @@ function renderTokenUsage() {
 		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 
 	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
-	if (!hasTotals) return "";
+	if (!hasTotals) {
+		// During session switches messages are briefly empty (cleared before
+		// session_sync arrives).  If there are literally no messages yet, keep
+		// showing the cached value to avoid a visible flash.  Once messages
+		// actually arrive but have no usage, clear the cache properly.
+		if (state.messages.length === 0) return lastTokenUsageHtml;
+		lastTokenUsageHtml = "";
+		return "";
+	}
 
 	// The last assistant message's totalTokens = current context size (input + output for that turn)
 	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage);
@@ -307,8 +319,9 @@ function renderTokenUsage() {
 		}
 		if (totals.output) parts.push(`↓${fmtTok(totals.output)}`);
 		if (totals.cost?.total) parts.push(`$${totals.cost.total < 0.01 ? totals.cost.total.toFixed(4) : totals.cost.total < 1 ? totals.cost.total.toFixed(3) : totals.cost.total.toFixed(2)}`);
-		if (!parts.length) return "";
-		return html`<span class="input-token-usage">${parts.join(" ")}</span>`;
+		if (!parts.length) { lastTokenUsageHtml = ""; return ""; }
+		lastTokenUsageHtml = html`<span class="input-token-usage">${parts.join(" ")}</span>`;
+		return lastTokenUsageHtml;
 	} catch {
 		return "";
 	}
