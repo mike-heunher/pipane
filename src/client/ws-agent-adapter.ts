@@ -261,6 +261,29 @@ export class WsAgentAdapter {
 		for (const fn of this.listeners) fn(e);
 	}
 
+	private toErrorMessage(err: unknown): string {
+		if (err instanceof Error) return err.message;
+		if (typeof err === "string") return err;
+		try {
+			return JSON.stringify(err);
+		} catch {
+			return String(err);
+		}
+	}
+
+	/** Surface an error in the chat UI so failures are visible to the user. */
+	reportError(err: unknown, prefix = "Request failed"): void {
+		const message = this.toErrorMessage(err);
+		this._state.error = message;
+		this._state.messages = [...this._state.messages, {
+			role: "assistant",
+			content: [{ type: "text", text: `⚠️ ${prefix}: ${message}` }],
+			timestamp: Date.now(),
+		} as AgentMessage];
+		this.emitStatusChange();
+		this.emitContentChange();
+	}
+
 	// ── Connection ─────────────────────────────────────────────────────────
 
 	async connect(url: string): Promise<void> {
@@ -430,7 +453,10 @@ export class WsAgentAdapter {
 			if (data.success) {
 				pending.resolve(data.data);
 			} else {
-				pending.reject(new Error(data.error || "Unknown error"));
+				const message = data.error || "Unknown error";
+				this._state.error = message;
+				this.emitStatusChange();
+				pending.reject(new Error(message));
 			}
 			return;
 		}
@@ -780,11 +806,12 @@ export class WsAgentAdapter {
 		const id = `req_${++this.requestId}`;
 		const endSpan = traceSpanStart(`frontend_ws_command ${command.type}`);
 		return new Promise((resolve, reject) => {
+			const timeoutMs = command.type === "prompt" || command.type === "fork_prompt" ? 90000 : 30000;
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
 				endSpan();
 				reject(new Error(`Timeout waiting for response to ${command.type}`));
-			}, 30000);
+			}, timeoutMs);
 
 			this.pendingRequests.set(id, {
 				resolve: (data) => { clearTimeout(timeout); resolve(data); },

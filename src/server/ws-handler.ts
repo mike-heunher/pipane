@@ -452,62 +452,79 @@ export class WsHandler {
 		const turnId = makeTurnId();
 		debugTurn("prompt_start", { turnId, sessionPath, hasModel: !!command.model });
 
-		let proc: RpcProcess;
-		if (sessionPath === "__new__") {
-			const cwd = command.cwd as string || this.defaultCwd;
-			proc = await this.acquireProcess(cwd);
-			await this.pool.waitForReady(proc);
+		let proc: RpcProcess | undefined;
+		try {
+			if (sessionPath === "__new__") {
+				const cwd = command.cwd as string || this.defaultCwd;
+				proc = await this.acquireProcess(cwd);
+				await this.pool.waitForReady(proc);
 
-			await this.pool.sendRpc(proc, { type: "new_session" });
-			const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
-			sessionPath = stateResp.data?.sessionFile;
-			if (!sessionPath) throw new Error("Failed to get session path from new session");
+				await this.pool.sendRpc(proc, { type: "new_session" });
+				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
+				sessionPath = stateResp.data?.sessionFile;
+				if (!sessionPath) throw new Error("Failed to get session path from new session");
 
-			this.busyProcesses.add(proc);
+				this.busyProcesses.add(proc);
 
-			// Create attached session with empty state (new session)
-			this.createAttachedSession(sessionPath);
+				// Create attached session with empty state (new session)
+				this.createAttachedSession(sessionPath);
 
-			ws.send(JSON.stringify({
-				type: "session_attached",
-				sessionPath,
-				cwd,
-				firstMessage: command.message,
-			}));
-			this.lifecycle.attach(sessionPath, proc);
-		} else {
-			proc = await this.acquireForSession(sessionPath);
+				ws.send(JSON.stringify({
+					type: "session_attached",
+					sessionPath,
+					cwd,
+					firstMessage: command.message,
+				}));
+				this.lifecycle.attach(sessionPath, proc);
+			} else {
+				proc = await this.acquireForSession(sessionPath);
+			}
+
+			if (!command.model) {
+				throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
+			}
+			await this.pool.sendRpcChecked(proc, {
+				type: "set_model",
+				provider: command.model.provider,
+				modelId: command.model.modelId,
+			});
+			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+			const activeModel = modelState.data?.model;
+			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+			}
+
+			if (command.thinkingLevel) {
+				await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+			}
+
+			this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
+
+			const promptCmd: any = { type: "prompt", message: command.message };
+			if (command.images?.length > 0) {
+				promptCmd.images = command.images;
+			}
+			const response = await this.pool.sendRpc(proc, promptCmd);
+			const enriched = { ...response };
+			if (!enriched.data) enriched.data = {};
+			enriched.data.newSessionPath = sessionPath;
+			ws.send(JSON.stringify({ ...enriched, id, command: "prompt" }));
+		} catch (err: any) {
+			if (proc && sessionPath && this.lifecycle.getAttachedProcess(sessionPath) === proc) {
+				const detailed = this.buildPromptFailureMessage(err, proc, sessionPath);
+				this.injectSessionError(sessionPath, detailed);
+				this.releaseProcess(sessionPath);
+				if ((err?.message || "").includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
+					proc.process.kill("SIGTERM");
+				}
+				throw new Error(detailed);
+			}
+			if (proc) {
+				this.busyProcesses.delete(proc);
+				if (proc.process.exitCode === null) proc.process.kill("SIGTERM");
+			}
+			throw err;
 		}
-
-		if (!command.model) {
-			throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
-		}
-		await this.pool.sendRpcChecked(proc, {
-			type: "set_model",
-			provider: command.model.provider,
-			modelId: command.model.modelId,
-		});
-		const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-		const activeModel = modelState.data?.model;
-		if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-			throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-		}
-
-		if (command.thinkingLevel) {
-			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
-		}
-
-		this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
-
-		const promptCmd: any = { type: "prompt", message: command.message };
-		if (command.images?.length > 0) {
-			promptCmd.images = command.images;
-		}
-		const response = await this.pool.sendRpc(proc, promptCmd);
-		const enriched = { ...response };
-		if (!enriched.data) enriched.data = {};
-		enriched.data.newSessionPath = sessionPath;
-		ws.send(JSON.stringify({ ...enriched, id, command: "prompt" }));
 	}
 
 	private async handleSteer(ws: WebSocket, id: string, command: any): Promise<void> {
@@ -655,41 +672,56 @@ export class WsHandler {
 		await this.pool.waitForReady(proc);
 		this.busyProcesses.add(proc);
 
-		// Create attached session, seeded from the forked file
-		this.createAttachedSession(newSessionPath);
+		try {
+			// Create attached session, seeded from the forked file
+			this.createAttachedSession(newSessionPath);
 
-		ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
-		this.lifecycle.attach(newSessionPath, proc);
-		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
+			ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
+			this.lifecycle.attach(newSessionPath, proc);
+			await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
 
-		if (!command.model) {
-			throw new Error(`BUG: fork_prompt command received without model. sessionPath=${newSessionPath}`);
+			if (!command.model) {
+				throw new Error(`BUG: fork_prompt command received without model. sessionPath=${newSessionPath}`);
+			}
+			await this.pool.sendRpcChecked(proc, {
+				type: "set_model",
+				provider: command.model.provider,
+				modelId: command.model.modelId,
+			});
+			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+			const activeModel = modelState.data?.model;
+			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
+				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+			}
+
+			if (command.thinkingLevel) {
+				await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
+			}
+
+			const turnId = makeTurnId();
+			this.setupTurnEventForwarding(proc, newSessionPath, ws, turnId);
+
+			const promptCmd: any = { type: "prompt", message };
+			if (command.images?.length > 0) {
+				promptCmd.images = command.images;
+			}
+			await this.pool.sendRpc(proc, promptCmd);
+
+			ws.send(JSON.stringify({ id, type: "response", command: "fork_prompt", success: true, data: { newSessionPath } }));
+		} catch (err: any) {
+			if (this.lifecycle.getAttachedProcess(newSessionPath) === proc) {
+				const detailed = this.buildPromptFailureMessage(err, proc, newSessionPath);
+				this.injectSessionError(newSessionPath, detailed);
+				this.releaseProcess(newSessionPath);
+				if ((err?.message || "").includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
+					proc.process.kill("SIGTERM");
+				}
+				throw new Error(detailed);
+			}
+			this.busyProcesses.delete(proc);
+			if (proc.process.exitCode === null) proc.process.kill("SIGTERM");
+			throw err;
 		}
-		await this.pool.sendRpcChecked(proc, {
-			type: "set_model",
-			provider: command.model.provider,
-			modelId: command.model.modelId,
-		});
-		const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-		const activeModel = modelState.data?.model;
-		if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-			throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-		}
-
-		if (command.thinkingLevel) {
-			await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
-		}
-
-		const turnId = makeTurnId();
-		this.setupTurnEventForwarding(proc, newSessionPath, ws, turnId);
-
-		const promptCmd: any = { type: "prompt", message };
-		if (command.images?.length > 0) {
-			promptCmd.images = command.images;
-		}
-		await this.pool.sendRpc(proc, promptCmd);
-
-		ws.send(JSON.stringify({ id, type: "response", command: "fork_prompt", success: true, data: { newSessionPath } }));
 	}
 
 	private async handleSetSessionName(ws: WebSocket, id: string, command: any): Promise<void> {
@@ -702,6 +734,35 @@ export class WsHandler {
 	}
 
 	// ── Internal helpers ─────────────────────────────────────────────────
+
+	private buildPromptFailureMessage(err: unknown, proc: RpcProcess, sessionPath: string): string {
+		const raw = err instanceof Error ? err.message : String(err);
+		const session = this.attachedSessions.get(sessionPath);
+		const sessionError = session?.toState().error;
+		const stderrTail = this.pool.getRecentStderr(proc, 12);
+
+		let message = raw;
+		if (raw.includes("Timeout waiting for RPC response to prompt")) {
+			message = "Prompt timed out waiting for pi RPC response";
+		}
+		if (sessionError) {
+			message += `\nLast agent error: ${sessionError}`;
+		}
+		if (stderrTail.length > 0) {
+			message += `\nRecent pi stderr:\n${stderrTail.join("\n")}`;
+		}
+		return message;
+	}
+
+	private injectSessionError(sessionPath: string, errorMessage: string): void {
+		const session = this.attachedSessions.get(sessionPath);
+		if (!session) return;
+		session.applyEvent({
+			type: "turn_end",
+			message: { role: "assistant", errorMessage },
+		} as any);
+		this.pushUpdateToSubscribers(sessionPath, session);
+	}
 
 	private sleep(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));

@@ -801,6 +801,35 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
+	describe("error visibility", () => {
+		it("stores response errors in state.error", () => {
+			const { adapter } = createTestAdapter();
+			const reject = vi.fn();
+			const resolve = vi.fn();
+			(adapter as any).pendingRequests.set("req_x", { resolve, reject });
+
+			(adapter as any).handleMessage(JSON.stringify({
+				type: "response",
+				id: "req_x",
+				success: false,
+				error: "Upstream provider is unavailable",
+			}));
+
+			expect(adapter.state.error).toBe("Upstream provider is unavailable");
+			expect(reject).toHaveBeenCalledTimes(1);
+		});
+
+		it("reportError appends a visible assistant message", () => {
+			const { adapter } = createTestAdapter();
+			adapter.reportError(new Error("Rate limit reached"), "Prompt failed");
+
+			const last = adapter.state.messages.at(-1) as any;
+			expect(adapter.state.error).toBe("Rate limit reached");
+			expect(last?.role).toBe("assistant");
+			expect(last?.content?.[0]?.text || "").toContain("Prompt failed: Rate limit reached");
+		});
+	});
+
 	describe("slash commands", () => {
 		it("/reload sends reload_processes, does not send a prompt, and adds a confirmation message", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";

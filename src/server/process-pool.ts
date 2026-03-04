@@ -27,6 +27,8 @@ export interface RpcProcess {
 	requestId: number;
 	/** Timestamp of last successful RPC response */
 	lastResponseTime: number;
+	/** Recent stderr lines from this process (ring buffer) */
+	recentStderr: string[];
 }
 
 export interface PoolOptions {
@@ -84,6 +86,12 @@ export class ProcessPool {
 		return all;
 	}
 
+	/** Return recent stderr lines for a process (tail). */
+	getRecentStderr(proc: RpcProcess, maxLines = 12): string[] {
+		if (!proc?.recentStderr?.length) return [];
+		return proc.recentStderr.slice(Math.max(0, proc.recentStderr.length - maxLines));
+	}
+
 	/**
 	 * Spawn a new RPC process for the given cwd.
 	 * Does not wait for readiness — call waitForReady() separately.
@@ -112,8 +120,16 @@ export class ProcessPool {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 
+		const recentStderr: string[] = [];
 		child.stderr?.on("data", (data: Buffer) => {
-			process.stderr.write(`[pi#${procId}] ${data.toString()}`);
+			const text = data.toString();
+			process.stderr.write(`[pi#${procId}] ${text}`);
+			for (const line of text.split(/\r?\n/)) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+				recentStderr.push(trimmed);
+				if (recentStderr.length > 60) recentStderr.splice(0, recentStderr.length - 60);
+			}
 		});
 
 		const rl = readline.createInterface({ input: child.stdout!, terminal: false });
@@ -126,6 +142,7 @@ export class ProcessPool {
 			pendingRequests: new Map(),
 			requestId: 0,
 			lastResponseTime: Date.now(),
+			recentStderr,
 		};
 
 		// Set up response handler

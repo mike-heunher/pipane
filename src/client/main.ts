@@ -145,6 +145,7 @@ function handleSend(input: string, attachments?: any[]) {
 
 	autoScroll = true;
 	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err) => {
+		agent.reportError(err, "Prompt failed");
 		console.error("Prompt failed:", err);
 	});
 }
@@ -424,6 +425,18 @@ const renderApp = () => {
 							</div>
 						`
 						: ""}
+					${state?.error
+						? html`
+							<div class="flex items-center gap-2 px-4 py-1.5 bg-red-500/15 border-b border-red-500/30 text-sm text-red-700 dark:text-red-400" title=${state.error}>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+									<circle cx="12" cy="12" r="10"></circle>
+									<line x1="12" y1="8" x2="12" y2="12"></line>
+									<line x1="12" y1="16" x2="12.01" y2="16"></line>
+								</svg>
+								<span class="truncate">${state.error}</span>
+							</div>
+						`
+						: ""}
 					${agent?.sessionStatus === "virtual" && agent?.cwd && messages.length === 0
 						? html`
 							<div class="flex items-center gap-2 px-4 py-2 border-b border-border bg-accent/50 text-sm text-muted-foreground">
@@ -527,7 +540,12 @@ async function handleForkAndPrompt(input: string, attachments?: any[]) {
 		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
 		: input;
 
-	await agent.forkAndPrompt(fullInput, images.length > 0 ? images : undefined);
+	try {
+		await agent.forkAndPrompt(fullInput, images.length > 0 ? images : undefined);
+	} catch (err) {
+		agent.reportError(err, "Fork prompt failed");
+		console.error("Fork prompt failed:", err);
+	}
 }
 
 async function initApp() {
