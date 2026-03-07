@@ -65,6 +65,7 @@ let lastScrollTop = 0;
 let ignoreScrollEvents = false;
 let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
+let pendingHardKillOfferFor: string | null = null;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -116,6 +117,28 @@ function configureMessageEditor() {
 	editor.updated = (changedProps: Map<string, any>) => {
 		origUpdated?.(changedProps);
 	};
+}
+
+function clearPendingHardKillOffer() {
+	pendingHardKillOfferFor = null;
+}
+
+async function handleStopClick() {
+	if (!agent?.sessionFile) return;
+	const sessionPath = agent.sessionFile;
+	const isStillRunning = agent.getSessionStatus(sessionPath) === "running";
+
+	if (pendingHardKillOfferFor === sessionPath && isStillRunning) {
+		const yes = window.confirm("The agent still appears to be running.\n\nHard kill the connected pi process? A new one will be spawned automatically for future prompts.");
+		if (yes) {
+			agent.hardKill();
+		}
+		clearPendingHardKillOffer();
+		return;
+	}
+
+	pendingHardKillOfferFor = sessionPath;
+	agent.abort();
 }
 
 function handleSend(input: string, attachments?: any[]) {
@@ -473,7 +496,7 @@ const renderApp = () => {
 										.showModelSelector=${true}
 										.showThinkingSelector=${false}
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
-										.onAbort=${() => agent?.abort()}
+										.onAbort=${() => handleStopClick()}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
 										.extraToolbarButtons=${() => renderToolbarExtras()}
 									></message-editor>
@@ -673,6 +696,7 @@ async function initApp() {
 
 	// Session switch
 	agent.onSessionChange(async () => {
+		clearPendingHardKillOffer();
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
@@ -700,6 +724,9 @@ async function initApp() {
 
 	// Status change
 	agent.onStatusChange(() => {
+		if (!agent.sessionFile || agent.getSessionStatus(agent.sessionFile) !== "running") {
+			clearPendingHardKillOffer();
+		}
 		renderApp();
 	});
 

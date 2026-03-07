@@ -312,6 +312,9 @@ export class WsHandler {
 				case "abort":
 					await this.handleAbort(ws, id, command);
 					break;
+				case "hard_kill":
+					await this.handleHardKill(ws, id, command);
+					break;
 				case "compact":
 					await this.handleCompact(ws, id, command);
 					break;
@@ -555,6 +558,48 @@ export class WsHandler {
 			await this.pool.sendRpc(proc, { type: "abort" });
 		}
 		ws.send(JSON.stringify({ id, type: "response", command: "abort", success: true }));
+	}
+
+	private async handleHardKill(ws: WebSocket, id: string, command: any): Promise<void> {
+		const sessionPath = command.sessionPath as string;
+		if (!sessionPath) throw new Error("Missing sessionPath");
+
+		const proc = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
+		if (!proc) {
+			ws.send(JSON.stringify({
+				id,
+				type: "response",
+				command: "hard_kill",
+				success: true,
+				data: { killed: false, reason: "not_attached" },
+			}));
+			return;
+		}
+
+		const cleanup = this.procEventCleanup.get(proc);
+		if (cleanup) {
+			cleanup();
+			this.procEventCleanup.delete(proc);
+		}
+
+		this.attachedSessions.delete(sessionPath);
+		this.lifecycle.clearSteering(sessionPath);
+		this.lifecycle.detach(sessionPath);
+		this.busyProcesses.delete(proc);
+		this.decommissionProcesses.delete(proc);
+
+		if (proc.process.exitCode === null) {
+			proc.process.kill("SIGKILL");
+		}
+
+		if (existsSync(sessionPath)) {
+			const { json, hash } = readSessionFromDisk(sessionPath);
+			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
+			this.pushSnapshotToSubscribers(sessionPath, json, hash);
+		}
+
+		this.ensurePool();
+		ws.send(JSON.stringify({ id, type: "response", command: "hard_kill", success: true, data: { killed: true } }));
 	}
 
 	private async handleCompact(ws: WebSocket, id: string, command: any): Promise<void> {

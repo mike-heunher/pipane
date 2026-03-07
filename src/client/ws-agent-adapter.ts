@@ -23,6 +23,7 @@ type WsCommand =
 	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel; images?: ImageContent[] }
 	| { type: "steer"; sessionPath: string; message: string }
 	| { type: "abort"; sessionPath: string }
+	| { type: "hard_kill"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
 	| { type: "get_commands" }
@@ -1177,6 +1178,12 @@ export class WsAgentAdapter {
 	abort() {
 		if (this._sessionPath) {
 			this.send({ type: "abort", sessionPath: this._sessionPath }).catch(() => {});
+		}
+	}
+
+	hardKill() {
+		if (this._sessionPath) {
+			this.send({ type: "hard_kill", sessionPath: this._sessionPath }).catch(() => {});
 		}
 	}
 
