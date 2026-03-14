@@ -584,6 +584,12 @@ export class WsAgentAdapter {
 					});
 				}
 			}
+			// Emit session change AFTER optimistic session is created, so the
+			// picker can immediately remove the __virtual__ entry and show the
+			// real session — preventing the duplicate-session visual glitch.
+			if (shouldAdopt) {
+				this.emitSessionChange();
+			}
 			return;
 		}
 
