@@ -1,0 +1,17 @@
+diff --git a/node_modules/@mariozechner/mini-lit/dist/MarkdownBlock.js b/node_modules/@mariozechner/mini-lit/dist/MarkdownBlock.js
+index 18b89b1..4bef97c 100644
+--- a/node_modules/@mariozechner/mini-lit/dist/MarkdownBlock.js
++++ b/node_modules/@mariozechner/mini-lit/dist/MarkdownBlock.js
+@@ -202,6 +202,12 @@ let MarkdownBlock = class MarkdownBlock extends LitElement {
+             // Wrap in a div with overflow handling
+             return `<div class="overflow-x-auto my-2 border border-border rounded">${table}</div>`;
+         };
++        // Disable strikethrough — models frequently use ~ for "approximately"
++        // (e.g. ~500) which marked interprets as <del>. Render tildes literally.
++        renderer.del = function (token) {
++            const inner = this.parser.parseInline(token.tokens);
++            return `~${inner}~`;
++        };
+         // Parse the markdown content with our configured marked
+         const parsedContent = marked.parse(preservedContent, {
+             async: false,
