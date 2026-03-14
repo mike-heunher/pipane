@@ -196,6 +196,7 @@ export class WsHandler {
 			now: new Date().toISOString(),
 			totalProcesses: this.pool.totalProcesses,
 			attachedSessionCount: this.lifecycle.attachedCount,
+			attachedSessionPaths: Array.from(this.attachedSessions.keys()),
 			sessionStatuses: this.lifecycle.getAllStatuses(),
 			connectedWsOpen: Array.from(this.clients.keys()).filter((ws) => ws.readyState === WebSocket.OPEN).length,
 			processes,
@@ -414,8 +415,17 @@ export class WsHandler {
 
 		client.subscribedSession = sessionPath;
 
-		// If the session is attached, send from in-memory state
-		const attached = this.attachedSessions.get(sessionPath);
+		// If the session is attached AND the lifecycle confirms it's running,
+		// send from in-memory state.  If attachedSessions has a stale entry
+		// (e.g. from a race during auto-compaction), clean it up and fall
+		// through to the disk path.
+		let attached = this.attachedSessions.get(sessionPath);
+		if (attached && !this.lifecycle.getAttachedProcess(sessionPath)) {
+			// Stale entry — lifecycle already detached this session
+			console.warn(`[ws] Cleaning up stale attachedSessions entry for ${path.basename(sessionPath)}`);
+			this.attachedSessions.delete(sessionPath);
+			attached = undefined;
+		}
 		if (attached) {
 			// Send full sync
 			client.lastJson = attached.json;
