@@ -18,6 +18,7 @@ import {
 // Import pi-web-ui so its custom elements get registered
 import { html, render } from "lit";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { computeTokenUsageParts } from "./token-usage.js";
 import { DummyStorageBackend } from "./dummy-storage.js";
 import "./session-picker.js";
 import { registerCodingAgentRenderers } from "./tool-renderers.js";
@@ -289,12 +290,6 @@ async function openLocalSettingsModal() {
 	}
 }
 
-function fmtTok(n: number): string {
-	if (n < 1000) return String(n);
-	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
-	return `${Math.round(n / 1000)}k`;
-}
-
 // Cache the last rendered token usage HTML to avoid flicker during session switches
 // (messages are cleared to [] before the new session_sync arrives).
 let lastTokenUsageHtml: ReturnType<typeof html> | "" = "";
@@ -302,53 +297,13 @@ let lastTokenUsageHtml: ReturnType<typeof html> | "" = "";
 function renderTokenUsage() {
 	if (!agent) return "";
 	const state = agent.state;
-	const totals = state.messages
-		.filter((m: any) => m.role === "assistant")
-		.reduce((acc: any, msg: any) => {
-			const usage = msg.usage;
-			if (usage) {
-				acc.input += usage.input ?? usage.inputTokens ?? 0;
-				acc.output += usage.output ?? usage.outputTokens ?? 0;
-				acc.cacheRead += usage.cacheRead ?? 0;
-				acc.cacheWrite += usage.cacheWrite ?? 0;
-				acc.cost.total += usage.cost?.total ?? usage.totalCost ?? 0;
-			}
-			return acc;
-		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
 
-	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
-	if (!hasTotals) {
-		// During session switches messages are briefly empty (cleared before
-		// session_sync arrives).  If there are literally no messages yet, keep
-		// showing the cached value to avoid a visible flash.  Once messages
-		// actually arrive but have no usage, clear the cache properly.
-		if (state.messages.length === 0) return lastTokenUsageHtml;
-		lastTokenUsageHtml = "";
-		return "";
-	}
+	const result = computeTokenUsageParts(state.messages, state.model?.contextWindow);
+	if (result.parts === null) return lastTokenUsageHtml; // empty messages, keep cache
+	if (!result.parts.length) { lastTokenUsageHtml = ""; return ""; }
 
-	// The last assistant message's totalTokens = current context size (input + output for that turn)
-	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage);
-	const lastUsage = assistantMsgs.length ? assistantMsgs[assistantMsgs.length - 1].usage : null;
-	const lastTotal = lastUsage?.totalTokens ?? 0;
-
-	try {
-		const parts: string[] = [];
-		const contextWindow = state.model?.contextWindow;
-		if (lastTotal && contextWindow) {
-			const pct = Math.round((lastTotal / contextWindow) * 100);
-			parts.push(`↑${pct}%/${fmtTok(contextWindow)}`);
-		} else if (totals.input) {
-			parts.push(`↑${fmtTok(totals.input)}`);
-		}
-		if (totals.output) parts.push(`↓${fmtTok(totals.output)}`);
-		if (totals.cost?.total) parts.push(`$${totals.cost.total < 0.01 ? totals.cost.total.toFixed(4) : totals.cost.total < 1 ? totals.cost.total.toFixed(3) : totals.cost.total.toFixed(2)}`);
-		if (!parts.length) { lastTokenUsageHtml = ""; return ""; }
-		lastTokenUsageHtml = html`<span class="input-token-usage">${parts.join(" ")}</span>`;
-		return lastTokenUsageHtml;
-	} catch {
-		return "";
-	}
+	lastTokenUsageHtml = html`<span class="input-token-usage">${result.parts.join(" ")}</span>`;
+	return lastTokenUsageHtml;
 }
 
 function handleScroll(e: Event) {
