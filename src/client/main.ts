@@ -66,6 +66,7 @@ let lastScrollTop = 0;
 let ignoreScrollEvents = false;
 let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
+let messagesInitialCount = 50;
 let pendingHardKillOfferFor: string | null = null;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
@@ -434,6 +435,7 @@ const renderApp = () => {
 										.messages=${messages}
 										.isStreaming=${isStreaming}
 										.pendingToolCalls=${agent?.pendingToolCallIds ?? new Set()}
+										.initialCount=${messagesInitialCount}
 									></pi-message-list>
 								</div>
 							</div>
@@ -567,6 +569,9 @@ async function initApp() {
 			if (typeof settingsData.settings?.sidebar?.sessionsPerProject === "number") {
 				sessionsPerProject = settingsData.settings.sidebar.sessionsPerProject;
 			}
+			if (typeof settingsData.settings?.messages?.initialCount === "number") {
+				messagesInitialCount = settingsData.settings.messages.initialCount;
+			}
 		}
 	} catch {
 		// Ignore — canvas stays disabled by default
@@ -643,6 +648,9 @@ async function initApp() {
 				if (typeof data.settings?.sidebar?.sessionsPerProject === "number") {
 					sessionsPerProject = data.settings.sidebar.sessionsPerProject;
 				}
+				if (typeof data.settings?.messages?.initialCount === "number") {
+					messagesInitialCount = data.settings.messages.initialCount;
+				}
 			}
 		} catch { /* ignore */ }
 		await resyncAppearanceFromServer();
@@ -654,6 +662,9 @@ async function initApp() {
 		clearPendingHardKillOffer();
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
+		// Reset message truncation so the new session shows the last N messages
+		const messageList = document.querySelector("pi-message-list") as any;
+		if (messageList?.resetVisibleCount) messageList.resetVisibleCount();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		setJsonlSessionPath(agent.sessionFile);
 		autoScroll = true;

@@ -66,6 +66,14 @@ function createMockServer(): Promise<{ server: Server; port: number }> {
 			}),
 		);
 		app.post("/api/debug/load-trace/event", express.json(), (_, res) => res.json({}));
+		// Disable message truncation so all messages render for the perf test
+		app.get("/api/settings/local", (_, res) => res.json({
+			path: "~/.piweb/settings.json",
+			exists: false,
+			errors: [],
+			settings: { version: 1, sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: 5 }, canvas: { enabled: false }, appearance: { colorTheme: "default", darkMode: "dark", showTokenUsage: true }, messages: { initialCount: 0 } },
+			formatted: "{}",
+		}));
 
 		wss.on("connection", (ws) => {
 			ws.send(JSON.stringify({ type: "init", sessionStatuses: {} }));

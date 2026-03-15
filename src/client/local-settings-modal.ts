@@ -84,6 +84,9 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
   },
   "toolCollapse": {
     "keepOpen": 3
+  },
+  "messages": {
+    "initialCount": 50
   }
 }</pre>
 			<p>Each filter supports: <code>pattern</code> (regex), <code>replacement</code> (string), optional <code>flags</code>.</p>
@@ -91,6 +94,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 			<p><strong>Canvas:</strong> <code>enabled</code> activates the canvas tool side panel.</p>
 			<p><strong>Appearance:</strong> <code>colorTheme</code>, <code>darkMode</code>, and <code>showTokenUsage</code> are also togglable from the sidebar menu.</p>
 			<p><strong>Tool collapse:</strong> <code>keepOpen</code> = number of recent tool calls to leave expanded. <code>0</code> = collapse all finished, <code>999999</code> = disable. Once you manually open a collapsed tool, it stays open.</p>
+			<p><strong>Messages:</strong> <code>initialCount</code> = number of messages to show initially when loading a conversation. Click "Show earlier messages" to load more. <code>0</code> = show all. Default: <code>50</code>.</p>
 		</div>
 	`;
 

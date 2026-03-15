@@ -6,6 +6,10 @@
  * everything (committed messages, in-flight stream message, partial tool results).
  * This component just iterates and renders.
  *
+ * When `initialCount` is set (> 0), only the last N renderable messages are shown
+ * on initial load or session switch. A "Show earlier messages" button allows
+ * loading more. During streaming, new messages are always shown.
+ *
  * Uses upstream leaf components: assistant-message, user-message, tool-message,
  * markdown-block, thinking-block — but NOT AgentInterface, MessageList, or
  * StreamingMessageContainer.
@@ -23,6 +27,22 @@ export class PiMessageList extends LitElement {
 	@property({ type: Boolean }) isStreaming = false;
 	@property({ type: Object }) pendingToolCalls: Set<string> = new Set();
 
+	/**
+	 * Maximum number of renderable messages to show initially.
+	 * 0 = show all (no truncation). Set from user settings (default 50).
+	 */
+	@property({ type: Number }) initialCount = 0;
+
+	/**
+	 * Internal: how many renderable messages are currently visible.
+	 * Starts at `initialCount` and grows when user clicks "show more".
+	 * Reset on session switch (when messages array identity changes).
+	 */
+	private _visibleCount = 0;
+
+	/** Track the previous messages array identity to detect session switches */
+	private _prevMessagesRef: AgentMessage[] | null = null;
+
 	createRenderRoot() {
 		return this; // light DOM for shared styles
 	}
@@ -32,7 +52,27 @@ export class PiMessageList extends LitElement {
 		this.style.display = "block";
 	}
 
+	/** Reset visible count when switching sessions (messages array changes entirely) */
+	resetVisibleCount() {
+		this._visibleCount = this.initialCount > 0 ? this.initialCount : 0;
+		this._prevMessagesRef = null;
+	}
+
 	render() {
+		// Detect session switch: if the messages array reference changed entirely
+		// (not just grew), reset the visible count. We detect this by checking
+		// if the first message changed or if the array shrank.
+		if (this._prevMessagesRef !== null && this.messages !== this._prevMessagesRef) {
+			const prev = this._prevMessagesRef;
+			const isSameSession = this.messages.length >= prev.length
+				&& prev.length > 0
+				&& this.messages[0] === prev[0];
+			if (!isSameSession) {
+				this._visibleCount = this.initialCount > 0 ? this.initialCount : 0;
+			}
+		}
+		this._prevMessagesRef = this.messages;
+
 		// Build toolResultsById map for inline tool result rendering
 		const toolResultsById = new Map<string, any>();
 		for (const msg of this.messages) {
@@ -41,16 +81,34 @@ export class PiMessageList extends LitElement {
 			}
 		}
 
-		const items = this.buildRenderItems(toolResultsById);
+		const allItems = this.buildRenderItems(toolResultsById);
+
+		// Apply truncation if initialCount is set and we have more items than visible
+		const isTruncationEnabled = this.initialCount > 0;
+		const effectiveVisible = this._visibleCount > 0 ? this._visibleCount : (isTruncationEnabled ? this.initialCount : allItems.length);
+		const hiddenCount = isTruncationEnabled ? Math.max(0, allItems.length - effectiveVisible) : 0;
+		const visibleItems = hiddenCount > 0 ? allItems.slice(hiddenCount) : allItems;
 
 		return html`<div class="flex flex-col gap-3">
+			${hiddenCount > 0
+				? html`<button
+					class="show-earlier-btn"
+					@click=${this._showMore}
+				>Show ${Math.min(hiddenCount, effectiveVisible)} earlier messages (${hiddenCount} hidden)</button>`
+				: ""}
 			${repeat(
-				items,
+				visibleItems,
 				(it) => it.key,
 				(it) => html`<div data-message-index=${String(it.messageIndex)} style="display: contents;">${it.template}</div>`,
 			)}
 			${this.isStreaming ? html`<span class="mx-4 inline-block w-2 h-4 bg-muted-foreground animate-pulse"></span>` : ""}
 		</div>`;
+	}
+
+	private _showMore() {
+		const step = this.initialCount > 0 ? this.initialCount : 50;
+		this._visibleCount = (this._visibleCount || this.initialCount || 50) + step;
+		this.requestUpdate();
 	}
 
 	private buildRenderItems(toolResultsById: Map<string, any>): Array<{ key: string; template: TemplateResult; messageIndex: number }> {

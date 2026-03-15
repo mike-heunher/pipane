@@ -152,6 +152,13 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 				{ name: "other-project", path: "/Users/dev/other-project" },
 			],
 		}));
+		app.get("/api/settings/local", (_, res) => res.json({
+			path: "~/.piweb/settings.json",
+			exists: false,
+			errors: [],
+			settings: { version: 1, sidebar: { cwdTitle: { filters: [] }, sessionsPerProject: 5 }, canvas: { enabled: false }, appearance: { colorTheme: "default", darkMode: "dark", showTokenUsage: true }, messages: { initialCount: 50 } },
+			formatted: "{}",
+		}));
 
 		let clientWs: WebSocket | null = null;
 		wss.on("connection", (ws) => {

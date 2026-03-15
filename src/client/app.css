@@ -1165,3 +1165,22 @@ markdown-block pre code {
 	margin: 0.25rem 0.3rem;
 	background: var(--border, #e5e7eb);
 }
+
+/* Show earlier messages button */
+.show-earlier-btn {
+	display: block;
+	width: auto;
+	margin: 0 auto 0.25rem;
+	padding: 0.35rem 1rem;
+	border: 1px solid var(--border, #e5e7eb);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--accent, #f3f4f6) 60%, transparent);
+	color: var(--muted-foreground, #6b7280);
+	font-size: 0.75rem;
+	cursor: pointer;
+	transition: background 0.15s, color 0.15s;
+}
+.show-earlier-btn:hover {
+	background: var(--accent, #f3f4f6);
+	color: var(--foreground, #111);
+}
