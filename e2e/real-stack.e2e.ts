@@ -71,6 +71,11 @@ test.describe("Real stack e2e", () => {
 
 		// Check the response text is somewhere on the page (markdown renderer may wrap it)
 		await expect(page.getByText("I can help you with your project", { exact: false })).toBeVisible({ timeout: 10000 });
+
+		// The harness cwd is not a linked Git worktree, so the persisted session
+		// should be identified as the root checkout in the conversation picker.
+		const sessionItem = page.locator("session-picker .session-item").filter({ hasText: "Hello, can you help me?" });
+		await expect(sessionItem.locator(".session-worktree")).toHaveText("root", { timeout: 10000 });
 	});
 
 	test("keeps hash-dependent sync deltas ordered during burst streaming", async ({ page }) => {

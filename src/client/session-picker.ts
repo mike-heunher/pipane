@@ -267,6 +267,20 @@ export class SessionPicker extends LitElement {
 			line-height: 1.12;
 		}
 
+		.session-worktree {
+			min-width: 0;
+			max-width: 50%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			color: var(--picker-active);
+			font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+			font-weight: 600;
+		}
+
+		.session-time {
+			flex-shrink: 0;
+		}
+
 		.msg-count-badge {
 			display: inline-flex;
 			align-items: center;
@@ -861,7 +875,8 @@ export class SessionPicker extends LitElement {
 					(s.name?.toLowerCase().includes(query)) ||
 					s.firstMessage.toLowerCase().includes(query) ||
 					s.cwd.toLowerCase().includes(query) ||
-					(s.cwdDisplay?.toLowerCase().includes(query) ?? false),
+					(s.cwdDisplay?.toLowerCase().includes(query) ?? false) ||
+					(s.worktreeName?.toLowerCase().includes(query) ?? false),
 			);
 		}
 
@@ -1314,6 +1329,7 @@ export class SessionPicker extends LitElement {
 			? group.sessions
 			: group.sessions.slice(0, defaultLimit);
 		const hiddenCount = totalCount - visibleSessions.length;
+		const groupWorktreeName = group.sessions.find((session) => session.worktreeName)?.worktreeName;
 
 		return html`
 			<div class="group-header" title=${group.cwd}>
@@ -1331,18 +1347,27 @@ export class SessionPicker extends LitElement {
 					const status = this.agent.getSessionStatus(s.path);
 					const effectiveStatus = status ?? "idle";
 					const isPinned = this.pinnedSessions.has(s.path);
+					const worktreeName = s.worktreeName ?? groupWorktreeName;
+					const sessionTitle = [
+						s.cwd,
+						worktreeName ? `Worktree: ${worktreeName}` : "",
+						s.firstMessage,
+					].filter(Boolean).join("\n");
 					return html`
 					<button
 						class="session-item ${s.id === activeId ? "active" : ""}"
 						@click=${() => this.handleSessionClick(s)}
-						title="${s.cwd}\n${s.firstMessage}"
+						title=${sessionTitle}
 					>
 						<div class="session-item-row">
 							<span class="status-badge ${effectiveStatus}">${nothing}</span>
 							<div class="session-item-content">
 								<span class="session-name">${this.getSessionDisplayName(s)}</span>
 								<span class="session-meta">
-									${this.formatTime(s.lastUserPromptTime || s.modified)}
+									${worktreeName
+										? html`<span class="session-worktree" title="Worktree: ${worktreeName}">${worktreeName}</span>`
+										: nothing}
+									<span class="session-time">${this.formatTime(s.lastUserPromptTime || s.modified)}</span>
 									<span class="msg-count-badge">${s.messageCount}</span>
 									<span
 										class="pin-btn ${isPinned ? "pinned" : ""}"

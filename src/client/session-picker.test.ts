@@ -50,6 +50,11 @@ function getGroupLabel(header: HTMLElement): string {
 	return header.querySelector(".group-label")?.textContent?.trim() ?? "";
 }
 
+/** Get the worktree label from a rendered session item. */
+function getWorktreeName(item: HTMLElement): string {
+	return item.querySelector(".session-worktree")?.textContent?.trim() ?? "";
+}
+
 /** Get all status badges from a session item. */
 function getStatusBadges(item: HTMLElement): HTMLElement[] {
 	return Array.from(item.querySelectorAll(".status-badge"));
@@ -391,6 +396,53 @@ describe("session-picker", () => {
 
 			expect(headers).toHaveLength(1);
 			expect(getGroupLabel(headers[0])).toBe("~/dev/project");
+		});
+	});
+
+	describe("worktree labels", () => {
+		it("shows a linked worktree name below the conversation title", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({
+					name: "Fix login",
+					cwd: "/home/user/project--wt-fix-login",
+					worktreeName: "project--wt-fix-login",
+				}),
+			]);
+
+			const el = await createPicker(agent);
+			const item = getSessionItems(el)[0];
+
+			expect(getWorktreeName(item)).toBe("project--wt-fix-login");
+			expect(item.querySelector(".session-name")?.nextElementSibling?.classList.contains("session-meta")).toBe(true);
+		});
+
+		it("shows root for a conversation in the root checkout", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({ name: "Root work", cwd: "/home/user/project", worktreeName: "root" }),
+			]);
+
+			const el = await createPicker(agent);
+
+			expect(getWorktreeName(getSessionItems(el)[0])).toBe("root");
+		});
+
+		it("inherits known worktree metadata for optimistic sessions in the same cwd", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({
+					name: "Indexed session",
+					cwd: "/home/user/project--wt-feature",
+					worktreeName: "project--wt-feature",
+				}),
+				createSession({ name: "Optimistic session", cwd: "/home/user/project--wt-feature" }),
+			]);
+
+			const el = await createPicker(agent);
+			const item = getSessionItems(el).find((candidate) => getSessionName(candidate) === "Optimistic session")!;
+
+			expect(getWorktreeName(item)).toBe("project--wt-feature");
 		});
 	});
 

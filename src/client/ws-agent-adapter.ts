@@ -1734,6 +1734,7 @@ export interface SessionInfoDTO {
 	path: string;
 	cwd: string;
 	cwdDisplay?: string;
+	worktreeName?: string;
 	name?: string;
 	created: string;
 	modified: string;

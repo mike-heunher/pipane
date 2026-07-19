@@ -10,12 +10,14 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
+import { resolveWorktreeName } from "./worktree-name.js";
 
 export interface SessionListItem {
 	id: string;
 	path: string;
 	cwd: string;
 	cwdDisplay?: string;
+	worktreeName?: string;
 	name?: string;
 	created: string;
 	modified: string;
@@ -45,13 +47,20 @@ export class SessionIndex {
 	private readonly extractorVersion: string;
 	private readonly cacheFilePath: string;
 	private readonly cwdDisplayFormatter?: (cwd: string) => string;
+	private readonly worktreeNameResolver: (cwd: string) => string;
 	private inMemoryCache: SessionIndexCacheFile | null | undefined;
 
-	constructor(opts?: { agentDir?: string; extractorVersion?: string; cwdDisplayFormatter?: (cwd: string) => string }) {
+	constructor(opts?: {
+		agentDir?: string;
+		extractorVersion?: string;
+		cwdDisplayFormatter?: (cwd: string) => string;
+		worktreeNameResolver?: (cwd: string) => string;
+	}) {
 		this.agentDir = opts?.agentDir ?? getAgentDir();
 		this.extractorVersion = opts?.extractorVersion ?? DEFAULT_EXTRACTOR_VERSION;
 		this.cacheFilePath = path.join(this.agentDir, "cache", "pipane-session-index-v1.json");
 		this.cwdDisplayFormatter = opts?.cwdDisplayFormatter;
+		this.worktreeNameResolver = opts?.worktreeNameResolver ?? resolveWorktreeName;
 	}
 
 	async listSessions(): Promise<SessionListItem[]> {
@@ -125,7 +134,19 @@ export class SessionIndex {
 			}
 		}
 
-		return sessions;
+		const worktreeNames = new Map<string, string>();
+		return sessions.map((session) => {
+			let worktreeName = worktreeNames.get(session.cwd);
+			if (!worktreeName) {
+				try {
+					worktreeName = this.worktreeNameResolver(session.cwd) || "root";
+				} catch {
+					worktreeName = "root";
+				}
+				worktreeNames.set(session.cwd, worktreeName);
+			}
+			return { ...session, worktreeName };
+		});
 	}
 
 	async invalidateAll(): Promise<void> {

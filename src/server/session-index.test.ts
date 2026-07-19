@@ -130,6 +130,27 @@ describe("SessionIndex", () => {
 		expect(sessions[0].cwdDisplay).toBe("~/dev/pipane");
 	});
 
+	it("adds a worktree label for each session cwd", async () => {
+		const firstPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
+		const secondPath = path.join(agentDir, "sessions", "--project--", "b.jsonl");
+		writeSessionJsonl(firstPath, [
+			{ type: "session", id: "sess-a", cwd: "/tmp/project", timestamp: "2026-01-01T10:00:00.000Z" },
+		]);
+		writeSessionJsonl(secondPath, [
+			{ type: "session", id: "sess-b", cwd: "/tmp/project--wt-feature", timestamp: "2026-01-01T11:00:00.000Z" },
+		]);
+
+		const index = new SessionIndex({
+			agentDir,
+			extractorVersion: "test-v1",
+			worktreeNameResolver: (cwd) => cwd.endsWith("--wt-feature") ? "project--wt-feature" : "root",
+		});
+		const sessions = await index.listSessions();
+
+		expect(sessions.find((session) => session.id === "sess-a")?.worktreeName).toBe("root");
+		expect(sessions.find((session) => session.id === "sess-b")?.worktreeName).toBe("project--wt-feature");
+	});
+
 	it("invalidates by extractor version", async () => {
 		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
 		writeSessionJsonl(sessionPath, [
