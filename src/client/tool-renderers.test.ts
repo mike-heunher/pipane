@@ -7,8 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { getToolRenderer } from "@mariozechner/pi-web-ui";
-import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./tool-renderers.js";
+import { getToolRenderer } from "./ui/tool-registry.js";
+import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./ui/tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
 registerCodingAgentRenderers();

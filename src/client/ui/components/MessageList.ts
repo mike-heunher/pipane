@@ -6,22 +6,22 @@
  * everything (committed messages, in-flight stream message, partial tool results).
  * This component just iterates and renders.
  *
- * Uses upstream leaf components: assistant-message, user-message, tool-message,
- * markdown-block, thinking-block — but NOT AgentInterface, MessageList, or
- * StreamingMessageContainer.
+ * This is the only conversation renderer. It composes pipane-owned user,
+ * assistant, thinking, and tool components without a second streaming zone.
  */
 
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { renderMessage } from "@mariozechner/pi-web-ui";
+import { renderMessage } from "../message-registry.js";
+import "./Messages.js";
 
 @customElement("pi-message-list")
 export class PiMessageList extends LitElement {
 	@property({ type: Array }) messages: AgentMessage[] = [];
 	@property({ type: Boolean }) isStreaming = false;
-	@property({ type: Object }) pendingToolCalls: Set<string> = new Set();
+	@property({ type: Object }) pendingToolCalls: ReadonlySet<string> = new Set();
 
 	createRenderRoot() {
 		return this; // light DOM for shared styles

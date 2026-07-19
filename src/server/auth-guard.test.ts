@@ -1,12 +1,13 @@
 /** @vitest-environment node */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { createServer } from "node:net";
+import type { Readable } from "node:stream";
 import WebSocket from "ws";
 
 type RunningServer = {
-	proc: ChildProcessWithoutNullStreams;
+	proc: ChildProcessByStdio<null, Readable, Readable>;
 	port: number;
 	baseUrl: string;
 	wsUrl: string;
@@ -49,7 +50,7 @@ async function startServer(envOverrides: Record<string, string>): Promise<Runnin
 		const timeout = setTimeout(() => reject(new Error("Timed out waiting for server startup")), 15000);
 		const onData = (chunk: Buffer) => {
 			const text = chunk.toString("utf8");
-			if (text.includes("pipane server listening")) {
+			if (text.includes("Local:")) {
 				clearTimeout(timeout);
 				proc.stdout.off("data", onData);
 				proc.stderr.off("data", onData);
@@ -117,8 +118,8 @@ describe("auth guard", () => {
 		const bad = await fetch(`${server!.baseUrl}/auth?token=wrong-token`);
 		expect(bad.status).toBe(401);
 
-		const good = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`);
-		expect(good.status).toBe(200);
+		const good = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
+		expect(good.status).toBe(302);
 		const cookiePair = extractCookiePair(good.headers.get("set-cookie"));
 		expect(cookiePair.startsWith("pipane_auth=")).toBe(true);
 
@@ -144,7 +145,7 @@ describe("auth guard", () => {
 			});
 		});
 
-		const authResp = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`);
+		const authResp = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
 		const cookiePair = extractCookiePair(authResp.headers.get("set-cookie"));
 
 		await new Promise<void>((resolve, reject) => {

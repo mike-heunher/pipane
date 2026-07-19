@@ -6,10 +6,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { getMessageRenderer } from "@mariozechner/pi-web-ui";
+import { getMessageRenderer } from "./ui/message-registry.js";
 
-// Import to trigger registration side-effects
-import "./message-renderers.js";
+// Import the one local message renderer registration path.
+import "./ui/message-renderers.js";
 
 describe("compactionSummary renderer", () => {
 	it("registers a renderer for compactionSummary role", () => {

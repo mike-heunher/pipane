@@ -1,10 +1,53 @@
-@import "@mariozechner/pi-web-ui/app.css";
+/* Forked pi-web-ui v0.75.3 base, now owned by pipane. */
+@import "@mariozechner/mini-lit/styles/themes/default.css";
+@source "../../node_modules/@mariozechner/mini-lit/dist";
 @import "./themes/gruvbox.css";
 @import "tailwindcss";
+
+body {
+	font-size: 16px;
+	-webkit-font-smoothing: antialiased;
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--color-border) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+	background-color: var(--color-border);
+	border-radius: 4px;
+}
+
+.fixed.inset-0 button[aria-label*="Close"],
+.fixed.inset-0 button[type="button"] {
+	cursor: pointer;
+}
+
+@keyframes shimmer {
+	0% { background-position: -200% 0; }
+	100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+	animation: shimmer 2s ease-in-out infinite;
+}
 
 /* ── User message: plain text + label + faint primary tint ──────── */
 
 .user-message-container {
+	position: relative;
+	max-width: 100%;
+	transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 	background: color-mix(in srgb, var(--primary, #83a598) 6%, transparent) !important;
 	border: none !important;
 	border-radius: 0.35rem !important;
@@ -405,8 +448,9 @@ markdown-block pre code {
 
 .thinking-bar:nth-child(1) { height: 4px; }
 .thinking-bar:nth-child(2) { height: 6px; }
-.thinking-bar:nth-child(3) { height: 9px; }
-.thinking-bar:nth-child(4) { height: 12px; }
+.thinking-bar:nth-child(3) { height: 8px; }
+.thinking-bar:nth-child(4) { height: 10px; }
+.thinking-bar:nth-child(5) { height: 12px; }
 
 .thinking-bar.filled {
 	background: var(--primary, #2563eb);

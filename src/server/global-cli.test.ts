@@ -16,7 +16,8 @@ describe("global npm CLI packaging", () => {
 		expect(pkg.files).toContain("dist/");
 		expect(pkg.files).toContain("bin/");
 		expect(pkg.files).toContain("extensions/");
-		expect(pkg.files).toContain("patches/");
+		expect(pkg.files).toContain("THIRD_PARTY_NOTICES.md");
+		expect(pkg.files).not.toContain("patches/");
 	});
 
 	it("launcher resolves the built server entry", () => {

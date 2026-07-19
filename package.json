@@ -34,12 +34,11 @@
 		"dist/",
 		"bin/",
 		"extensions/",
-		"patches/",
 		"LICENSE",
-		"README.md"
+		"README.md",
+		"THIRD_PARTY_NOTICES.md"
 	],
 	"scripts": {
-		"postinstall": "patch-package",
 		"dev": "./dev.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
@@ -59,13 +58,16 @@
 		"@mariozechner/pi-agent-core": "0.55.3",
 		"@mariozechner/pi-ai": "0.55.3",
 		"@mariozechner/pi-coding-agent": "0.55.3",
-		"@mariozechner/pi-web-ui": "0.55.3",
 		"@tailwindcss/vite": "^4.1.17",
+		"docx-preview": "^0.3.7",
 		"express": "^5.1.0",
+		"highlight.js": "^11.11.1",
+		"jszip": "^3.10.1",
 		"lit": "^3.3.1",
 		"lucide": "^0.544.0",
-		"patch-package": "^8.0.1",
-		"ws": "^8.18.0"
+		"pdfjs-dist": "5.4.394",
+		"ws": "^8.18.0",
+		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.58.2",

@@ -145,6 +145,11 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 		app.use(express.static(CLIENT_DIST));
 		app.get("/api/sessions", (_, res) => res.json(sessions));
 		app.get("/api/sessions/messages", (_, res) => res.json({ messages: toolMessages }));
+		app.get("/api/settings/local", (_, res) => res.json({
+			settings: {
+				appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
+			},
+		}));
 		app.get("/api/browse", (_, res) => res.json({
 			path: "/Users/dev",
 			dirs: [
@@ -210,6 +215,16 @@ test.describe("UI visual goldens", () => {
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
 	test.afterAll(async () => { await new Promise<void>((r) => mock.server.close(() => r())); });
+	test.beforeEach(async ({ page }) => {
+		// Visual snapshots must not depend on browser/system theme defaults or
+		// localStorage left by unrelated tests. Apply the canonical light Gruvbox
+		// appearance before application code runs; the mock API returns the same.
+		await page.addInitScript(() => {
+			localStorage.setItem("color-theme", "gruvbox");
+			localStorage.setItem("theme", "light");
+			localStorage.setItem("pipane-show-token-usage", "true");
+		});
+	});
 
 	test("session list", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);

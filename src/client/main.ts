@@ -5,25 +5,12 @@ if ("serviceWorker" in navigator) {
 	});
 }
 
-import "@mariozechner/mini-lit/dist/ThemeToggle.js";
 import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
-import {
-	AppStorage,
-	CustomProvidersStore,
-	ProviderKeysStore,
-	SessionsStore,
-	SettingsStore,
-	setAppStorage,
-} from "@mariozechner/pi-web-ui";
-// Import pi-web-ui so its custom elements get registered
 import { html, render } from "lit";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
-import { DummyStorageBackend } from "./dummy-storage.js";
 import "./session-picker.js";
-import { registerCodingAgentRenderers } from "./tool-renderers.js";
-import "./message-renderers.js";
-import "./thinking-block-patch.js";
-import "./pi-message-list.js";
+import "./ui/index.js";
+import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
@@ -34,9 +21,6 @@ import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
-import { formatUsage } from "@mariozechner/pi-web-ui";
-
-registerCodingAgentRenderers();
 initThemes();
 
 let agent: WsAgentAdapter;
@@ -78,44 +62,33 @@ function toggleTokenUsage() {
 	setShowTokenUsage(!getShowTokenUsage());
 }
 
-/**
- * Configure message-editor's keyboard shortcuts, model picker, and input menu.
- */
-function configureMessageEditor() {
-	const editor = document.querySelector("message-editor") as any;
-	if (!editor) return;
+function getMessageEditor(): MessageEditor | null {
+	return document.querySelector("message-editor") as MessageEditor | null;
+}
 
-	editor.allowSendDuringStreaming = true;
+function handleEditorKeyDown(event: KeyboardEvent): boolean {
+	if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.shiftKey) return false;
 
-	editor.onKeyDown = (e: KeyboardEvent): boolean => {
-		if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
-			e.preventDefault();
-			if (!editor.processingFiles && (editor.value.trim() || editor.attachments.length > 0)) {
-				const value = editor.value;
-				const attachments = editor.attachments;
-				editor.value = "";
-				editor.attachments = [];
-				handleForkAndPrompt(value, attachments);
-			}
-			return true;
-		}
-		return false;
-	};
+	event.preventDefault();
+	const editor = getMessageEditor();
+	if (!editor || editor.processingFiles || (!editor.value.trim() && editor.attachments.length === 0)) return true;
 
-	editor.onModelSelect = async () => {
-		try {
-			const models = await agent.fetchAvailableModels();
-			const selected = await openModelPickerDialog(models as any, agent.state.model as any);
-			if (selected) agent.setModel(selected as any);
-		} catch (err) {
-			console.error("Failed to open model picker:", err);
-		}
-	};
+	const value = editor.value;
+	const attachments = editor.attachments;
+	editor.value = "";
+	editor.attachments = [];
+	void handleForkAndPrompt(value, attachments);
+	return true;
+}
 
-	const origUpdated = editor.updated?.bind(editor);
-	editor.updated = (changedProps: Map<string, any>) => {
-		origUpdated?.(changedProps);
-	};
+async function handleModelSelect(): Promise<void> {
+	try {
+		const models = await agent.fetchAvailableModels();
+		const selected = await openModelPickerDialog(models as any, agent.state.model as any);
+		if (selected) agent.setModel(selected as any);
+	} catch (err) {
+		console.error("Failed to open model picker:", err);
+	}
 }
 
 function handleSend(input: string, attachments?: any[]) {
@@ -137,7 +110,7 @@ function handleSend(input: string, attachments?: any[]) {
 		: input;
 
 	// Clear the editor after capturing the input
-	const editor = document.querySelector("message-editor") as any;
+	const editor = getMessageEditor();
 	if (editor) {
 		editor.value = "";
 		editor.attachments = [];
@@ -203,7 +176,7 @@ function renderSteeringQueue() {
 	`;
 }
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
 function modelSupportsThinking(model: any): boolean {
 	if (!model) return false;
@@ -224,8 +197,7 @@ function renderThinkingButton() {
 	const idx = THINKING_LEVELS.indexOf(level);
 	const nextLevel = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
 
-	// 4 bars, filled up to the current level (off=0, minimal=1, low=2, medium=3, high=4)
-	const filledBars = idx; // off=0, minimal=1, low=2, medium=3, high=4
+	const filledBars = Math.max(0, idx);
 	const title = `Thinking: ${level} (click to switch to ${nextLevel})`;
 
 	return html`
@@ -239,7 +211,7 @@ function renderThinkingButton() {
 				<path d="M9 21h6"/>
 			</svg>
 			<span class="thinking-bars" data-level="${filledBars}">
-				${[0, 1, 2, 3].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
+				${[0, 1, 2, 3, 4].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
 			</span>
 		</button>
 	`;
@@ -305,7 +277,7 @@ function renderTokenUsage() {
 	}
 
 	// The last assistant message's totalTokens = current context size (input + output for that turn)
-	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage);
+	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage) as any[];
 	const lastUsage = assistantMsgs.length ? assistantMsgs[assistantMsgs.length - 1].usage : null;
 	const lastTotal = lastUsage?.totalTokens ?? 0;
 
@@ -474,6 +446,8 @@ const renderApp = () => {
 										.showThinkingSelector=${false}
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
 										.onAbort=${() => agent?.abort()}
+										.onModelSelect=${handleModelSelect}
+										.onKeyDown=${handleEditorKeyDown}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
 										.extraToolbarButtons=${() => renderToolbarExtras()}
 									></message-editor>
@@ -509,7 +483,6 @@ const renderApp = () => {
 
 	// Post-render setup
 	requestAnimationFrame(() => {
-		configureMessageEditor();
 		scrollToBottomIfNeeded();
 		runAutoCollapse();
 		const canvasEl = document.getElementById("canvas-container");
@@ -566,19 +539,6 @@ async function initApp() {
 			skeletonShell.appendChild(overlay);
 		}
 	}, 300);
-
-	// Initialize storage (needed by upstream components)
-	const settings = new SettingsStore();
-	const providerKeys = new ProviderKeysStore();
-	const sessions = new SessionsStore();
-	const customProviders = new CustomProvidersStore();
-	const backend = new DummyStorageBackend();
-	settings.setBackend(backend);
-	providerKeys.setBackend(backend);
-	sessions.setBackend(backend);
-	customProviders.setBackend(backend);
-	const storage = new AppStorage(settings, providerKeys, sessions, customProviders, backend);
-	setAppStorage(storage);
 
 	// Fetch local settings to check feature flags
 	try {

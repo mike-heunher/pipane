@@ -5,10 +5,10 @@
  * tool name and relevant parameters with a gutter-thread collapsible layout.
  */
 
-import { registerToolRenderer, setFallbackToolRenderer } from "@mariozechner/pi-web-ui";
-import type { ToolRenderer, ToolRenderResult, FallbackToolRenderer } from "@mariozechner/pi-web-ui";
+import { registerToolRenderer, setFallbackToolRenderer } from "./tool-registry.js";
+import type { ToolRenderer, ToolRenderResult, FallbackToolRenderer } from "./tool-registry.js";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
-import { icon } from "@mariozechner/mini-lit";
+import { icon } from "@mariozechner/mini-lit/dist/icons.js";
 import { html } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { ref } from "lit/directives/ref.js";
@@ -34,8 +34,8 @@ import swift from "highlight.js/lib/languages/swift";
 import kotlin from "highlight.js/lib/languages/kotlin";
 import scss from "highlight.js/lib/languages/scss";
 import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight, Puzzle } from "lucide";
-import { showCanvas } from "./canvas-panel.js";
-import { notifyToolToggled } from "./auto-collapse.js";
+import { showCanvas } from "../canvas-panel.js";
+import { notifyToolToggled } from "../auto-collapse.js";
 
 // Register highlight.js languages
 hljs.registerLanguage("javascript", javascript);
