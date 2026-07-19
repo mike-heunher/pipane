@@ -73,6 +73,41 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("I can help you with your project", { exact: false })).toBeVisible({ timeout: 10000 });
 	});
 
+	test("keeps hash-dependent sync deltas ordered during burst streaming", async ({ page }) => {
+		const syncFailures: string[] = [];
+		page.on("console", (message) => {
+			const text = message.text();
+			if (
+				text.includes("[jsonl-sync] Base hash mismatch")
+				|| text.includes("[ws-adapter] Sync verification failed")
+				|| text.includes("[ws-adapter] Ignoring delta while awaiting full sync")
+			) {
+				syncFailures.push(text);
+			}
+		});
+
+		const response = [
+			...Array.from({ length: 80 }, (_, index) => `burst_${String(index).padStart(3, "0")}`),
+			"BURST_COMPLETE",
+		].join(" ");
+		harness.setScenarios([
+			{ match: "sync-burst-e2e", chunks: textChunks(response) },
+		]);
+
+		await gotoFreshSession(page);
+		const textarea = page.locator("message-editor").locator("textarea").first();
+		await textarea.fill("sync-burst-e2e");
+		await textarea.press("Enter");
+
+		await expect(page.getByText("BURST_COMPLETE", { exact: false }).first()).toBeVisible({ timeout: 15000 });
+		// Allow any queued RAF sync and automatic re-subscription to run before
+		// asserting that recovery was never needed.
+		await page.waitForTimeout(250);
+
+		expect(syncFailures, "session sync should not enter full-sync recovery").toEqual([]);
+	});
+
+
 	test("can execute a tool call and see the result", async ({ page }) => {
 		harness.setScenarios([
 			{

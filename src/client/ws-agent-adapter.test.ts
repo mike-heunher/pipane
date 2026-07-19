@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -777,30 +778,6 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("session_sync coalescing", () => {
-		it("keeps a pending full sync when deltas arrive in the same frame", () => {
-			const { adapter } = createTestAdapter();
-			const a = adapter as any;
-
-			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{}", hash: "h1" });
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h1", hash: "h2" });
-
-			expect(a._pendingSessionSync.op).toBe("full");
-			expect(a._pendingSessionSync.hash).toBe("h1");
-		});
-
-		it("still keeps latest delta when only deltas are queued", () => {
-			const { adapter } = createTestAdapter();
-			const a = adapter as any;
-
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "a" }], baseHash: "h0", hash: "h1" });
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "b" }], baseHash: "h1", hash: "h2" });
-
-			expect(a._pendingSessionSync.op).toBe("delta");
-			expect(a._pendingSessionSync.hash).toBe("h2");
-		});
-	});
-
 	describe("error visibility", () => {
 		it("stores response errors in state.error", () => {
 			const { adapter } = createTestAdapter();
@@ -829,6 +806,96 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(last?.content?.[0]?.text || "").toContain("Prompt failed: Rate limit reached");
 		});
 	});
+
+	describe("session_sync ordering", () => {
+		it("keeps deltas after a pending full sync", () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+
+			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{}", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h1", hash: "h2" });
+
+			expect(a._pendingSessionSyncs.map((op: any) => op.op)).toEqual(["full", "delta"]);
+			expect(a._pendingSessionSyncs.map((op: any) => op.hash)).toEqual(["h1", "h2"]);
+		});
+
+		it("keeps hash-dependent deltas in order", () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "a" }], baseHash: "h0", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "b" }], baseHash: "h1", hash: "h2" });
+
+			expect(a._pendingSessionSyncs.map((op: any) => op.hash)).toEqual(["h1", "h2"]);
+		});
+
+		it("lets a newer full snapshot supersede queued history", () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+
+			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h0", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{\"new\":true}", hash: "h2" });
+
+			expect(a._pendingSessionSyncs).toHaveLength(1);
+			expect(a._pendingSessionSyncs[0]).toMatchObject({ op: "full", hash: "h2" });
+		});
+
+		it("applies a full snapshot and all dependent deltas in order", async () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+			const sessionPath = "/tmp/ordered.jsonl";
+			a._sessionPath = sessionPath;
+			a._sessionNonce = 4;
+			const makeState = (text: string) => JSON.stringify({
+				messages: [{ role: "user", content: text }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				model: { provider: "openai", modelId: "gpt-5" },
+				thinkingLevel: "high",
+				steeringQueue: [],
+			});
+			const states = [makeState("one"), makeState("two"), makeState("three")];
+			const hashes = await Promise.all(states.map(computeHash));
+			const scope = { __sessionPath: sessionPath, __sessionNonce: 4 };
+
+			a.enqueueSessionSync({ ...scope, op: "full", data: states[0], hash: hashes[0] });
+			a.enqueueSessionSync({ ...scope, op: "delta", patches: computePatches(states[0], states[1]), baseHash: hashes[0], hash: hashes[1] });
+			a.enqueueSessionSync({ ...scope, op: "delta", patches: computePatches(states[1], states[2]), baseHash: hashes[1], hash: hashes[2] });
+			await a.flushSessionSyncQueue();
+
+			expect(a._syncJson).toBe(states[2]);
+			expect(a._syncHash).toBe(hashes[2]);
+			expect(adapter.state.messages[0]).toMatchObject({ content: "three" });
+		});
+
+		it("cannot commit an async sync after the active session changes", async () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+			const sessionA = "/tmp/a.jsonl";
+			const stateA = JSON.stringify({ messages: [{ role: "user", content: "A" }] });
+			const hashA = await computeHash(stateA);
+			a._sessionPath = sessionA;
+			a._sessionNonce = 10;
+			a._state.messages = [{ role: "user", content: "B" }];
+
+			const applying = a.applySessionSync({
+				op: "full",
+				data: stateA,
+				hash: hashA,
+				__sessionPath: sessionA,
+				__sessionNonce: 10,
+			});
+			a._sessionPath = "/tmp/b.jsonl";
+			a._sessionNonce = 11;
+			a._syncJson = "";
+			a._syncHash = "";
+			await applying;
+
+			expect(adapter.state.messages[0]).toMatchObject({ content: "B" });
+			expect(a._syncJson).toBe("");
+		});
+	});
+
 
 	describe("slash commands", () => {
 		it("/reload sends reload_processes, does not send a prompt, and adds a confirmation message", async () => {

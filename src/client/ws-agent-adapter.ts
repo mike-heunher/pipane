@@ -130,9 +130,9 @@ export class WsAgentAdapter {
 	/** Current synced hash */
 	private _syncHash = "";
 
-	// ── session_sync coalescing (latest-wins per frame) ───────────────────
-	/** Latest session_sync payload waiting to be applied. */
-	private _pendingSessionSync: any | null = null;
+	// ── session_sync frame queue ──────────────────────────────────────────
+	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
+	private _pendingSessionSyncs: any[] = [];
 	/** True when a frame callback has been scheduled to flush session_sync. */
 	private _sessionSyncFlushScheduled = false;
 	/** True while applySessionSync is running to prevent concurrent flushes. */
@@ -499,7 +499,11 @@ export class WsAgentAdapter {
 		if (data.type === "session_sync") {
 			const sp = data.sessionPath as string;
 			if (sp !== this._sessionPath) return;
-			this.enqueueSessionSync(data);
+			this.enqueueSessionSync({
+				...data,
+				__sessionPath: sp,
+				__sessionNonce: this._sessionNonce,
+			});
 			return;
 		}
 
@@ -632,24 +636,16 @@ export class WsAgentAdapter {
 	}
 
 	/**
-	 * Coalesce high-frequency session_sync updates.
-	 * Latest update wins within a frame; no artificial delay beyond RAF.
-	 *
-	 * Important: once we have queued a full sync, never overwrite it with deltas.
-	 * A full sync is required to establish the base hash after reconnect/re-subscribe.
+	 * Queue hash-dependent sync operations for the next frame. A newer full
+	 * snapshot supersedes queued history, but every delta after that full must be
+	 * retained and applied in order because its baseHash depends on the prior op.
 	 */
 	private enqueueSessionSync(syncMsg: any) {
-		const pending = this._pendingSessionSync;
-		if (!pending) {
-			this._pendingSessionSync = syncMsg;
-		} else if (syncMsg.op === "full") {
-			// New full sync supersedes anything pending.
-			this._pendingSessionSync = syncMsg;
-		} else if (pending.op !== "full") {
-			// Delta can replace older delta (latest-wins).
-			this._pendingSessionSync = syncMsg;
+		if (syncMsg.op === "full") {
+			this._pendingSessionSyncs = [syncMsg];
+		} else {
+			this._pendingSessionSyncs.push(syncMsg);
 		}
-		// else: keep pending full, ignore incoming delta
 		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushScheduled = true;
 
@@ -660,7 +656,7 @@ export class WsAgentAdapter {
 	}
 
 	private clearSessionSyncQueue() {
-		this._pendingSessionSync = null;
+		this._pendingSessionSyncs = [];
 		this._sessionSyncFlushScheduled = false;
 	}
 
@@ -668,15 +664,14 @@ export class WsAgentAdapter {
 		if (this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushInProgress = true;
 		try {
-			while (this._pendingSessionSync) {
-				const next = this._pendingSessionSync;
-				this._pendingSessionSync = null;
-				await this.applySessionSync(next);
+			while (this._pendingSessionSyncs.length > 0) {
+				const next = this._pendingSessionSyncs.shift();
+				if (next) await this.applySessionSync(next);
 			}
 		} finally {
 			this._sessionSyncFlushInProgress = false;
 			// If something arrived while we were finalizing, schedule another frame.
-			if (this._pendingSessionSync && !this._sessionSyncFlushScheduled) {
+			if (this._pendingSessionSyncs.length > 0 && !this._sessionSyncFlushScheduled) {
 				this._sessionSyncFlushScheduled = true;
 				requestAnimationFrame(() => {
 					this._sessionSyncFlushScheduled = false;
@@ -687,6 +682,10 @@ export class WsAgentAdapter {
 	}
 
 	private async applySessionSync(syncMsg: any) {
+		const syncSessionPath = syncMsg.__sessionPath as string | undefined;
+		const syncSessionNonce = syncMsg.__sessionNonce as number | undefined;
+		if (syncSessionPath !== this._sessionPath || syncSessionNonce !== this._sessionNonce) return;
+
 		const syncOp: SyncOp = {
 			op: syncMsg.op,
 			...(syncMsg.op === "full"
@@ -702,8 +701,10 @@ export class WsAgentAdapter {
 		}
 
 		const result = await applySyncOp(this._syncJson, this._syncHash, syncOp);
+		// Hashing is asynchronous. Never let an old session commit into a newer one.
+		if (syncSessionPath !== this._sessionPath || syncSessionNonce !== this._sessionNonce) return;
 		if (!result) {
-			// Hash verification failed — request a full sync by re-subscribing
+			// Hash verification failed — request a full sync by re-subscribing.
 			console.error("[ws-adapter] Sync verification failed, re-subscribing");
 			if (this._sessionPath) {
 				this._syncJson = "";
