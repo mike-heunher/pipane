@@ -202,6 +202,65 @@ describe("ProcessPool", () => {
 		});
 	});
 
+	describe("process events", () => {
+		it("delivers non-response events before resolving the RPC response", async () => {
+			const script = [
+				"let buffer = '';",
+				"process.stdin.setEncoding('utf8');",
+				"process.stdin.on('data', chunk => {",
+				"  buffer += chunk;",
+				"  const newline = buffer.indexOf('\\n');",
+				"  if (newline < 0) return;",
+				"  const command = JSON.parse(buffer.slice(0, newline));",
+				"  console.log('not-json');",
+				"  console.log(JSON.stringify({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'usage', statusText: '42%' }));",
+				"  console.log(JSON.stringify({ type: 'response', id: command.id, success: true, data: { ready: true } }));",
+				"});",
+			].join("\n");
+			const pool = new ProcessPool({ command: process.execPath, baseArgs: ["-e", script] }, {
+				maxProcesses: 1,
+				prewarmCount: 0,
+			});
+			const listener = vi.fn();
+			const unsubscribe = pool.subscribeEvents(listener);
+			const proc = pool.spawn(process.cwd());
+
+			try {
+				const response = await pool.sendRpc(proc, { type: "get_state" });
+				expect(response.data).toEqual({ ready: true });
+				expect(listener).toHaveBeenCalledTimes(1);
+				expect(listener).toHaveBeenCalledWith(proc, expect.objectContaining({
+					type: "extension_ui_request",
+					statusKey: "usage",
+					statusText: "42%",
+				}));
+			} finally {
+				unsubscribe();
+				proc.process.kill("SIGTERM");
+			}
+		});
+
+		it("supports unsubscribing and isolates listener failures", () => {
+			const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+			const { pool, injectProc } = createPoolWithMocks();
+			const proc = injectProc("/project-a", 1);
+			const failing = vi.fn(() => { throw new Error("boom"); });
+			const listener = vi.fn();
+			const unsubscribeFailing = pool.subscribeEvents(failing);
+			const unsubscribe = pool.subscribeEvents(listener);
+
+			(pool as any).emitEvent(proc, { type: "agent_start" });
+			expect(failing).toHaveBeenCalledOnce();
+			expect(listener).toHaveBeenCalledOnce();
+
+			unsubscribeFailing();
+			unsubscribe();
+			(pool as any).emitEvent(proc, { type: "agent_end" });
+			expect(listener).toHaveBeenCalledOnce();
+			consoleError.mockRestore();
+		});
+	});
+
 	describe("sendRpcChecked", () => {
 		it("throws on unsuccessful response", async () => {
 			const { pool, injectProc } = createPoolWithMocks();

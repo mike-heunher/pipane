@@ -47,6 +47,9 @@ export interface SpawnConfig {
 	env?: Record<string, string>;
 }
 
+export type RpcProcessEvent = Record<string, any>;
+export type RpcProcessEventListener = (proc: RpcProcess, event: RpcProcessEvent) => void;
+
 export class ProcessPool {
 	/** All live processes, keyed by cwd */
 	private pools = new Map<string, RpcProcess[]>();
@@ -56,6 +59,7 @@ export class ProcessPool {
 	private prewarmCount: number;
 	private rpcTimeout: number;
 	private onProcessExit?: (proc: RpcProcess) => void;
+	private eventListeners = new Set<RpcProcessEventListener>();
 
 	constructor(
 		spawnConfig: SpawnConfig,
@@ -75,6 +79,22 @@ export class ProcessPool {
 			count += procs.filter((p) => p.process.exitCode === null).length;
 		}
 		return count;
+	}
+
+	/** Subscribe to parsed non-response events from every process. */
+	subscribeEvents(listener: RpcProcessEventListener): () => void {
+		this.eventListeners.add(listener);
+		return () => this.eventListeners.delete(listener);
+	}
+
+	private emitEvent(proc: RpcProcess, event: RpcProcessEvent): void {
+		for (const listener of this.eventListeners) {
+			try {
+				listener(proc, event);
+			} catch (err) {
+				console.error(`[pool] pi#${proc.id} event listener failed:`, err);
+			}
+		}
 	}
 
 	/** Get all processes (for debug endpoint) */
@@ -145,7 +165,8 @@ export class ProcessPool {
 			recentStderr,
 		};
 
-		// Set up response handler
+		// Parse each stdout record once. Responses resolve RPC calls; all other
+		// records are available to lifetime-long event subscribers.
 		rl.on("line", (line: string) => {
 			let data: any;
 			try {
@@ -154,12 +175,17 @@ export class ProcessPool {
 				return;
 			}
 
-			if (data.type === "response" && data.id && proc.pendingRequests.has(data.id)) {
-				const pending = proc.pendingRequests.get(data.id)!;
-				proc.pendingRequests.delete(data.id);
-				proc.lastResponseTime = Date.now();
-				pending.resolve(data);
+			if (data.type === "response") {
+				if (data.id && proc.pendingRequests.has(data.id)) {
+					const pending = proc.pendingRequests.get(data.id)!;
+					proc.pendingRequests.delete(data.id);
+					proc.lastResponseTime = Date.now();
+					pending.resolve(data);
+				}
+				return;
 			}
+
+			this.emitEvent(proc, data);
 		});
 
 		child.on("error", (err) => {

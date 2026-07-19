@@ -937,14 +937,8 @@ export class WsHandler {
 			return;
 		}
 
-		const lineHandler = (line: string) => {
-			let data: any;
-			try {
-				data = JSON.parse(line);
-			} catch {
-				return;
-			}
-			if (data.type === "response" && data.id) return;
+		const eventHandler = (sourceProc: RpcProcess, data: Record<string, any>) => {
+			if (sourceProc !== proc) return;
 
 			// Guard: if the attached session was deleted (turn ended),
 			// this handler is stale — skip.
@@ -952,7 +946,7 @@ export class WsHandler {
 			if (currentSession !== sessionRef) return;
 
 			// Apply event to the in-memory attached session
-			let changed = currentSession.applyEvent(data);
+			let changed = currentSession.applyEvent(data as any);
 
 			// After auto-compaction, the pi process rewrites the JSONL and calls
 			// replaceMessages() internally.  SessionJsonl doesn't know about this,
@@ -987,8 +981,7 @@ export class WsHandler {
 			}
 		};
 
-		proc.rl.on("line", lineHandler);
-		const cleanup = () => proc.rl.removeListener("line", lineHandler);
+		const cleanup = this.pool.subscribeEvents(eventHandler);
 		this.procEventCleanup.set(proc, cleanup);
 	}
 }
