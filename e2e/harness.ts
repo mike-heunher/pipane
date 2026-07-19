@@ -141,7 +141,24 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 					{
 						id: "mock-model",
 						name: "Mock Model",
-						reasoning: false,
+						reasoning: true,
+						thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 4096,
+					},
+					{
+						id: "mock-sparse",
+						name: "Mock Sparse Reasoning",
+						reasoning: true,
+						thinkingLevelMap: {
+							minimal: null,
+							low: null,
+							medium: null,
+							xhigh: null,
+							max: "max",
+						},
 						input: ["text"],
 						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow: 128000,
@@ -165,6 +182,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 		JSON.stringify({
 			defaultProvider: "mock",
 			defaultModel: "mock-model",
+			defaultThinkingLevel: "medium",
 			autoCompaction: false,
 		}, null, 2),
 	);
@@ -197,6 +215,9 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 		PORT: String(pipanePort),
 		PI_CWD: projectDir,
 		PI_CODING_AGENT_DIR: agentDir,
+		// Exercise the exact runtime version pinned by pipane instead of whichever
+		// global `pi` happens to be first on the test runner's PATH.
+		PI_CLI: path.resolve(import.meta.dirname, "../node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
 		NODE_ENV: "production",
 		// Ensure pi uses our mock model
 		PI_MODEL: "mock/mock-model",

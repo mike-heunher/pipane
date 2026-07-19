@@ -260,6 +260,12 @@ describe("SessionJsonl", () => {
 			expect(toolResults).toHaveLength(0);
 		});
 
+		it("applies runtime thinking_level_changed events", () => {
+			const changed = session.applyEvent({ type: "thinking_level_changed", level: "max" } as any);
+			expect(changed).toBe(true);
+			expect(parse(session.json).thinkingLevel).toBe("max");
+		});
+
 		it("unknown events return false", () => {
 			const changed = session.applyEvent({ type: "unknown_event" } as any);
 			expect(changed).toBe(false);
@@ -277,6 +283,37 @@ describe("SessionJsonl", () => {
 
 			const expectedHash = await computeHash(session.json);
 			expect(hash2).toBe(expectedHash);
+		});
+	});
+
+	describe("setControlState", () => {
+		it("atomically updates effective model and thinking", () => {
+			const session = new SessionJsonl({ messages: [], model: null, thinkingLevel: "off" });
+			const version = session.version;
+
+			expect(session.setControlState(
+				{ provider: "openai-codex", modelId: "gpt-5.6-sol" },
+				"max",
+			)).toBe(true);
+			expect(session.version).toBe(version + 1);
+			expect(parse(session.json)).toMatchObject({
+				model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+				thinkingLevel: "max",
+			});
+		});
+
+		it("does not rebuild identical controls", () => {
+			const session = new SessionJsonl({
+				messages: [],
+				model: { provider: "openai", modelId: "gpt-5" },
+				thinkingLevel: "high",
+			});
+			const version = session.version;
+			expect(session.setControlState(
+				{ provider: "openai", modelId: "gpt-5" },
+				"high",
+			)).toBe(false);
+			expect(session.version).toBe(version);
 		});
 	});
 

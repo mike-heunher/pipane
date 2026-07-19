@@ -25,7 +25,7 @@
 		"developer-tools"
 	],
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22.19.0"
 	},
 	"bin": {
 		"pipane": "bin/pipane.js"
@@ -55,6 +55,9 @@
 		"prepack": "npm run build"
 	},
 	"dependencies": {
+		"@earendil-works/pi-agent-core": "0.80.10",
+		"@earendil-works/pi-ai": "0.80.10",
+		"@earendil-works/pi-coding-agent": "0.80.10",
 		"@mariozechner/mini-lit": "^0.2.0",
 		"@mariozechner/pi-agent-core": "0.55.3",
 		"@mariozechner/pi-ai": "0.55.3",

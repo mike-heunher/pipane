@@ -16,8 +16,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import {
 	parseSessionEntries,
 	buildSessionContext,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createHash } from "node:crypto";
 import { computeSyncOp, type SyncOp } from "../shared/jsonl-sync.js";
 
@@ -97,8 +97,25 @@ export class SessionJsonl {
 		this.rebuildJson();
 	}
 
-	// Expose model for ws-handler
+	// Expose controls for ws-handler reconciliation.
 	get model(): { provider: string; modelId: string } | null { return this._model; }
+	get thinkingLevel(): string { return this._thinkingLevel; }
+
+	/** Atomically replace the effective model/thinking state reported by pi. */
+	setControlState(
+		model: { provider: string; modelId: string } | null,
+		thinkingLevel: string,
+	): boolean {
+		const sameModel = this._model?.provider === model?.provider
+			&& this._model?.modelId === model?.modelId;
+		if (sameModel && this._thinkingLevel === thinkingLevel) return false;
+
+		this._model = model;
+		this._thinkingLevel = thinkingLevel;
+		this._version++;
+		this.rebuildJson();
+		return true;
+	}
 
 	// Expose messages for post-detach snapshot
 	get messages(): AgentMessage[] { return this._messages; }
@@ -121,7 +138,7 @@ export class SessionJsonl {
 	 * Returns true if state changed.
 	 */
 	applyEvent(event: AgentEvent): boolean {
-		switch (event.type) {
+		switch ((event as any).type) {
 			case "agent_start":
 				this._error = undefined;
 				this._streamMessage = null;
@@ -160,6 +177,15 @@ export class SessionJsonl {
 					return true;
 				}
 				return false;
+			}
+
+			case "thinking_level_changed": {
+				const level = (event as any).level ?? (event as any).thinkingLevel;
+				if (typeof level !== "string" || level === this._thinkingLevel) return false;
+				this._thinkingLevel = level;
+				this._version++;
+				this.rebuildJson();
+				return true;
 			}
 
 			case "tool_execution_start": {
@@ -307,9 +333,14 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 		thinkingLevel,
 		steeringQueue: [],
 	};
-	const json = JSON.stringify(state);
-	const hash = computeHashSync(json);
+	const { json, hash } = serializeSessionState(state);
 	return { json, hash, state };
+}
+
+/** Serialize a canonical session state using the wire protocol's hash format. */
+export function serializeSessionState(state: SessionState): { json: string; hash: string } {
+	const json = JSON.stringify(state);
+	return { json, hash: computeHashSync(json) };
 }
 
 /**

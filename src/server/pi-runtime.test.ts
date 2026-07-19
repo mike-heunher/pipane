@@ -25,7 +25,7 @@ describe("pi runtime checks", () => {
 		expect(ok).toBe(true);
 		expect(spawnSync).toHaveBeenCalledWith(
 			"npm",
-			["install", "-g", "@mariozechner/pi-coding-agent"],
+			["install", "-g", "@earendil-works/pi-coding-agent"],
 			expect.objectContaining({ stdio: "inherit" }),
 		);
 	});

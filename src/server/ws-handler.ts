@@ -16,18 +16,26 @@ import { copyFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { URL } from "node:url";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SessionLifecycle } from "./session-lifecycle.js";
 import { ProcessPool, type RpcProcess } from "./process-pool.js";
 import {
 	SessionJsonl,
 	readSessionFromDisk,
 	getSessionFileSize,
+	serializeSessionState,
 	type SessionState,
 } from "./session-jsonl.js";
 import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import type { LoadTraceStore } from "./load-trace-store.js";
+import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
+import type { ExtensionStatusMessage } from "../shared/ws-protocol.js";
+import {
+	extensionStatusSnapshot,
+	isValidExtensionStatusKey,
+	normalizeExtensionStatusText,
+} from "./extension-status.js";
 
 export interface WsHandlerOptions {
 	lifecycle: SessionLifecycle;
@@ -47,6 +55,14 @@ interface ClientState {
 	lastJson: string;
 	/** Client's current hash (for verifying diffs) */
 	lastHash: string;
+}
+
+interface TurnEventObserver {
+	started: Promise<void>;
+	ended: Promise<void>;
+	settled: Promise<void>;
+	hasStarted: () => boolean;
+	hasSettled: () => boolean;
 }
 
 let nextTurnId = 0;
@@ -70,7 +86,13 @@ export class WsHandler {
 	private clients = new Map<WebSocket, ClientState>();
 	private wsTraceIds = new Map<WebSocket, string>();
 	private busyProcesses = new Set<RpcProcess>();
+	/** Session paths whose control→prompt→reconcile transaction has one owner. */
+	private activePromptSessions = new Set<string>();
 	private procEventCleanup = new Map<RpcProcess, () => void>();
+	/** Last known extension statuses, retained while a session is detached. */
+	private extensionStatusesBySession = new Map<string, Map<string, string>>();
+	/** Statuses emitted while a process is switching to a not-yet-attached session. */
+	private pendingExtensionStatuses = new WeakMap<RpcProcess, Map<string, string>>();
 	/** Processes marked for graceful decommission after current turn ends. */
 	private decommissionProcesses = new Set<RpcProcess>();
 
@@ -98,6 +120,8 @@ export class WsHandler {
 		this.isRequestAuthorized = options.isRequestAuthorized;
 		this.traceStore = options.traceStore;
 		this.piAvailable = checkCommandAvailable(this.piLaunch.command);
+
+		this.pool.subscribeEvents((proc, event) => this.handleProcessEvent(proc, event));
 
 		this.lifecycle.subscribe((event) => {
 			switch (event.type) {
@@ -129,6 +153,86 @@ export class WsHandler {
 
 	get isPiAvailable(): boolean {
 		return this.piAvailable;
+	}
+
+	/** Idempotently clean up all session bookkeeping after an RPC process exits. */
+	handleProcessExit(proc: RpcProcess): void {
+		this.pendingExtensionStatuses.delete(proc);
+		const sessionPath = this.lifecycle.getAttachedSessionForProcess(proc);
+		if (sessionPath) {
+			console.log(`[pool] pi#${proc.id} crashed while attached to ${path.basename(sessionPath)} — marking done`);
+			this.activePromptSessions.delete(sessionPath);
+			// Without a final get_state, disk is safer than potentially stale
+			// in-memory controls (pi may have persisted a model change before crash).
+			this.releaseProcess(sessionPath, false);
+			return;
+		}
+
+		const cleanup = this.procEventCleanup.get(proc);
+		if (cleanup) cleanup();
+		this.procEventCleanup.delete(proc);
+		this.busyProcesses.delete(proc);
+		this.decommissionProcesses.delete(proc);
+	}
+
+	private handleProcessEvent(proc: RpcProcess, event: Record<string, any>): void {
+		if (event.type !== "extension_ui_request" || event.method !== "setStatus") return;
+		if (!isValidExtensionStatusKey(event.statusKey)) return;
+
+		const sessionPath = this.lifecycle.getAttachedSessionForProcess(proc);
+		const statuses = sessionPath
+			? (this.extensionStatusesBySession.get(sessionPath) ?? new Map<string, string>())
+			: this.pendingExtensionStatuses.get(proc);
+		if (!statuses) return;
+		if (sessionPath && !this.extensionStatusesBySession.has(sessionPath)) {
+			this.extensionStatusesBySession.set(sessionPath, statuses);
+		}
+
+		const previous = statuses.get(event.statusKey);
+		if (event.statusText === undefined) {
+			statuses.delete(event.statusKey);
+		} else if (typeof event.statusText === "string") {
+			const normalized = normalizeExtensionStatusText(event.statusText);
+			if (normalized) statuses.set(event.statusKey, normalized);
+			else statuses.delete(event.statusKey);
+		} else {
+			return;
+		}
+
+		if (sessionPath && previous !== statuses.get(event.statusKey)) {
+			this.pushExtensionStatusesToSubscribers(sessionPath);
+		}
+	}
+
+	private beginPendingExtensionStatusCapture(proc: RpcProcess, sessionPath?: string): void {
+		const existing = sessionPath ? this.extensionStatusesBySession.get(sessionPath) : undefined;
+		this.pendingExtensionStatuses.set(proc, new Map(existing ?? []));
+	}
+
+	private commitPendingExtensionStatuses(proc: RpcProcess, sessionPath: string): void {
+		const pending = this.pendingExtensionStatuses.get(proc);
+		this.pendingExtensionStatuses.delete(proc);
+		if (pending) this.extensionStatusesBySession.set(sessionPath, pending);
+		else if (!this.extensionStatusesBySession.has(sessionPath)) {
+			this.extensionStatusesBySession.set(sessionPath, new Map());
+		}
+		this.pushExtensionStatusesToSubscribers(sessionPath);
+	}
+
+	private makeExtensionStatusMessage(sessionPath: string): ExtensionStatusMessage {
+		return {
+			type: "extension_status",
+			sessionPath,
+			statuses: extensionStatusSnapshot(this.extensionStatusesBySession.get(sessionPath)),
+		};
+	}
+
+	private pushExtensionStatusesToSubscribers(sessionPath: string): void {
+		const message = JSON.stringify(this.makeExtensionStatusMessage(sessionPath));
+		for (const [ws, client] of this.clients) {
+			if (client.subscribedSession !== sessionPath || ws.readyState !== WebSocket.OPEN) continue;
+			ws.send(message);
+		}
 	}
 
 	private recordTrace(traceId: string | undefined, source: "frontend" | "backend", kind: "instant" | "span", name: string, durationMs?: number, attrs?: Record<string, any>) {
@@ -442,6 +546,9 @@ export class WsHandler {
 			}));
 		}
 
+		// Extension status is a separate, authoritative snapshot so reconnects
+		// and session switches replace rather than merge stale client state.
+		ws.send(JSON.stringify(this.makeExtensionStatusMessage(sessionPath)));
 		ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
 	}
 
@@ -452,6 +559,21 @@ export class WsHandler {
 		const turnId = makeTurnId();
 		debugTurn("prompt_start", { turnId, sessionPath, hasModel: !!command.model });
 
+		let turnLockPath: string | undefined;
+		if (sessionPath !== "__new__") {
+			// A client can race the running-status broadcast. If the process is
+			// already attached, preserve send-during-streaming semantics by steering.
+			if (this.lifecycle.getAttachedProcess(sessionPath)) {
+				await this.handleSteer(ws, id, command);
+				return;
+			}
+			if (this.activePromptSessions.has(sessionPath)) {
+				throw new Error("A turn is already starting for this session; retry as steering");
+			}
+			this.activePromptSessions.add(sessionPath);
+			turnLockPath = sessionPath;
+		}
+
 		let proc: RpcProcess | undefined;
 		try {
 			if (sessionPath === "__new__") {
@@ -459,15 +581,22 @@ export class WsHandler {
 				proc = await this.acquireProcess(cwd);
 				await this.pool.waitForReady(proc);
 
-				await this.pool.sendRpc(proc, { type: "new_session" });
+				// Ignore prewarm/default-session statuses. Only events caused by this
+				// replacement session are eligible for attribution to the new path.
+				this.beginPendingExtensionStatusCapture(proc);
+				await this.replacePiSession(proc, { type: "new_session" }, "new_session");
 				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
 				sessionPath = stateResp.data?.sessionFile;
 				if (!sessionPath) throw new Error("Failed to get session path from new session");
+				this.activePromptSessions.add(sessionPath);
+				turnLockPath = sessionPath;
 
 				this.busyProcesses.add(proc);
 
-				// Create attached session with empty state (new session)
+				// Create attached session with empty state (new session).
 				this.createAttachedSession(sessionPath);
+				this.lifecycle.attach(sessionPath, proc);
+				this.commitPendingExtensionStatuses(proc, sessionPath);
 
 				ws.send(JSON.stringify({
 					type: "session_attached",
@@ -475,41 +604,35 @@ export class WsHandler {
 					cwd,
 					firstMessage: command.message,
 				}));
-				this.lifecycle.attach(sessionPath, proc);
 			} else {
 				proc = await this.acquireForSession(sessionPath);
 			}
 
-			if (!command.model) {
-				throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
-			}
-			await this.pool.sendRpcChecked(proc, {
-				type: "set_model",
-				provider: command.model.provider,
-				modelId: command.model.modelId,
-			});
-			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-			const activeModel = modelState.data?.model;
-			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-			}
-
-			if (command.thinkingLevel) {
-				await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
-			}
-
-			this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
+			// Listen before model/thinking mutations so clamp events cannot be lost.
+			const turnObserver = this.setupTurnEventForwarding(proc, sessionPath, ws, turnId);
+			await this.applyRequestedControlState(proc, sessionPath, ws, command);
 
 			const promptCmd: any = { type: "prompt", message: command.message };
 			if (command.images?.length > 0) {
 				promptCmd.images = command.images;
 			}
 			const response = await this.pool.sendRpc(proc, promptCmd);
+			// before_agent_start hooks may switch controls after the pre-prompt
+			// transaction. Reflect that effective state while the turn is active.
+			await this.reconcileEffectiveControlState(proc, sessionPath);
+			// `prompt` acknowledges acceptance before the agent finishes. Keep the
+			// process attached through agent_settled, but do not hang on extension
+			// commands that handle a prompt without starting an agent run.
+			await this.waitForPromptSettlement(proc, turnObserver);
+			await this.reconcileEffectiveControlState(proc, sessionPath);
+			this.releaseProcess(sessionPath);
+
 			const enriched = { ...response };
 			if (!enriched.data) enriched.data = {};
 			enriched.data.newSessionPath = sessionPath;
 			ws.send(JSON.stringify({ ...enriched, id, command: "prompt" }));
 		} catch (err: any) {
+			if (proc) this.pendingExtensionStatuses.delete(proc);
 			if (proc && sessionPath && this.lifecycle.getAttachedProcess(sessionPath) === proc) {
 				const detailed = this.buildPromptFailureMessage(err, proc, sessionPath);
 				this.injectSessionError(sessionPath, detailed);
@@ -524,6 +647,8 @@ export class WsHandler {
 				if (proc.process.exitCode === null) proc.process.kill("SIGTERM");
 			}
 			throw err;
+		} finally {
+			if (turnLockPath) this.activePromptSessions.delete(turnLockPath);
 		}
 	}
 
@@ -671,44 +796,40 @@ export class WsHandler {
 		const proc = await this.acquireProcess(cwd);
 		await this.pool.waitForReady(proc);
 		this.busyProcesses.add(proc);
+		this.activePromptSessions.add(newSessionPath);
 
 		try {
-			// Create attached session, seeded from the forked file
+			// Create attached session, seeded from the forked file. Capture only
+			// statuses emitted while Pi switches to this fork.
 			this.createAttachedSession(newSessionPath);
+			this.beginPendingExtensionStatusCapture(proc);
+			await this.replacePiSession(
+				proc,
+				{ type: "switch_session", sessionPath: newSessionPath },
+				"switch_session",
+			);
+			this.lifecycle.attach(newSessionPath, proc);
+			this.commitPendingExtensionStatuses(proc, newSessionPath);
 
 			ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
-			this.lifecycle.attach(newSessionPath, proc);
-			await this.pool.sendRpc(proc, { type: "switch_session", sessionPath: newSessionPath });
-
-			if (!command.model) {
-				throw new Error(`BUG: fork_prompt command received without model. sessionPath=${newSessionPath}`);
-			}
-			await this.pool.sendRpcChecked(proc, {
-				type: "set_model",
-				provider: command.model.provider,
-				modelId: command.model.modelId,
-			});
-			const modelState = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-			const activeModel = modelState.data?.model;
-			if (!activeModel || activeModel.provider !== command.model.provider || activeModel.id !== command.model.modelId) {
-				throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
-			}
-
-			if (command.thinkingLevel) {
-				await this.pool.sendRpcChecked(proc, { type: "set_thinking_level", level: command.thinkingLevel });
-			}
 
 			const turnId = makeTurnId();
-			this.setupTurnEventForwarding(proc, newSessionPath, ws, turnId);
+			const turnObserver = this.setupTurnEventForwarding(proc, newSessionPath, ws, turnId);
+			await this.applyRequestedControlState(proc, newSessionPath, ws, command);
 
 			const promptCmd: any = { type: "prompt", message };
 			if (command.images?.length > 0) {
 				promptCmd.images = command.images;
 			}
 			await this.pool.sendRpc(proc, promptCmd);
+			await this.reconcileEffectiveControlState(proc, newSessionPath);
+			await this.waitForPromptSettlement(proc, turnObserver);
+			await this.reconcileEffectiveControlState(proc, newSessionPath);
+			this.releaseProcess(newSessionPath);
 
 			ws.send(JSON.stringify({ id, type: "response", command: "fork_prompt", success: true, data: { newSessionPath } }));
 		} catch (err: any) {
+			this.pendingExtensionStatuses.delete(proc);
 			if (this.lifecycle.getAttachedProcess(newSessionPath) === proc) {
 				const detailed = this.buildPromptFailureMessage(err, proc, newSessionPath);
 				this.injectSessionError(newSessionPath, detailed);
@@ -721,6 +842,8 @@ export class WsHandler {
 			this.busyProcesses.delete(proc);
 			if (proc.process.exitCode === null) proc.process.kill("SIGTERM");
 			throw err;
+		} finally {
+			this.activePromptSessions.delete(newSessionPath);
 		}
 	}
 
@@ -734,6 +857,108 @@ export class WsHandler {
 	}
 
 	// ── Internal helpers ─────────────────────────────────────────────────
+
+	private async replacePiSession(
+		proc: RpcProcess,
+		command: { type: "new_session" } | { type: "switch_session"; sessionPath: string },
+		operation: string,
+	): Promise<void> {
+		const response = await this.pool.sendRpcChecked(proc, command);
+		if (response.data?.cancelled) {
+			throw new Error(`Pi ${operation} was cancelled`);
+		}
+	}
+
+	/**
+	 * Apply a client's requested controls as one ordered RPC transaction, then
+	 * publish pi's effective (possibly clamped) state before the prompt starts.
+	 */
+	private async applyRequestedControlState(
+		proc: RpcProcess,
+		sessionPath: string,
+		ws: WebSocket,
+		command: any,
+	): Promise<any> {
+		if (!command.model) {
+			throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
+		}
+
+		let stateResponse = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		if (!modelsMatch(stateResponse.data?.model, command.model)) {
+			await this.pool.sendRpcChecked(proc, {
+				type: "set_model",
+				provider: command.model.provider,
+				modelId: command.model.modelId,
+			});
+		}
+		if (typeof command.thinkingLevel === "string") {
+			await this.pool.sendRpcChecked(proc, {
+				type: "set_thinking_level",
+				level: command.thinkingLevel,
+			});
+		}
+
+		// set_thinking_level has no effective value in its response and set_model
+		// may clamp effort, so get_state is the authoritative transaction result.
+		stateResponse = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		const activeModel = stateResponse.data?.model;
+		if (!modelsMatch(activeModel, command.model)) {
+			throw new Error(`Failed to switch model to ${command.model.provider}/${command.model.modelId}`);
+		}
+		this.publishEffectiveControlState(sessionPath, stateResponse.data);
+
+		if (ws.readyState === WebSocket.OPEN) {
+			ws.send(JSON.stringify({
+				type: "control_state",
+				sessionPath,
+				controlRevision: command.controlRevision,
+				model: activeModel,
+				thinkingLevel: stateResponse.data?.thinkingLevel ?? "off",
+			}));
+		}
+		return stateResponse.data;
+	}
+
+	private async waitForPromptSettlement(proc: RpcProcess, observer: TurnEventObserver): Promise<void> {
+		const state = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		// Pi >= 0.80 acknowledges a prompt only after preflight. Before that
+		// acknowledgement is written, a real agent run synchronously marks the
+		// session streaming; an extension-handled input remains idle and emits no
+		// agent lifecycle. This authoritative state check avoids timing guesses.
+		if (!state.data?.isStreaming && !observer.hasStarted()) return;
+
+		let removeExitListener = () => {};
+		const exited = new Promise<never>((_resolve, reject) => {
+			if (proc.process.exitCode !== null) {
+				reject(new Error(`pi process #${proc.id} exited before the turn settled`));
+				return;
+			}
+			const onExit = () => reject(new Error(`pi process #${proc.id} exited before the turn settled`));
+			proc.process.once("exit", onExit);
+			removeExitListener = () => proc.process.removeListener("exit", onExit);
+		});
+
+		try {
+			await Promise.race([observer.settled, exited]);
+		} finally {
+			removeExitListener();
+		}
+	}
+
+	/** Refresh controls after extensions or model clamps that happened in-turn. */
+	private async reconcileEffectiveControlState(proc: RpcProcess, sessionPath: string): Promise<void> {
+		const stateResponse = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+		this.publishEffectiveControlState(sessionPath, stateResponse.data);
+	}
+
+	private publishEffectiveControlState(sessionPath: string, rpcState: any): void {
+		const session = this.attachedSessions.get(sessionPath);
+		if (!session) return;
+		const model = toCompactModelRef(rpcState?.model ?? {});
+		if (!model) return;
+		const changed = session.setControlState(model, rpcState?.thinkingLevel ?? "off");
+		if (changed) this.pushUpdateToSubscribers(sessionPath, session);
+	}
 
 	private buildPromptFailureMessage(err: unknown, proc: RpcProcess, sessionPath: string): string {
 		const raw = err instanceof Error ? err.message : String(err);
@@ -800,14 +1025,30 @@ export class WsHandler {
 		const cwd = (sessionCwd && existsSync(sessionCwd)) ? sessionCwd : this.defaultCwd;
 		const proc = await this.acquireProcess(cwd);
 		this.busyProcesses.add(proc);
-		this.lifecycle.attach(sessionPath, proc);
 
-		// Create attached session if it doesn't exist yet
+		// Create attached session if it doesn't exist yet.
 		if (!this.attachedSessions.has(sessionPath)) {
 			this.createAttachedSession(sessionPath);
 		}
 
-		await this.pool.sendRpc(proc, { type: "switch_session", sessionPath });
+		// Keep the process unattributed while switch_session tears down its old
+		// extension runtime. The final pending snapshot is committed only after
+		// the target session has started, preventing cross-session status leaks.
+		this.beginPendingExtensionStatusCapture(proc, sessionPath);
+		try {
+			await this.replacePiSession(
+				proc,
+				{ type: "switch_session", sessionPath },
+				"switch_session",
+			);
+			this.lifecycle.attach(sessionPath, proc);
+			this.commitPendingExtensionStatuses(proc, sessionPath);
+		} catch (err) {
+			this.pendingExtensionStatuses.delete(proc);
+			this.busyProcesses.delete(proc);
+			this.attachedSessions.delete(sessionPath);
+			throw err;
+		}
 		console.log(`[ws] pi#${proc.id} attached to ${path.basename(sessionPath)} (cwd: ${cwd})`);
 		return proc;
 	}
@@ -826,7 +1067,12 @@ export class WsHandler {
 		while (true) {
 			const unavailable = this.getUnavailableProcesses();
 			const proc = this.pool.acquire(cwd, unavailable);
-			if (proc) return proc;
+			if (proc) {
+				// Reserve before yielding to the caller. Without this, two concurrent
+				// acquisitions can both receive the same idle process.
+				this.busyProcesses.add(proc);
+				return proc;
+			}
 
 			const evicted = this.pool.evictIdleDifferentCwd(cwd, unavailable);
 			if (evicted) {
@@ -842,9 +1088,11 @@ export class WsHandler {
 		}
 	}
 
-	private releaseProcess(sessionPath: string): void {
+	private releaseProcess(sessionPath: string, preserveLiveControls = true): void {
 		const proc = this.lifecycle.getAttachedProcess(sessionPath) as RpcProcess | undefined;
+		const liveState = this.attachedSessions.get(sessionPath)?.toState();
 		if (proc) {
+			this.pendingExtensionStatuses.delete(proc);
 			const cleanup = this.procEventCleanup.get(proc);
 			if (cleanup) {
 				cleanup();
@@ -852,13 +1100,21 @@ export class WsHandler {
 			}
 		}
 
-		// Delete the attached session — no more in-memory state
+		// Delete the attached session — no more in-memory state.
 		this.attachedSessions.delete(sessionPath);
-
 		this.lifecycle.detach(sessionPath);
 
-		// Read final state from disk and push to subscribers
-		const { json, hash } = readSessionFromDisk(sessionPath);
+		// Read final messages from disk, but preserve the just-reconciled controls.
+		// This prevents JSONL flush timing from regressing the detach snapshot.
+		const disk = readSessionFromDisk(sessionPath);
+		if (liveState) {
+			if (preserveLiveControls) {
+				disk.state.model = liveState.model;
+				disk.state.thinkingLevel = liveState.thinkingLevel;
+			}
+			disk.state.error = liveState.error;
+		}
+		const { json, hash } = serializeSessionState(disk.state);
 		this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
 		this.pushSnapshotToSubscribers(sessionPath, json, hash);
 
@@ -866,8 +1122,10 @@ export class WsHandler {
 			const shouldDecommission = this.decommissionProcesses.has(proc);
 			if (shouldDecommission) {
 				this.decommissionProcesses.delete(proc);
-				console.log(`[pool] Decommissioning pi#${proc.id} after completed turn`);
-				proc.process.kill("SIGTERM");
+				if (proc.process.exitCode === null) {
+					console.log(`[pool] Decommissioning pi#${proc.id} after completed turn`);
+					proc.process.kill("SIGTERM");
+				}
 			}
 			this.busyProcesses.delete(proc);
 		}
@@ -922,7 +1180,7 @@ export class WsHandler {
 		}
 	}
 
-	private setupTurnEventForwarding(proc: RpcProcess, sessionPath: string, ws: WebSocket, turnId: string): void {
+	private setupTurnEventForwarding(proc: RpcProcess, sessionPath: string, ws: WebSocket, turnId: string): TurnEventObserver {
 		const existingCleanup = this.procEventCleanup.get(proc);
 		if (existingCleanup) {
 			existingCleanup();
@@ -933,23 +1191,46 @@ export class WsHandler {
 		// the handler becomes a no-op because we check for it.
 		const sessionRef = this.attachedSessions.get(sessionPath);
 		if (!sessionRef) {
-			console.error(`[turn] setupTurnEventForwarding called but no SessionJsonl for ${sessionPath}`);
-			return;
+			throw new Error(`setupTurnEventForwarding called without attached state for ${sessionPath}`);
 		}
+
+		let hasStarted = false;
+		let hasSettled = false;
+		let resolveStarted!: () => void;
+		let resolveEnded!: () => void;
+		let resolveSettled!: () => void;
+		const started = new Promise<void>((resolve) => { resolveStarted = resolve; });
+		const ended = new Promise<void>((resolve) => { resolveEnded = resolve; });
+		const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
 
 		const eventHandler = (sourceProc: RpcProcess, data: Record<string, any>) => {
 			if (sourceProc !== proc) return;
+			// Extension UI is a distinct protocol. Never feed it into AgentEvent
+			// state or expose it as a lifecycle event to the browser.
+			if (data.type === "extension_ui_request") return;
 
 			// Guard: if the attached session was deleted (turn ended),
 			// this handler is stale — skip.
 			const currentSession = this.attachedSessions.get(sessionPath);
 			if (currentSession !== sessionRef) return;
 
-			// Apply event to the in-memory attached session
+			if (data.type === "agent_start") {
+				hasStarted = true;
+				resolveStarted();
+			}
+			if (data.type === "agent_settled") {
+				hasStarted = true;
+				hasSettled = true;
+				resolveStarted();
+				resolveEnded();
+				resolveSettled();
+			}
+
+			// Apply event to the in-memory attached session.
 			let changed = currentSession.applyEvent(data as any);
 
 			// After auto-compaction, the pi process rewrites the JSONL and calls
-			// replaceMessages() internally.  SessionJsonl doesn't know about this,
+			// replaceMessages() internally. SessionJsonl doesn't know about this,
 			// so re-read the session from disk to pick up the compacted state.
 			if (data.type === "auto_compaction_end" && data.result) {
 				const { state } = readSessionFromDisk(sessionPath);
@@ -957,7 +1238,7 @@ export class WsHandler {
 				changed = true;
 			}
 
-			// Side-channel raw event for UI hooks (canvas/jsonl), not state updates
+			// Side-channel raw event for UI hooks (canvas/jsonl), not state updates.
 			if (ws.readyState === WebSocket.OPEN) {
 				ws.send(JSON.stringify({ type: "agent_event", sessionPath, event: data }));
 			}
@@ -969,19 +1250,28 @@ export class WsHandler {
 				this.lifecycle.dequeueSteering(sessionPath, text);
 			}
 
-			// Push update to all subscribed clients
+			// Push update to all subscribed clients.
 			if (changed) {
 				this.pushUpdateToSubscribers(sessionPath, currentSession);
 			}
 
 			if (data.type === "agent_end") {
+				resolveEnded();
 				debugTurn("agent_end_received", { turnId, procId: proc.id, sessionPath });
 				this.lifecycle.clearSteering(sessionPath);
-				this.releaseProcess(sessionPath);
+				// The owning prompt handler releases only after its response and a
+				// final get_state, so effective controls cannot be lost at detach.
 			}
 		};
 
 		const cleanup = this.pool.subscribeEvents(eventHandler);
 		this.procEventCleanup.set(proc, cleanup);
+		return {
+			started,
+			ended,
+			settled,
+			hasStarted: () => hasStarted,
+			hasSettled: () => hasSettled,
+		};
 	}
 }

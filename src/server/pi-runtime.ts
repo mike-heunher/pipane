@@ -36,7 +36,7 @@ export function makePiNotFoundMessage(command: string): string {
 
 export async function installPiGlobal(deps: RuntimeDeps = {}): Promise<boolean> {
 	const spawnSync = deps.spawnSync ?? childSpawnSync;
-	const result = spawnSync("npm", ["install", "-g", "@mariozechner/pi-coding-agent"], {
+	const result = spawnSync("npm", ["install", "-g", "@earendil-works/pi-coding-agent"], {
 		stdio: "inherit",
 		env: process.env,
 	});
