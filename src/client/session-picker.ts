@@ -1247,7 +1247,7 @@ export class SessionPicker extends LitElement {
 						<span class="header-title">${this.burgerMenu?.isDevMode ? 'pipane · dev' : 'pipane'}</span>
 					</div>
 					<div class="header-right">
-						<button class="new-btn" @click=${this.openFolderPicker}>+ NEW</button>
+						<button class="new-btn" @click=${this.openFolderPicker}>NEW PROJECT</button>
 					</div>
 				</div>
 				<div class="search">
