@@ -21,6 +21,13 @@ const usage = (input: number, output: number, total: number) => ({
 const SESSION_PATH = "/tmp/mock-sessions/test-session.jsonl";
 const SESSION_PATH_2 = "/tmp/mock-sessions/other-project.jsonl";
 const SESSION_PATH_3 = "/tmp/mock-sessions/another-session.jsonl";
+const MOCK_MODEL = {
+	provider: "anthropic",
+	id: "claude-sonnet-4-20250514",
+	reasoning: true,
+	contextWindow: 200_000,
+	thinkingLevelMap: { xhigh: "xhigh" },
+};
 
 const sessions = [
 	{
@@ -166,15 +173,15 @@ function createMockServer(): Promise<{ server: Server; port: number; ws: () => W
 				const d = JSON.parse(raw.toString());
 				if (!d.id) return;
 				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
-				if (d.type === "get_default_model") resp({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
-				else if (d.type === "get_available_models") resp({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
+				if (d.type === "get_default_model") resp({ model: MOCK_MODEL, thinkingLevel: "off" });
+				else if (d.type === "get_available_models") resp({ models: [MOCK_MODEL] });
 				else if (d.type === "subscribe_session") {
 					// Mirror real server: push session_messages before the response
 					ws.send(JSON.stringify({
 						type: "session_messages",
 						sessionPath: d.sessionPath,
 						messages: toolMessages,
-						model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
+						model: MOCK_MODEL,
 						thinkingLevel: "off",
 					}));
 					resp({});
@@ -278,13 +285,30 @@ test.describe("UI visual goldens", () => {
 				statuses: { "provider-usage": "claude 18% 5h 42% wk" },
 			}));
 		}
-		const badge = page.locator(".extension-status-badge");
-		await expect(badge).toHaveText("claude 18% 5h 42% wk");
-		await expect(badge).toHaveAttribute("title", "claude 18% 5h 42% wk");
+		mock.ws()!.send(JSON.stringify({ type: "session_attached", sessionPath: SESSION_PATH }));
+		mock.ws()!.send(JSON.stringify({ type: "agent_start", sessionPath: SESSION_PATH }));
+
+		const quota = page.locator(".status-quota");
+		await expect(quota.locator(".status-quota-percent")).toHaveText("18%");
+		await expect(quota).toHaveAttribute("title", "claude 18% 5h 42% wk");
+		const thinking = page.locator(".thinking-icon-btn");
+		for (const level of ["minimal", "low", "medium", "high", "xhigh"]) {
+			await thinking.click();
+			await expect(thinking.locator(".thinking-level-label")).toHaveText(level);
+		}
+		await expect(page.locator(".status-stop-button")).toBeVisible();
+		await captureAndCompare(page.locator("message-editor"), "status-calm-default.png");
+		await page.evaluate(() => document.documentElement.classList.add("dark"));
+		await captureAndCompare(page.locator("message-editor"), "status-calm-default-dark.png");
+
+		await page.locator(".status-details > summary").click();
+		const fullStatus = page.locator(".extension-status-value");
+		await expect(fullStatus).toHaveText("claude 18% 5h 42% wk");
+		await page.locator(".status-details > summary").click();
 
 		await page.setViewportSize({ width: 390, height: 844 });
-		await expect(badge).toBeVisible();
-		const fitsViewport = await badge.evaluate((element) => {
+		await expect(quota).toBeVisible();
+		const fitsViewport = await quota.evaluate((element) => {
 			const rect = element.getBoundingClientRect();
 			return rect.left >= 0 && rect.right <= window.innerWidth;
 		});

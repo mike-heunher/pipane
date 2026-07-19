@@ -70,8 +70,30 @@ describe("owned message editor", () => {
 
 		const buttons = Array.from(editor.querySelectorAll("button"));
 		expect(buttons.length).toBeGreaterThanOrEqual(3);
-		buttons.at(-1)!.click();
+		editor.querySelector<HTMLButtonElement>(".status-stop-button")!.click();
 		expect(onAbort).toHaveBeenCalledOnce();
+	});
+
+	it("renders the calm status hierarchy below the prompt controls", async () => {
+		const editor = new MessageEditor();
+		editor.isStreaming = true;
+		editor.allowSendDuringStreaming = true;
+		editor.value = "steer";
+		editor.currentModel = { provider: "test", id: "gpt-5.6-sol" } as any;
+		document.body.appendChild(editor);
+		await editor.updateComplete;
+
+		const inputLine = editor.querySelector(".message-editor-input-line")!;
+		expect(inputLine.querySelector("textarea")).not.toBeNull();
+		expect(inputLine.querySelector<HTMLButtonElement>("[aria-label='Attach files']")?.disabled).toBe(false);
+		expect(inputLine.querySelector<HTMLButtonElement>(".message-send-action")?.disabled).toBe(false);
+
+		const status = editor.querySelector(".conversation-status-bar")!;
+		expect(status.compareDocumentPosition(inputLine) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+		expect(status.querySelector(".conversation-status-dot")?.getAttribute("title")).toBe("Agent working");
+		expect(status.querySelector(".status-model-name")?.textContent).toBe("gpt-5.6-sol");
+		expect(status.querySelector(".status-escape-hint")?.textContent).toBe("esc");
+		expect(status.querySelector(".status-stop-button")).not.toBeNull();
 	});
 
 	it("does not submit Enter while an IME composition is active", async () => {

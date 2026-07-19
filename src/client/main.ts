@@ -20,7 +20,6 @@ import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import {
-	THINKING_LEVEL_ORDER,
 	clampThinkingLevel,
 	getSupportedThinkingLevels,
 	type ThinkingLevelValue,
@@ -194,47 +193,109 @@ function renderThinkingButton() {
 		: clampThinkingLevel(model, rawLevel);
 	const idx = supportedLevels.indexOf(level);
 	const nextLevel = supportedLevels[(idx + 1) % supportedLevels.length];
-
-	// Six bars represent the global minimal→max scale. Models with capability
-	// holes still cycle only through their actually supported levels.
-	const filledBars = Math.max(0, THINKING_LEVEL_ORDER.indexOf(level));
-	const title = `Thinking: ${level} (click to switch to ${nextLevel})`;
+	const title = `Reasoning: ${level} (click to switch to ${nextLevel})`;
 
 	return html`
+		<span class="status-separator" aria-hidden="true">·</span>
 		<button
 			class="thinking-icon-btn"
 			@click=${() => agent?.setThinkingLevel(nextLevel)}
 			title=${title}
 		>
-			<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-				<path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/>
-				<path d="M9 21h6"/>
-			</svg>
 			<span class="thinking-level-label">${level}</span>
-			<span class="thinking-bars" data-level="${filledBars}">
-				${[0, 1, 2, 3, 4, 5].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
-			</span>
 		</button>
 	`;
 }
 
-function renderExtensionStatuses() {
-	if (!agent) return "";
-	const statuses = [...agent.extensionStatuses.entries()]
-		.sort(([left], [right]) => left.localeCompare(right));
-	if (statuses.length === 0) return "";
+type ProviderStatus = {
+	key: string;
+	text: string;
+	provider: string;
+	percent?: number;
+	percentLabel?: string;
+	windowLabel?: string;
+};
 
+type TokenUsageSummary = {
+	input: number;
+	output: number;
+	cost: number;
+	costLabel: string;
+	contextPercent?: number;
+	contextWindowLabel?: string;
+};
+
+function getProviderStatuses(): ProviderStatus[] {
+	if (!agent) return [];
+	return [...agent.extensionStatuses.entries()]
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([key, text]) => {
+			const match = text.match(/(\d+(?:\.\d+)?)%\s*(5h|wk|(?:\d+\s*)?[hdw])?/i);
+			const percent = match ? Math.max(0, Math.min(100, Number.parseFloat(match[1]))) : undefined;
+			return {
+				key,
+				text,
+				provider: text.trim().split(/\s+/)[0] || key,
+				percent: Number.isFinite(percent) ? percent : undefined,
+				percentLabel: match ? `${match[1]}%` : undefined,
+				windowLabel: match?.[2],
+			};
+		});
+}
+
+function renderProviderQuota(status: ProviderStatus | undefined) {
+	if (!status || status.percent == null || !status.percentLabel) return "";
 	return html`
-		<span class="extension-statuses" aria-label="Provider usage">
-			${statuses.map(([key, text]) => html`
-				<span class="extension-status-badge" data-status-key=${key} title=${text}>${text}</span>
-			`)}
+		<span class="status-quota" title=${status.text} aria-label=${`Provider usage ${status.percentLabel}${status.windowLabel ? ` in ${status.windowLabel}` : ""}`}>
+			<span class="status-quota-track" aria-hidden="true">
+				<span class="status-quota-fill" style=${`width: ${status.percent}%`}></span>
+			</span>
+			<span class="status-quota-percent">${status.percentLabel}</span>
 		</span>
 	`;
 }
 
+function renderStatusDetails(statuses: ProviderStatus[], usage: TokenUsageSummary | undefined) {
+	if (statuses.length === 0 && !usage) return "";
+	return html`
+		<details class="status-details">
+			<summary title="Session details">
+				<span>Details</span>
+				<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					<path d="m9 18 6-6-6-6"></path>
+				</svg>
+			</summary>
+			<div class="status-details-popover">
+				<div class="status-details-title">Session details</div>
+				${statuses.map((status) => html`
+					<div class="status-detail-row">
+						<span>${status.provider} usage</span>
+						<span class="extension-status-value" data-status-key=${status.key} title=${status.text}>${status.text}</span>
+					</div>
+				`)}
+				${usage ? html`
+					<div class="status-detail-row"><span>Input tokens</span><span>${usage.input.toLocaleString()}</span></div>
+					<div class="status-detail-row"><span>Output tokens</span><span>${usage.output.toLocaleString()}</span></div>
+					${usage.contextPercent != null && usage.contextWindowLabel
+						? html`<div class="status-detail-row"><span>Context</span><span>${usage.contextPercent}% / ${usage.contextWindowLabel}</span></div>`
+						: ""}
+					<div class="status-detail-row"><span>Session cost</span><span>${usage.costLabel}</span></div>
+				` : ""}
+			</div>
+		</details>
+	`;
+}
+
 function renderToolbarExtras() {
-	return html`${renderThinkingButton()}${renderExtensionStatuses()}${renderTokenUsage()}`;
+	const statuses = getProviderStatuses();
+	const usage = getShowTokenUsage() ? getTokenUsageSummary() : undefined;
+	return html`
+		${renderThinkingButton()}
+		<span class="status-toolbar-spacer" aria-hidden="true"></span>
+		${renderProviderQuota(statuses.find((status) => status.percent != null))}
+		${usage?.cost ? html`<span class="status-cost">${usage.costLabel}</span>` : ""}
+		${renderStatusDetails(statuses, usage)}
+	`;
 }
 
 async function openLocalSettingsModal() {
@@ -260,12 +321,11 @@ function fmtTok(n: number): string {
 	return `${Math.round(n / 1000)}k`;
 }
 
-// Cache the last rendered token usage HTML to avoid flicker during session switches
-// (messages are cleared to [] before the new session_sync arrives).
-let lastTokenUsageHtml: ReturnType<typeof html> | "" = "";
+// Cache the last summary to avoid flicker while a session switch briefly clears messages.
+let lastTokenUsageSummary: TokenUsageSummary | undefined;
 
-function renderTokenUsage() {
-	if (!agent) return "";
+function getTokenUsageSummary(): TokenUsageSummary | undefined {
+	if (!agent) return undefined;
 	const state = agent.state;
 	const totals = state.messages
 		.filter((m: any) => m.role === "assistant")
@@ -276,43 +336,36 @@ function renderTokenUsage() {
 				acc.output += usage.output ?? usage.outputTokens ?? 0;
 				acc.cacheRead += usage.cacheRead ?? 0;
 				acc.cacheWrite += usage.cacheWrite ?? 0;
-				acc.cost.total += usage.cost?.total ?? usage.totalCost ?? 0;
+				acc.cost += usage.cost?.total ?? usage.totalCost ?? 0;
 			}
 			return acc;
-		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
+		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 
 	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
 	if (!hasTotals) {
-		// During session switches messages are briefly empty (cleared before
-		// session_sync arrives).  If there are literally no messages yet, keep
-		// showing the cached value to avoid a visible flash.  Once messages
-		// actually arrive but have no usage, clear the cache properly.
-		if (state.messages.length === 0) return lastTokenUsageHtml;
-		lastTokenUsageHtml = "";
-		return "";
+		if (state.messages.length === 0) return lastTokenUsageSummary;
+		lastTokenUsageSummary = undefined;
+		return undefined;
 	}
 
-	// The last assistant message's totalTokens = current context size (input + output for that turn)
-	const assistantMsgs = state.messages.filter((m: any) => m.role === "assistant" && m.usage) as any[];
-	const lastUsage = assistantMsgs.length ? assistantMsgs[assistantMsgs.length - 1].usage : null;
-	const lastTotal = lastUsage?.totalTokens ?? 0;
-
 	try {
-		const parts: string[] = [];
+		const assistantMessages = state.messages.filter((m: any) => m.role === "assistant" && m.usage) as any[];
+		const lastUsage = assistantMessages.at(-1)?.usage;
+		const lastTotal = lastUsage?.totalTokens ?? 0;
 		const contextWindow = state.model?.contextWindow;
-		if (lastTotal && contextWindow) {
-			const pct = Math.round((lastTotal / contextWindow) * 100);
-			parts.push(`↑${pct}%/${fmtTok(contextWindow)}`);
-		} else if (totals.input) {
-			parts.push(`↑${fmtTok(totals.input)}`);
-		}
-		if (totals.output) parts.push(`↓${fmtTok(totals.output)}`);
-		if (totals.cost?.total) parts.push(`$${totals.cost.total < 0.01 ? totals.cost.total.toFixed(4) : totals.cost.total < 1 ? totals.cost.total.toFixed(3) : totals.cost.total.toFixed(2)}`);
-		if (!parts.length) { lastTokenUsageHtml = ""; return ""; }
-		lastTokenUsageHtml = html`<span class="input-token-usage">${parts.join(" ")}</span>`;
-		return lastTokenUsageHtml;
+		const costLabel = `$${totals.cost < 0.01 ? totals.cost.toFixed(4) : totals.cost < 1 ? totals.cost.toFixed(3) : totals.cost.toFixed(2)}`;
+
+		lastTokenUsageSummary = {
+			input: totals.input,
+			output: totals.output,
+			cost: totals.cost,
+			costLabel,
+			contextPercent: lastTotal && contextWindow ? Math.round((lastTotal / contextWindow) * 100) : undefined,
+			contextWindowLabel: contextWindow ? fmtTok(contextWindow) : undefined,
+		};
+		return lastTokenUsageSummary;
 	} catch {
-		return "";
+		return undefined;
 	}
 }
 

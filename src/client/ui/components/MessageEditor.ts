@@ -1,11 +1,10 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
-import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Select, type SelectOption } from "@mariozechner/mini-lit/dist/Select.js";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
-import { Brain, Loader2, Paperclip, Send, Sparkles, Square } from "lucide";
+import { Brain, Loader2, Paperclip, Send, Square } from "lucide";
 import { type Attachment, loadAttachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
 import "./AttachmentTile.js";
@@ -285,19 +284,72 @@ export class MessageEditor extends LitElement {
 						: ""
 				}
 
-				<textarea
-					class="w-full bg-transparent p-4 text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
-					placeholder=${i18n("Type a message...")}
-					rows="1"
-					style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"
-					.value=${this.value}
-					@input=${this.handleTextareaInput}
-					@keydown=${this.handleKeyDown}
-					@paste=${this.handlePaste}
-					${ref(this.textareaRef)}
-				></textarea>
+				<div class="message-editor-input-line">
+					<textarea
+						class="w-full bg-transparent p-4 text-foreground placeholder-muted-foreground outline-none resize-none overflow-y-auto"
+						placeholder=${i18n("Type a message...")}
+						rows="1"
+						style="max-height: 200px; field-sizing: content; min-height: 1lh; height: auto;"
+						.value=${this.value}
+						@input=${this.handleTextareaInput}
+						@keydown=${this.handleKeyDown}
+						@paste=${this.handlePaste}
+						${ref(this.textareaRef)}
+					></textarea>
+					<div class="message-editor-input-actions">
+						${supportsThinking && this.showThinkingSelector
+							? Select({
+								value: this.thinkingLevel,
+								placeholder: i18n("Off"),
+								options: [
+									{ value: "off", label: i18n("Off"), icon: icon(Brain, "sm") },
+									{ value: "minimal", label: i18n("Minimal"), icon: icon(Brain, "sm") },
+									{ value: "low", label: i18n("Low"), icon: icon(Brain, "sm") },
+									{ value: "medium", label: i18n("Medium"), icon: icon(Brain, "sm") },
+									{ value: "high", label: i18n("High"), icon: icon(Brain, "sm") },
+								] as SelectOption[],
+								onChange: (value: string) => {
+									const level = value as "off" | "minimal" | "low" | "medium" | "high";
+									this.thinkingLevel = level;
+									this.onThinkingChange?.(level);
+								},
+								width: "80px",
+								size: "sm",
+								variant: "ghost",
+								fitContent: true,
+							})
+							: ""}
+						${this.showAttachmentButton
+							? html`
+								<button
+									class="message-input-action"
+									@click=${this.handleAttachmentClick}
+									?disabled=${this.processingFiles}
+									title="Attach files"
+									aria-label="Attach files"
+								>
+									${this.processingFiles
+										? icon(Loader2, "sm", "animate-spin")
+										: icon(Paperclip, "sm")}
+								</button>
+							`
+							: ""}
+						${!this.isStreaming || this.allowSendDuringStreaming
+							? html`
+								<button
+									class="message-input-action message-send-action"
+									@click=${this.handleSend}
+									?disabled=${(!this.value.trim() && this.attachments.length === 0) || this.processingFiles}
+									title=${this.isStreaming ? "Send steering message" : "Send message"}
+									aria-label=${this.isStreaming ? "Send steering message" : "Send message"}
+								>
+									<span class="message-send-icon">${icon(Send, "sm")}</span>
+								</button>
+							`
+							: ""}
+					</div>
+				</div>
 
-				<!-- Hidden file input -->
 				<input
 					type="file"
 					${ref(this.fileInputRef)}
@@ -307,116 +359,40 @@ export class MessageEditor extends LitElement {
 					style="display: none;"
 				/>
 
-				<!-- Button Row -->
-				<div class="px-2 pb-2 flex items-center justify-between">
-					<!-- Left side - attachment and thinking selector -->
-					<div class="flex gap-2 items-center">
-						${
-							this.showAttachmentButton
-								? this.processingFiles
-									? html`
-										<div class="h-8 w-8 flex items-center justify-center">
-											${icon(Loader2, "sm", "animate-spin text-muted-foreground")}
-										</div>
-									`
-									: html`
-										${Button({
-											variant: "ghost",
-											size: "icon",
-											className: "h-8 w-8",
-											onClick: this.handleAttachmentClick,
-											children: icon(Paperclip, "sm"),
-										})}
-									`
-								: ""
-						}
-						${
-							supportsThinking && this.showThinkingSelector
-								? html`
-									${Select({
-										value: this.thinkingLevel,
-										placeholder: i18n("Off"),
-										options: [
-											{ value: "off", label: i18n("Off"), icon: icon(Brain, "sm") },
-											{ value: "minimal", label: i18n("Minimal"), icon: icon(Brain, "sm") },
-											{ value: "low", label: i18n("Low"), icon: icon(Brain, "sm") },
-											{ value: "medium", label: i18n("Medium"), icon: icon(Brain, "sm") },
-											{ value: "high", label: i18n("High"), icon: icon(Brain, "sm") },
-										] as SelectOption[],
-										onChange: (value: string) => {
-											const level = value as "off" | "minimal" | "low" | "medium" | "high";
-											this.thinkingLevel = level;
-											this.onThinkingChange?.(level);
-										},
-										width: "80px",
-										size: "sm",
-										variant: "ghost",
-										fitContent: true,
-									})}
-								`
-								: ""
-						}
-					</div>
-
-					<!-- Model selector and send on the right -->
-					<div class="flex gap-2 items-center">
-						${
-							this.showModelSelector && this.currentModel
-								? html`
-									${Button({
-										variant: "ghost",
-										size: "sm",
-										onClick: () => {
-											// Focus textarea before opening model selector so focus returns there
-											this.textareaRef.value?.focus();
-											// Wait for next frame to ensure focus takes effect before dialog captures it
-											requestAnimationFrame(() => {
-												this.onModelSelect?.();
-											});
-										},
-										children: html`
-											${icon(Sparkles, "sm")}
-											<span class="ml-1">${this.currentModel.id}</span>
-										`,
-										className: "h-8 text-xs truncate",
-									})}
-								`
-								: ""
-						}
-						${this.extraToolbarButtons?.() ?? ""}
-						${
-							this.isStreaming
-								? html`
-									${this.allowSendDuringStreaming
-										? Button({
-											variant: "ghost",
-											size: "icon",
-											onClick: this.handleSend,
-											disabled: (!this.value.trim() && this.attachments.length === 0) || this.processingFiles,
-											children: html`<span style="transform: translateY(3px) rotate(-45deg); display: inline-flex;">${icon(Send, "sm")}</span>`,
-											className: "h-8 w-8",
-										})
-										: ""}
-									${Button({
-										variant: "ghost",
-										size: "icon",
-										onClick: this.onAbort,
-										children: icon(Square, "sm"),
-										className: "h-8 w-8",
-									})}
-								`
-								: html`
-									${Button({
-										variant: "ghost",
-										size: "icon",
-										onClick: this.handleSend,
-										disabled: (!this.value.trim() && this.attachments.length === 0) || this.processingFiles,
-										children: html`<span style="transform: translateY(3px) rotate(-45deg); display: inline-flex;">${icon(Send, "sm")}</span>`,
-										className: "h-8 w-8",
-									})}
-								`
-						}
-					</div>
+				<div class="conversation-status-bar ${this.isStreaming ? "is-streaming" : ""}">
+					<span
+						class="conversation-status-dot"
+						title=${this.isStreaming ? "Agent working" : "Ready"}
+						aria-label=${this.isStreaming ? "Agent working" : "Ready"}
+					></span>
+					${this.showModelSelector && this.currentModel
+						? html`
+							<button
+								class="status-model-button"
+								@click=${() => {
+									this.textareaRef.value?.focus();
+									requestAnimationFrame(() => this.onModelSelect?.());
+								}}
+								title="Change model"
+							>
+								<span class="status-model-name">${this.currentModel.id}</span>
+							</button>
+						`
+						: ""}
+					${this.extraToolbarButtons?.() ?? ""}
+					${this.isStreaming
+						? html`
+							<span class="status-escape-hint" aria-hidden="true">esc</span>
+							<button
+								class="status-stop-button"
+								@click=${this.onAbort}
+								title="Stop generation (Esc)"
+								aria-label="Stop generation"
+							>
+								${icon(Square, "sm")}
+							</button>
+						`
+						: ""}
 				</div>
 			</div>
 		`;
