@@ -30,11 +30,14 @@ import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import type { LoadTraceStore } from "./load-trace-store.js";
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
-import type { ExtensionStatusMessage } from "../shared/ws-protocol.js";
+import type { ExtensionStatusMessage, ProviderUsageMessage } from "../shared/ws-protocol.js";
 import {
 	extensionStatusSnapshot,
 	isValidExtensionStatusKey,
 	normalizeExtensionStatusText,
+	providerForUsageStatus,
+	PROVIDER_USAGE_STATUS_KEY,
+	type ProviderUsageProvider,
 } from "./extension-status.js";
 
 export interface WsHandlerOptions {
@@ -91,6 +94,8 @@ export class WsHandler {
 	private procEventCleanup = new Map<RpcProcess, () => void>();
 	/** Last known extension statuses, retained while a session is detached. */
 	private extensionStatusesBySession = new Map<string, Map<string, string>>();
+	/** Latest successful account-wide subscription usage from any process. */
+	private providerUsageStatuses = new Map<ProviderUsageProvider, string>();
 	/** Statuses emitted while a process is switching to a not-yet-attached session. */
 	private pendingExtensionStatuses = new WeakMap<RpcProcess, Map<string, string>>();
 	/** Processes marked for graceful decommission after current turn ends. */
@@ -179,6 +184,21 @@ export class WsHandler {
 		if (event.type !== "extension_ui_request" || event.method !== "setStatus") return;
 		if (!isValidExtensionStatusKey(event.statusKey)) return;
 
+		const normalizedStatusText = typeof event.statusText === "string"
+			? normalizeExtensionStatusText(event.statusText)
+			: undefined;
+
+		// Subscription usage belongs to the provider account, not a conversation.
+		// Capture successful values even from unattached prewarm processes so a
+		// virtual or never-run conversation can still display the latest quota.
+		if (event.statusKey === PROVIDER_USAGE_STATUS_KEY && normalizedStatusText) {
+			const provider = providerForUsageStatus(normalizedStatusText);
+			if (provider && this.providerUsageStatuses.get(provider) !== normalizedStatusText) {
+				this.providerUsageStatuses.set(provider, normalizedStatusText);
+				this.broadcast(this.makeProviderUsageMessage());
+			}
+		}
+
 		const sessionPath = this.lifecycle.getAttachedSessionForProcess(proc);
 		const statuses = sessionPath
 			? (this.extensionStatusesBySession.get(sessionPath) ?? new Map<string, string>())
@@ -191,9 +211,8 @@ export class WsHandler {
 		const previous = statuses.get(event.statusKey);
 		if (event.statusText === undefined) {
 			statuses.delete(event.statusKey);
-		} else if (typeof event.statusText === "string") {
-			const normalized = normalizeExtensionStatusText(event.statusText);
-			if (normalized) statuses.set(event.statusKey, normalized);
+		} else if (normalizedStatusText !== undefined) {
+			if (normalizedStatusText) statuses.set(event.statusKey, normalizedStatusText);
 			else statuses.delete(event.statusKey);
 		} else {
 			return;
@@ -224,6 +243,13 @@ export class WsHandler {
 			type: "extension_status",
 			sessionPath,
 			statuses: extensionStatusSnapshot(this.extensionStatusesBySession.get(sessionPath)),
+		};
+	}
+
+	private makeProviderUsageMessage(): ProviderUsageMessage {
+		return {
+			type: "provider_usage",
+			statuses: Object.fromEntries(this.providerUsageStatuses),
 		};
 	}
 
@@ -336,6 +362,7 @@ export class WsHandler {
 			type: "init",
 			sessionStatuses: this.lifecycle.getAllStatuses(),
 			steeringQueues: this.lifecycle.getAllSteeringQueues(),
+			providerUsageStatuses: this.makeProviderUsageMessage().statuses,
 		}));
 
 		if (!this.piAvailable) {

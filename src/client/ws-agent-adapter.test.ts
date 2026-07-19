@@ -1175,7 +1175,52 @@ describe("WsAgentAdapter extension statuses", () => {
 		await switching;
 	});
 
-	it("clears for a virtual session but retains the last snapshot on detach", async () => {
+	it("keeps provider usage visible in empty and virtual conversations", async () => {
+		const sessionPath = "/tmp/sessions/empty-session.jsonl";
+		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+		simulateServerMessage({
+			type: "provider_usage",
+			statuses: {
+				anthropic: "claude 18% 5h 42% 7d",
+				codex: "codex 25% 5h 60% wk",
+			},
+		});
+		// An empty per-session snapshot must not erase the account-wide value.
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath,
+			statuses: {},
+		});
+		expect(adapter.extensionStatuses.get("provider-usage"))
+			.toBe("claude 18% 5h 42% 7d");
+
+		await adapter.newSession("/tmp");
+		expect(adapter.extensionStatuses.get("provider-usage"))
+			.toBe("claude 18% 5h 42% 7d");
+
+		(adapter as any)._state.model = { provider: "openai-codex", id: "gpt-5.6-sol" };
+		expect(adapter.extensionStatuses.get("provider-usage"))
+			.toBe("codex 25% 5h 60% wk");
+	});
+
+	it("restores provider usage from the initial server snapshot", () => {
+		const { adapter, simulateServerMessage } = createTestAdapter();
+		(adapter as any)._state.model = { provider: "anthropic", id: "claude-sonnet" };
+		const listener = vi.fn();
+		adapter.onExtensionStatusChange(listener);
+
+		simulateServerMessage({
+			type: "init",
+			sessionStatuses: {},
+			steeringQueues: {},
+			providerUsageStatuses: { anthropic: "claude 9% 5h" },
+		});
+
+		expect(adapter.extensionStatuses.get("provider-usage")).toBe("claude 9% 5h");
+		expect(listener).toHaveBeenCalledOnce();
+	});
+
+	it("clears session statuses for a virtual session but retains the last snapshot on detach", async () => {
 		const sessionPath = "/tmp/sessions/session-a.jsonl";
 		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 		simulateServerMessage({

@@ -336,7 +336,10 @@ describe("WsHandler extension statuses", () => {
 			sessionPath,
 			statuses: { "provider-usage": "codex 25% 5h" },
 		});
-		expect(other.send).not.toHaveBeenCalled();
+		expect(JSON.parse(other.send.mock.calls[0][0])).toEqual({
+			type: "provider_usage",
+			statuses: { codex: "codex 25% 5h" },
+		});
 
 		emitProcessEvent(proc, {
 			type: "extension_ui_request",
@@ -374,7 +377,41 @@ describe("WsHandler extension statuses", () => {
 		});
 	});
 
-	it("ignores prewarm statuses and commits only an explicit pending capture", () => {
+	it("captures provider usage from unattached prewarm processes and broadcasts it globally", () => {
+		const { handler, emitProcessEvent } = makeHandler(vi.fn());
+		const sent: any[] = [];
+		const ws = {
+			readyState: WebSocket.OPEN,
+			send: (raw: string) => sent.push(JSON.parse(raw)),
+		} as any;
+		handler.clients.set(ws, { subscribedSession: null });
+
+		emitProcessEvent({ id: 20 } as any, {
+			type: "extension_ui_request",
+			method: "setStatus",
+			statusKey: "provider-usage",
+			statusText: "\u001b[39m claude 18% 5h 42% 7d",
+		});
+
+		expect(handler.makeProviderUsageMessage()).toEqual({
+			type: "provider_usage",
+			statuses: { anthropic: "claude 18% 5h 42% 7d" },
+		});
+		expect(sent).toContainEqual(handler.makeProviderUsageMessage());
+		expect(handler.extensionStatusesBySession.size).toBe(0);
+
+		emitProcessEvent({ id: 21 } as any, {
+			type: "extension_ui_request",
+			method: "setStatus",
+			statusKey: "provider-usage",
+			statusText: "checking",
+		});
+		expect(handler.makeProviderUsageMessage().statuses).toEqual({
+			anthropic: "claude 18% 5h 42% 7d",
+		});
+	});
+
+	it("ignores prewarm session statuses and commits only an explicit pending capture", () => {
 		const { handler, emitProcessEvent, attachProcess } = makeHandler(vi.fn());
 		const sessionPath = "/tmp/new-session.jsonl";
 		const proc = { id: 2 } as any;

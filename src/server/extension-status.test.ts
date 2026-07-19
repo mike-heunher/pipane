@@ -3,6 +3,7 @@ import {
 	extensionStatusSnapshot,
 	isValidExtensionStatusKey,
 	normalizeExtensionStatusText,
+	providerForUsageStatus,
 } from "./extension-status.js";
 
 describe("extension status normalization", () => {
@@ -25,5 +26,13 @@ describe("extension status normalization", () => {
 	it("creates a complete serializable snapshot", () => {
 		expect(extensionStatusSnapshot(new Map([["usage", "codex 25% 5h"]])))
 			.toEqual({ usage: "codex 25% 5h" });
+	});
+
+	it("recognizes successful provider usage without treating transient text as usage", () => {
+		expect(providerForUsageStatus("codex 25% 5h")).toBe("codex");
+		expect(providerForUsageStatus("claude 18% 5h 42% 7d")).toBe("anthropic");
+		expect(providerForUsageStatus("Anthropic 10% extra")).toBe("anthropic");
+		expect(providerForUsageStatus("checking")).toBeUndefined();
+		expect(providerForUsageStatus("usage error")).toBeUndefined();
 	});
 });

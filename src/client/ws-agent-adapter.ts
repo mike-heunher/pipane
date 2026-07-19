@@ -23,6 +23,15 @@ import {
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
 
+const PROVIDER_USAGE_STATUS_KEY = "provider-usage";
+
+function usageProviderForModel(model: any): string | undefined {
+	const provider = typeof model?.provider === "string" ? model.provider.toLowerCase() : "";
+	if (provider.includes("codex")) return "codex";
+	if (provider.includes("anthropic")) return "anthropic";
+	return undefined;
+}
+
 export type SessionStatus = "virtual" | "detached" | "attached";
 
 export interface AdapterState {
@@ -108,6 +117,8 @@ export class WsAgentAdapter {
 	private _steeringQueueListeners = new Set<() => void>();
 	/** Complete extension status snapshot for the current session. */
 	private _extensionStatuses = new Map<string, string>();
+	/** Latest account-wide subscription usage, retained across conversations. */
+	private _providerUsageStatuses = new Map<string, string>();
 	private _extensionStatusListeners = new Set<() => void>();
 	/** Monotonic client-local revision for model/thinking edits. */
 	private _controlRevision = 0;
@@ -211,7 +222,15 @@ export class WsAgentAdapter {
 	}
 
 	get extensionStatuses(): ReadonlyMap<string, string> {
-		return this._extensionStatuses;
+		const statuses = new Map(this._extensionStatuses);
+		const modelProvider = usageProviderForModel(this._state.model);
+		const providerUsage = modelProvider
+			? this._providerUsageStatuses.get(modelProvider)
+			: this._providerUsageStatuses.size === 1
+				? this._providerUsageStatuses.values().next().value
+				: undefined;
+		if (providerUsage) statuses.set(PROVIDER_USAGE_STATUS_KEY, providerUsage);
+		return statuses;
 	}
 
 	onExtensionStatusChange(fn: () => void): () => void {
@@ -229,6 +248,19 @@ export class WsAgentAdapter {
 		if (next.size === this._extensionStatuses.size
 			&& [...next].every(([key, value]) => this._extensionStatuses.get(key) === value)) return;
 		this._extensionStatuses = next;
+		for (const fn of this._extensionStatusListeners) fn();
+	}
+
+	private replaceProviderUsageStatuses(statuses: unknown): void {
+		const next = new Map<string, string>();
+		if (statuses && typeof statuses === "object" && !Array.isArray(statuses)) {
+			for (const [key, value] of Object.entries(statuses)) {
+				if (typeof value === "string") next.set(key, value);
+			}
+		}
+		if (next.size === this._providerUsageStatuses.size
+			&& [...next].every(([key, value]) => this._providerUsageStatuses.get(key) === value)) return;
+		this._providerUsageStatuses = next;
 		for (const fn of this._extensionStatusListeners) fn();
 	}
 
@@ -550,10 +582,13 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Init message with session statuses from server
+		// Init message with server-wide status snapshots.
 		if (data.type === "init") {
 			if (data.sessionStatuses) {
 				this.setAllSessionStatuses(data.sessionStatuses);
+			}
+			if (data.providerUsageStatuses !== undefined) {
+				this.replaceProviderUsageStatuses(data.providerUsageStatuses);
 			}
 			// Restore steering queues from server
 			if (data.steeringQueues) {
@@ -571,6 +606,12 @@ export class WsAgentAdapter {
 			if (data.sessionPath && data.status) {
 				this.setGlobalSessionStatus(data.sessionPath, data.status);
 			}
+			return;
+		}
+
+		// Account-wide subscription usage is independent of the active session.
+		if (data.type === "provider_usage") {
+			this.replaceProviderUsageStatuses(data.statuses);
 			return;
 		}
 

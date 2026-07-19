@@ -1,6 +1,9 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionStatuses } from "../shared/ws-protocol.js";
 
+export const PROVIDER_USAGE_STATUS_KEY = "provider-usage";
+export type ProviderUsageProvider = "anthropic" | "codex";
+
 const MAX_STATUS_KEY_LENGTH = 128;
 const MAX_STATUS_TEXT_LENGTH = 512;
 const KEY_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
@@ -24,4 +27,11 @@ export function normalizeExtensionStatusText(value: string): string {
 
 export function extensionStatusSnapshot(statuses: ReadonlyMap<string, string> | undefined): ExtensionStatuses {
 	return Object.fromEntries(statuses ?? []);
+}
+
+/** Identify successful pi-usage status text; transient states such as "checking" do not match. */
+export function providerForUsageStatus(text: string): ProviderUsageProvider | undefined {
+	if (/^codex(?:\s|$)/i.test(text)) return "codex";
+	if (/^(?:anthropic|claude)(?:\s|$)/i.test(text)) return "anthropic";
+	return undefined;
 }
