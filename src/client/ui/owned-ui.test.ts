@@ -92,8 +92,13 @@ describe("owned message editor", () => {
 		expect(status.compareDocumentPosition(inputLine) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
 		expect(status.querySelector(".conversation-status-dot")?.getAttribute("title")).toBe("Agent working");
 		expect(status.querySelector(".status-model-name")?.textContent).toBe("gpt-5.6-sol");
+		expect(status.querySelector(".status-model-button")?.getAttribute("title"))
+			.toBe("Change model (currently gpt-5.6-sol)");
 		expect(status.querySelector(".status-escape-hint")?.textContent).toBe("esc");
-		expect(status.querySelector(".status-stop-button")).not.toBeNull();
+		expect(status.querySelector(".status-escape-hint")?.getAttribute("title"))
+			.toBe("Press Esc to stop generation");
+		expect(status.querySelector(".status-stop-button")?.getAttribute("title"))
+			.toBe("Stop generation (Esc)");
 	});
 
 	it("does not submit Enter while an IME composition is active", async () => {

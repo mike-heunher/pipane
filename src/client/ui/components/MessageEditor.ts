@@ -373,7 +373,8 @@ export class MessageEditor extends LitElement {
 									this.textareaRef.value?.focus();
 									requestAnimationFrame(() => this.onModelSelect?.());
 								}}
-								title="Change model"
+								title=${`Change model (currently ${this.currentModel.id})`}
+								aria-label=${`Change model (currently ${this.currentModel.id})`}
 							>
 								<span class="status-model-name">${this.currentModel.id}</span>
 							</button>
@@ -382,7 +383,7 @@ export class MessageEditor extends LitElement {
 					${this.extraToolbarButtons?.() ?? ""}
 					${this.isStreaming
 						? html`
-							<span class="status-escape-hint" aria-hidden="true">esc</span>
+							<span class="status-escape-hint" title="Press Esc to stop generation" aria-hidden="true">esc</span>
 							<button
 								class="status-stop-button"
 								@click=${this.onAbort}

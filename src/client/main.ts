@@ -201,6 +201,7 @@ function renderThinkingButton() {
 			class="thinking-icon-btn"
 			@click=${() => agent?.setThinkingLevel(nextLevel)}
 			title=${title}
+			aria-label=${title}
 		>
 			<span class="thinking-level-label">${level}</span>
 		</button>
@@ -210,10 +211,10 @@ function renderThinkingButton() {
 type ProviderStatus = {
 	key: string;
 	text: string;
-	provider: string;
+	providerLabel: string;
 	percent?: number;
 	percentLabel?: string;
-	windowLabel?: string;
+	usageTooltip: string;
 };
 
 type TokenUsageSummary = {
@@ -225,20 +226,46 @@ type TokenUsageSummary = {
 	contextWindowLabel?: string;
 };
 
+function providerDisplayName(provider: string): string {
+	return provider.length > 0
+		? `${provider[0].toUpperCase()}${provider.slice(1)}`
+		: "Provider";
+}
+
+function usageWindowDescription(windowLabel: string | undefined): string | undefined {
+	if (!windowLabel) return undefined;
+	const normalized = windowLabel.toLowerCase().replace(/\s+/g, "");
+	if (normalized === "5h") return "5-hour window";
+	if (normalized === "wk") return "weekly window";
+	const match = normalized.match(/^(\d+)([hdw])$/);
+	if (!match) return `${windowLabel} window`;
+	const unit = match[2] === "h" ? "hour" : match[2] === "d" ? "day" : "week";
+	return `${match[1]}-${unit} window`;
+}
+
 function getProviderStatuses(): ProviderStatus[] {
 	if (!agent) return [];
 	return [...agent.extensionStatuses.entries()]
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([key, text]) => {
-			const match = text.match(/(\d+(?:\.\d+)?)%\s*(5h|wk|(?:\d+\s*)?[hdw])?/i);
+			const matches = [...text.matchAll(/(\d+(?:\.\d+)?)%\s*(5h|wk|(?:\d+\s*)?[hdw])?/gi)];
+			const match = matches[0];
 			const percent = match ? Math.max(0, Math.min(100, Number.parseFloat(match[1]))) : undefined;
+			const provider = text.trim().split(/\s+/)[0] || key;
+			const providerLabel = providerDisplayName(provider);
+			const usageSummary = matches.map((usageMatch) => {
+				const windowDescription = usageWindowDescription(usageMatch[2]);
+				return `${usageMatch[1]}%${windowDescription ? ` in the ${windowDescription}` : ""}`;
+			}).join("; ");
 			return {
 				key,
 				text,
-				provider: text.trim().split(/\s+/)[0] || key,
+				providerLabel,
 				percent: Number.isFinite(percent) ? percent : undefined,
 				percentLabel: match ? `${match[1]}%` : undefined,
-				windowLabel: match?.[2],
+				usageTooltip: usageSummary
+					? `${providerLabel} quota used: ${usageSummary}.`
+					: `${providerLabel} status: ${text}`,
 			};
 		});
 }
@@ -246,11 +273,11 @@ function getProviderStatuses(): ProviderStatus[] {
 function renderProviderQuota(status: ProviderStatus | undefined) {
 	if (!status || status.percent == null || !status.percentLabel) return "";
 	return html`
-		<span class="status-quota" title=${status.text} aria-label=${`Provider usage ${status.percentLabel}${status.windowLabel ? ` in ${status.windowLabel}` : ""}`}>
+		<span class="status-quota" title=${status.usageTooltip} aria-label=${status.usageTooltip}>
 			<span class="status-quota-track" aria-hidden="true">
 				<span class="status-quota-fill" style=${`width: ${status.percent}%`}></span>
 			</span>
-			<span class="status-quota-percent">${status.percentLabel}</span>
+			<span class="status-quota-percent">${status.percentLabel} used</span>
 		</span>
 	`;
 }
@@ -259,7 +286,7 @@ function renderStatusDetails(statuses: ProviderStatus[], usage: TokenUsageSummar
 	if (statuses.length === 0 && !usage) return "";
 	return html`
 		<details class="status-details">
-			<summary title="Session details">
+			<summary title="Show session details" aria-label="Show session details">
 				<span>Details</span>
 				<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 					<path d="m9 18 6-6-6-6"></path>
@@ -269,8 +296,8 @@ function renderStatusDetails(statuses: ProviderStatus[], usage: TokenUsageSummar
 				<div class="status-details-title">Session details</div>
 				${statuses.map((status) => html`
 					<div class="status-detail-row">
-						<span>${status.provider} usage</span>
-						<span class="extension-status-value" data-status-key=${status.key} title=${status.text}>${status.text}</span>
+						<span>${status.providerLabel} quota (used)</span>
+						<span class="extension-status-value" data-status-key=${status.key} title=${status.usageTooltip}>${status.text}</span>
 					</div>
 				`)}
 				${usage ? html`
@@ -293,7 +320,9 @@ function renderToolbarExtras() {
 		${renderThinkingButton()}
 		<span class="status-toolbar-spacer" aria-hidden="true"></span>
 		${renderProviderQuota(statuses.find((status) => status.percent != null))}
-		${usage?.cost ? html`<span class="status-cost">${usage.costLabel}</span>` : ""}
+		${usage?.cost ? html`
+			<span class="status-cost" title=${`Session cost: ${usage.costLabel}`} aria-label=${`Session cost: ${usage.costLabel}`}>${usage.costLabel}</span>
+		` : ""}
 		${renderStatusDetails(statuses, usage)}
 	`;
 }

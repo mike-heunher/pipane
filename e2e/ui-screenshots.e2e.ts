@@ -289,13 +289,26 @@ test.describe("UI visual goldens", () => {
 		mock.ws()!.send(JSON.stringify({ type: "agent_start", sessionPath: SESSION_PATH }));
 
 		const quota = page.locator(".status-quota");
-		await expect(quota.locator(".status-quota-percent")).toHaveText("18%");
-		await expect(quota).toHaveAttribute("title", "claude 18% 5h 42% wk");
+		await expect(quota.locator(".status-quota-percent")).toHaveText("18% used");
+		await expect(quota).toHaveAttribute(
+			"title",
+			"Claude quota used: 18% in the 5-hour window; 42% in the weekly window.",
+		);
+		await expect(page.locator(".status-model-button"))
+			.toHaveAttribute("title", "Change model (currently claude-sonnet-4-20250514)");
+		await expect(page.locator(".status-cost")).toHaveAttribute("title", "Session cost: $0.116");
+		await expect(page.locator(".status-details > summary"))
+			.toHaveAttribute("title", "Show session details");
+		await expect(page.locator(".status-escape-hint"))
+			.toHaveAttribute("title", "Press Esc to stop generation");
+		await expect(page.locator(".status-stop-button"))
+			.toHaveAttribute("title", "Stop generation (Esc)");
 		const thinking = page.locator(".thinking-icon-btn");
 		for (const level of ["minimal", "low", "medium", "high", "xhigh"]) {
 			await thinking.click();
 			await expect(thinking.locator(".thinking-level-label")).toHaveText(level);
 		}
+		await expect(thinking).toHaveAttribute("title", "Reasoning: xhigh (click to switch to off)");
 		await expect(page.locator(".status-stop-button")).toBeVisible();
 		await captureAndCompare(page.locator("message-editor"), "status-calm-default.png");
 		await page.evaluate(() => document.documentElement.classList.add("dark"));
