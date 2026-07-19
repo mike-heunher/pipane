@@ -28,6 +28,20 @@ If `pi` is missing, install it like this:
 npm install -g @mariozechner/pi-coding-agent
 ```
 
+### Explicit local dev deployment
+
+On the pipane LXC, deploy the current working tree to the separate dev instance with:
+
+```bash
+npm run deploy:dev
+```
+
+This builds a release, atomically advances the `pipane-dev` systemd service, and verifies it on port `8223`. It does not change the production instance on port `8222`; source edits only become visible after the next explicit deployment.
+
+```bash
+journalctl -u pipane-dev -f
+```
+
 ---
 
 ## What you get

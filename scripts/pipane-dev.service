@@ -1,0 +1,17 @@
+[Unit]
+Description=Pipane explicit local development deployment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root
+EnvironmentFile=/etc/pipane.env
+Environment="PATH=/root/.local/bin:/root/.pi/agent/npm/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/usr/bin/env PORT=8223 NODE_ENV=production PI_CWD=/root /usr/bin/node /opt/pipane-dev/current/bin/pipane.js --verbose
+Restart=always
+RestartSec=5
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
