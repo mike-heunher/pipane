@@ -23,7 +23,7 @@ import { hostname } from "node:os";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { resolvePiLaunch } from "./pi-launch.js";
 import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
@@ -33,6 +33,7 @@ import { WsHandler } from "./ws-handler.js";
 import { LoadTraceStore } from "./load-trace-store.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { fetchLatestVersion, compareSemver } from "./update-check.js";
+import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -61,6 +62,7 @@ const PI_LAUNCH = resolvePiLaunch(PI_CLI);
 const PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
 const PI_MAX_PROCESSES = parseInt(process.env.PI_MAX_PROCESSES || "24", 10);
 const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
+const USAGE_EXTENSION_ENABLED = process.env.PIPANE_USAGE_EXTENSION !== "0";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -223,14 +225,18 @@ registerRestApi(app, {
 
 const lifecycle = new SessionLifecycle();
 
-// Resolve canvas extension path relative to project root
+// Resolve bundled extension entrypoints once at startup.
 const canvasExtension = path.resolve(__dirname, "../../../extensions/canvas.ts");
+const usageExtension = resolveUsageExtensionPath();
 
 const pool = new ProcessPool(
 	{
 		command: PI_LAUNCH.command,
 		baseArgs: () => {
 			const args = [...PI_LAUNCH.baseArgs, "--mode", "rpc"];
+			if (USAGE_EXTENSION_ENABLED) {
+				args.push("-e", usageExtension);
+			}
 			if (localSettingsStore.canvasEnabled) {
 				args.push("-e", canvasExtension);
 			}
@@ -241,12 +247,8 @@ const pool = new ProcessPool(
 		maxProcesses: PI_MAX_PROCESSES,
 		prewarmCount: PI_PREWARM_COUNT,
 		onProcessExit: (proc) => {
-			// If the process was attached to a session, handle the crash
-			const sessionPath = lifecycle.getAttachedSessionForProcess(proc);
-			if (sessionPath) {
-				console.log(`[pool] pi#${proc.id} crashed while attached to ${path.basename(sessionPath)} — marking done`);
-				lifecycle.crash(sessionPath);
-			}
+			// WsHandler owns attached-session snapshots and listener bookkeeping.
+			wsHandler.handleProcessExit(proc);
 			// Replenish the pool for the default cwd
 			if (PI_AVAILABLE) {
 				pool.prewarm(PI_CWD);

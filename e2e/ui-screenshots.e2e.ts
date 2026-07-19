@@ -267,6 +267,30 @@ test.describe("UI visual goldens", () => {
 		await captureAndCompare(editor, "input-with-text.png");
 	});
 
+	test("provider usage status", async ({ page }) => {
+		await page.goto(`http://localhost:${mock.port}`);
+		await openMainSession(page);
+
+		for (const sessionPath of [SESSION_PATH, SESSION_PATH_2, SESSION_PATH_3]) {
+			mock.ws()!.send(JSON.stringify({
+				type: "extension_status",
+				sessionPath,
+				statuses: { "provider-usage": "claude 18% 5h 42% wk" },
+			}));
+		}
+		const badge = page.locator(".extension-status-badge");
+		await expect(badge).toHaveText("claude 18% 5h 42% wk");
+		await expect(badge).toHaveAttribute("title", "claude 18% 5h 42% wk");
+
+		await page.setViewportSize({ width: 390, height: 844 });
+		await expect(badge).toBeVisible();
+		const fitsViewport = await badge.evaluate((element) => {
+			const rect = element.getBoundingClientRect();
+			return rect.left >= 0 && rect.right <= window.innerWidth;
+		});
+		expect(fitsViewport).toBe(true);
+	});
+
 	test("steering queue", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
 		await openMainSession(page);

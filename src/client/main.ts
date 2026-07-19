@@ -218,8 +218,23 @@ function renderThinkingButton() {
 	`;
 }
 
+function renderExtensionStatuses() {
+	if (!agent) return "";
+	const statuses = [...agent.extensionStatuses.entries()]
+		.sort(([left], [right]) => left.localeCompare(right));
+	if (statuses.length === 0) return "";
+
+	return html`
+		<span class="extension-statuses" aria-label="Provider usage">
+			${statuses.map(([key, text]) => html`
+				<span class="extension-status-badge" data-status-key=${key} title=${text}>${text}</span>
+			`)}
+		</span>
+	`;
+}
+
 function renderToolbarExtras() {
-	return html`${renderThinkingButton()}${renderTokenUsage()}`;
+	return html`${renderThinkingButton()}${renderExtensionStatuses()}${renderTokenUsage()}`;
 }
 
 async function openLocalSettingsModal() {
@@ -661,6 +676,10 @@ async function initApp() {
 
 	// Status change
 	agent.onStatusChange(() => {
+		renderApp();
+	});
+
+	agent.onExtensionStatusChange(() => {
 		renderApp();
 	});
 

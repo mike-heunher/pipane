@@ -18,6 +18,8 @@ Walkthrough (GIF):
 
 ## Quickstarts
 
+Requires Node.js 22.19 or newer, matching the bundled Pi runtime and extension APIs.
+
 ```bash
 npm install -g pipane
 ```
@@ -25,7 +27,7 @@ npm install -g pipane
 If `pi` is missing, install it like this:
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 ```
 
 ### Explicit local dev deployment
@@ -49,7 +51,10 @@ journalctl -u pipane-dev -f
 - Session list and clean UI for `pi`
 - Real-time tool calls and streaming output, nicely crafted
 - A nice session picker
+- ChatGPT/Codex and Claude subscription usage in the input toolbar
 - A large amount high quality "vibe-code".
+
+Provider usage is supplied by the bundled `@sreetej510/pi-usage` Pi extension and uses Pi's existing authentication. Set `PIPANE_USAGE_EXTENSION=0` when starting pipane to disable it.
 
 ---
 

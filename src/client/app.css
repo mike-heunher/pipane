@@ -464,6 +464,34 @@ markdown-block pre code {
 	background: var(--primary, #2563eb);
 }
 
+/* ── Extension/provider status inline in toolbar ───────────────── */
+
+.extension-statuses {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	min-width: 0;
+	max-width: 14rem;
+	overflow: hidden;
+}
+
+.extension-status-badge {
+	display: inline-block;
+	min-width: 0;
+	max-width: 12rem;
+	padding: 0.15rem 0.4rem;
+	border: 1px solid color-mix(in srgb, var(--border, #d1d5db) 75%, transparent);
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--muted, #f3f4f6) 75%, transparent);
+	color: var(--muted-foreground, #6b7280);
+	font-size: 0.66rem;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.1;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 /* ── Token usage inline in toolbar ──────────────────────────────── */
 
 .input-token-usage {
@@ -475,6 +503,18 @@ markdown-block pre code {
 /* ── Mobile: sidebar overlay + side panels full-width ──────────── */
 
 @media (max-width: 768px) {
+	.extension-statuses {
+		max-width: 8rem;
+	}
+
+	.extension-status-badge {
+		max-width: 8rem;
+	}
+
+	.extension-status-badge:nth-child(n + 2) {
+		display: none;
+	}
+
 	/* Hide model name text in the input toolbar, keep only the icon */
 	message-editor .h-8.text-xs.truncate > .ml-1 {
 		display: none;
