@@ -8,7 +8,7 @@ import type { Express } from "express";
 import { existsSync, readFileSync, readdirSync, watchFile } from "node:fs";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
-import { buildSessionContext, parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import type { LoadTraceStore } from "./load-trace-store.js";
 import { SessionIndex } from "./session-index.js";
 import { LocalSettingsStore } from "./local-settings.js";

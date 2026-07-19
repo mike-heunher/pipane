@@ -432,6 +432,13 @@ markdown-block pre code {
 	color: var(--foreground, #111);
 }
 
+.thinking-level-label {
+	font-size: 0.68rem;
+	font-variant-numeric: tabular-nums;
+	line-height: 1;
+	text-transform: lowercase;
+}
+
 .thinking-bars {
 	display: inline-flex;
 	align-items: flex-end;
@@ -446,11 +453,12 @@ markdown-block pre code {
 	transition: background 0.15s;
 }
 
-.thinking-bar:nth-child(1) { height: 4px; }
-.thinking-bar:nth-child(2) { height: 6px; }
-.thinking-bar:nth-child(3) { height: 8px; }
-.thinking-bar:nth-child(4) { height: 10px; }
-.thinking-bar:nth-child(5) { height: 12px; }
+.thinking-bar:nth-child(1) { height: 3px; }
+.thinking-bar:nth-child(2) { height: 5px; }
+.thinking-bar:nth-child(3) { height: 7px; }
+.thinking-bar:nth-child(4) { height: 9px; }
+.thinking-bar:nth-child(5) { height: 11px; }
+.thinking-bar:nth-child(6) { height: 12px; }
 
 .thinking-bar.filled {
 	background: var(--primary, #2563eb);

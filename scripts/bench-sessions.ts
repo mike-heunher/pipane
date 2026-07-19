@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { registerRestApi } from "../src/server/rest-api.js";
 
 type Options = {

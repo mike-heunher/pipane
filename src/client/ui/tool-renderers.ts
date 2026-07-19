@@ -7,7 +7,7 @@
 
 import { registerToolRenderer, setFallbackToolRenderer } from "./tool-registry.js";
 import type { ToolRenderer, ToolRenderResult, FallbackToolRenderer } from "./tool-registry.js";
-import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
 import { html } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";

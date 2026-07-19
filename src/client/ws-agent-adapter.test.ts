@@ -113,6 +113,28 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(steerMsgs).toHaveLength(0);
 		});
 
+		it("sends the displayed model, thinking level, and control revision", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+			(adapter as any)._state.model = {
+				provider: "openai-codex",
+				id: "gpt-5.6-sol",
+				reasoning: true,
+				thinkingLevelMap: { max: "max" },
+			};
+			adapter.setThinkingLevel("max");
+			const revision = (adapter as any)._pendingControl.revision;
+
+			await adapter.prompt("use effort");
+
+			const prompt = sent.find((message) => message.type === "prompt");
+			expect(prompt).toMatchObject({
+				model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+				thinkingLevel: "max",
+				controlRevision: revision,
+			});
+		});
+
 		it("sends a prompt command when session status is 'done'", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, sent, simulateServerMessage } = setupWithSession(sessionPath);
@@ -291,7 +313,7 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("virtual sessions are never steered", () => {
+	describe("virtual session startup routing", () => {
 		it("sends prompt with __new__ for virtual sessions even when other sessions are running", async () => {
 			const { adapter, sent } = createTestAdapter();
 
@@ -314,6 +336,29 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			const steerMsgs = sent.filter((m) => m.type === "steer");
 			expect(steerMsgs).toHaveLength(0);
+		});
+
+		it("routes a rapid second send into the first newly attached session", async () => {
+			const { adapter, sent } = createTestAdapter();
+			(adapter as any)._sessionStatus = "virtual";
+			(adapter as any)._sessionPath = undefined;
+			(adapter as any)._state.model = { provider: "anthropic", id: "claude-sonnet-4-20250514" };
+
+			await Promise.all([
+				adapter.prompt("first"),
+				adapter.prompt("second"),
+			]);
+
+			expect(sent.filter((message) => message.type === "prompt")).toHaveLength(1);
+			expect(sent.filter((message) => message.type === "prompt")[0]).toMatchObject({
+				sessionPath: "__new__",
+				message: "first",
+			});
+			expect(sent.filter((message) => message.type === "steer")).toHaveLength(1);
+			expect(sent.filter((message) => message.type === "steer")[0]).toMatchObject({
+				sessionPath: "/tmp/sessions/new-session.jsonl",
+				message: "second",
+			});
 		});
 	});
 
@@ -677,8 +722,9 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(changes).toBe(1);
 		});
 
-		it("resets thinking level to off when selecting a non-reasoning model", () => {
+		it("clamps thinking level to off when selecting a non-reasoning model", () => {
 			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			(adapter as any)._state.model = { provider: "openai", id: "gpt-5", reasoning: true };
 			adapter.setThinkingLevel("high");
 
 			adapter.setModel({ provider: "openai", id: "gpt-4o-mini", reasoning: false } as any);
@@ -686,32 +732,74 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.thinkingLevel).toBe("off");
 		});
 
-		it("resets thinking level to medium for reasoning-capable models", () => {
+		it("preserves a supported thinking level across reasoning model changes", () => {
 			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
-			adapter.setThinkingLevel("high");
+			(adapter as any)._state.model = { provider: "anthropic", id: "claude-old", reasoning: true };
+			(adapter as any)._state.thinkingLevel = "high";
 
 			adapter.setModel({ provider: "openai", id: "gpt-5", reasoning: true } as any);
 
-			expect(adapter.state.thinkingLevel).toBe("medium");
+			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
-		it("resets thinking level to medium for gpt-5.3-codex when reasoning metadata is missing", () => {
+		it("preserves thinking for inferred openai-codex reasoning models", () => {
 			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
-			adapter.setThinkingLevel("high");
+			(adapter as any)._state.thinkingLevel = "high";
 
 			adapter.setModel({ provider: "openai-codex", id: "gpt-5.3-codex" } as any);
 
-			expect(adapter.state.thinkingLevel).toBe("medium");
+			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
-		it("emits content change when setThinkingLevel is called", () => {
+		it("previews pi's upward clamp for model capability holes", () => {
 			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			(adapter as any)._state.thinkingLevel = "medium";
+
+			adapter.setModel({
+				provider: "deepseek",
+				id: "deepseek-v4",
+				reasoning: true,
+				thinkingLevelMap: { minimal: null, low: null, medium: null, xhigh: null, max: "max" },
+			} as any);
+
+			expect(adapter.state.thinkingLevel).toBe("high");
+		});
+
+		it("rolls a failed sent control revision back to the last authoritative state", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "anthropic", modelId: "claude-authoritative" },
+				thinkingLevel: "high",
+			});
+			adapter.setModel({ provider: "openai", id: "gpt-5", reasoning: true } as any);
+			const revision = (adapter as any)._pendingControl.revision;
+			(adapter as any).markControlSent(revision);
+
+			(adapter as any).rollbackSentControl(revision);
+
+			expect(adapter.state.model).toMatchObject({ provider: "anthropic", id: "claude-authoritative" });
+			expect(adapter.state.thinkingLevel).toBe("high");
+			expect((adapter as any)._pendingControl).toBeUndefined();
+		});
+
+		it("supports max and emits content change when setThinkingLevel is called", () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			(adapter as any)._state.model = {
+				provider: "openai-codex",
+				id: "gpt-5.6-sol",
+				reasoning: true,
+				thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+			};
 			let changes = 0;
 			adapter.onContentChange(() => { changes++; });
 
-			adapter.setThinkingLevel("high");
+			adapter.setThinkingLevel("max");
 
-			expect(adapter.state.thinkingLevel).toBe("high");
+			expect(adapter.state.thinkingLevel).toBe("max");
 			expect(changes).toBe(1);
 		});
 	});
@@ -724,8 +812,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			const localModel = { provider: "openai", id: "gpt-5" };
 			adapter.setModel(localModel as any);
 
-			// _restoreModelFromServer is false (not a session switch), so
-			// session_messages should NOT overwrite the user's model selection
+			// A local revision is pending, so an older snapshot must not overwrite it.
 			simulateServerMessage({
 				type: "session_messages",
 				sessionPath,
@@ -749,7 +836,6 @@ describe("WsAgentAdapter prompt routing", () => {
 				{ provider: "anthropic", id: "claude-sonnet-4-20250514" },
 			];
 
-			// switchSession sets _restoreModelFromServer=true and subscribes.
 			await adapter.switchSession(sessionPath);
 
 			// Server pushes session_messages (this is what subscribe_session triggers)
@@ -764,8 +850,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.model).toEqual({ provider: "anthropic", id: "claude-sonnet-4-20250514" });
 			expect(adapter.state.thinkingLevel).toBe("high");
 
-			// After the first push, _restoreModelFromServer is cleared —
-			// subsequent pushes should NOT overwrite.
+			// A subsequent local selection remains optimistic until acknowledged.
 			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
 			simulateServerMessage({
 				type: "session_messages",
@@ -776,34 +861,89 @@ describe("WsAgentAdapter prompt routing", () => {
 			});
 			expect(adapter.state.model).toEqual({ provider: "openai", id: "gpt-5" });
 		});
-	});
 
-	describe("error visibility", () => {
-		it("stores response errors in state.error", () => {
-			const { adapter } = createTestAdapter();
-			const reject = vi.fn();
-			const resolve = vi.fn();
-			(adapter as any).pendingRequests.set("req_x", { resolve, reject });
+		it("restores a compact model ref without a catalog instead of retaining another session's model", async () => {
+			const sessionPath = "/tmp/sessions/session-b.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			(adapter as any)._state.model = { provider: "openai", id: "wrong-model" };
 
-			(adapter as any).handleMessage(JSON.stringify({
-				type: "response",
-				id: "req_x",
-				success: false,
-				error: "Upstream provider is unavailable",
-			}));
+			await adapter.switchSession(sessionPath);
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "anthropic", modelId: "claude-session-model" },
+				thinkingLevel: "high",
+			});
 
-			expect(adapter.state.error).toBe("Upstream provider is unavailable");
-			expect(reject).toHaveBeenCalledTimes(1);
+			expect(adapter.state.model).toMatchObject({
+				provider: "anthropic",
+				id: "claude-session-model",
+			});
+			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
-		it("reportError appends a visible assistant message", () => {
-			const { adapter } = createTestAdapter();
-			adapter.reportError(new Error("Rate limit reached"), "Prompt failed");
+		it("applies a matching effective control acknowledgement and waits for its snapshot", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			(adapter as any)._state.model = { provider: "deepseek", id: "deepseek-v4", reasoning: true };
+			adapter.setThinkingLevel("medium");
+			const revision = (adapter as any)._pendingControl.revision;
 
-			const last = adapter.state.messages.at(-1) as any;
-			expect(adapter.state.error).toBe("Rate limit reached");
-			expect(last?.role).toBe("assistant");
-			expect(last?.content?.[0]?.text || "").toContain("Prompt failed: Rate limit reached");
+			// Older queued session state cannot erase the local choice.
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "deepseek", modelId: "deepseek-v4" },
+				thinkingLevel: "off",
+			});
+			expect(adapter.state.thinkingLevel).toBe("medium");
+
+			// Pi clamps medium to high and acknowledges that effective value.
+			simulateServerMessage({
+				type: "control_state",
+				sessionPath,
+				controlRevision: revision,
+				model: { provider: "deepseek", id: "deepseek-v4", reasoning: true },
+				thinkingLevel: "high",
+			});
+			expect(adapter.state.thinkingLevel).toBe("high");
+			expect((adapter as any)._pendingControl.phase).toBe("acknowledged");
+
+			simulateServerMessage({
+				type: "session_messages",
+				sessionPath,
+				messages: [],
+				model: { provider: "deepseek", modelId: "deepseek-v4" },
+				thinkingLevel: "high",
+			});
+			expect((adapter as any)._pendingControl).toBeUndefined();
+		});
+
+		it("ignores an older acknowledgement after a newer local edit", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			(adapter as any)._state.model = {
+				provider: "openai-codex",
+				id: "gpt-5.6-sol",
+				reasoning: true,
+				thinkingLevelMap: { max: "max" },
+			};
+			adapter.setThinkingLevel("high");
+			const oldRevision = (adapter as any)._pendingControl.revision;
+			adapter.setThinkingLevel("max");
+
+			simulateServerMessage({
+				type: "control_state",
+				sessionPath,
+				controlRevision: oldRevision,
+				model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+				thinkingLevel: "high",
+			});
+
+			expect(adapter.state.thinkingLevel).toBe("max");
+			expect((adapter as any)._pendingControl.revision).toBeGreaterThan(oldRevision);
 		});
 	});
 
@@ -840,9 +980,11 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(a._pendingSessionSyncs[0]).toMatchObject({ op: "full", hash: "h2" });
 		});
 
-		it("applies a full snapshot and all dependent deltas in order", async () => {
+		it("applies a full snapshot and all dependent deltas in order with one render", async () => {
 			const { adapter } = createTestAdapter();
 			const a = adapter as any;
+			const contentChange = vi.fn();
+			adapter.onContentChange(contentChange);
 			const sessionPath = "/tmp/ordered.jsonl";
 			a._sessionPath = sessionPath;
 			a._sessionNonce = 4;
@@ -866,6 +1008,37 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(a._syncJson).toBe(states[2]);
 			expect(a._syncHash).toBe(hashes[2]);
 			expect(adapter.state.messages[0]).toMatchObject({ content: "three" });
+			expect(contentChange).toHaveBeenCalledTimes(1);
+		});
+
+		it("leaves updates received during hashing for the next animation frame", async () => {
+			const { adapter } = createTestAdapter();
+			const a = adapter as any;
+			const sessionPath = "/tmp/progressive.jsonl";
+			a._sessionPath = sessionPath;
+			a._sessionNonce = 5;
+			const first = JSON.stringify({ messages: [{ role: "user", content: "first" }] });
+			const second = JSON.stringify({ messages: [{ role: "user", content: "second" }] });
+			const firstHash = await computeHash(first);
+			const secondHash = await computeHash(second);
+			const scope = { __sessionPath: sessionPath, __sessionNonce: 5 };
+			const nextFrame = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+
+			a._pendingSessionSyncs = [{ ...scope, op: "full", data: first, hash: firstHash }];
+			const flushing = a.flushSessionSyncQueue();
+			a._pendingSessionSyncs.push({
+				...scope,
+				op: "delta",
+				patches: computePatches(first, second),
+				baseHash: firstHash,
+				hash: secondHash,
+			});
+			await flushing;
+
+			expect(a._syncJson).toBe(first);
+			expect(a._pendingSessionSyncs).toHaveLength(1);
+			expect(nextFrame).toHaveBeenCalledTimes(1);
+			nextFrame.mockRestore();
 		});
 
 		it("cannot commit an async sync after the active session changes", async () => {
@@ -896,6 +1069,34 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
+	describe("error visibility", () => {
+		it("stores response errors in state.error", () => {
+			const { adapter } = createTestAdapter();
+			const reject = vi.fn();
+			const resolve = vi.fn();
+			(adapter as any).pendingRequests.set("req_x", { resolve, reject });
+
+			(adapter as any).handleMessage(JSON.stringify({
+				type: "response",
+				id: "req_x",
+				success: false,
+				error: "Upstream provider is unavailable",
+			}));
+
+			expect(adapter.state.error).toBe("Upstream provider is unavailable");
+			expect(reject).toHaveBeenCalledTimes(1);
+		});
+
+		it("reportError appends a visible assistant message", () => {
+			const { adapter } = createTestAdapter();
+			adapter.reportError(new Error("Rate limit reached"), "Prompt failed");
+
+			const last = adapter.state.messages.at(-1) as any;
+			expect(adapter.state.error).toBe("Rate limit reached");
+			expect(last?.role).toBe("assistant");
+			expect(last?.content?.[0]?.text || "").toContain("Prompt failed: Rate limit reached");
+		});
+	});
 
 	describe("slash commands", () => {
 		it("/reload sends reload_processes, does not send a prompt, and adds a confirmation message", async () => {
@@ -922,5 +1123,70 @@ describe("WsAgentAdapter prompt routing", () => {
 			const text = last?.content?.[0]?.text || "";
 			expect(text).toContain("`/reload`");
 		});
+	});
+});
+
+describe("WsAgentAdapter extension statuses", () => {
+	it("replaces complete snapshots and notifies dedicated listeners", () => {
+		const sessionPath = "/tmp/sessions/session-a.jsonl";
+		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+		const statusListener = vi.fn();
+		const agentListener = vi.fn();
+		adapter.onExtensionStatusChange(statusListener);
+		adapter.subscribe(agentListener);
+
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath,
+			statuses: { usage: "codex 25% 5h", other: "ready" },
+		});
+		expect(Object.fromEntries(adapter.extensionStatuses)).toEqual({
+			usage: "codex 25% 5h",
+			other: "ready",
+		});
+
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath,
+			statuses: { usage: "codex 26% 5h" },
+		});
+		expect(Object.fromEntries(adapter.extensionStatuses)).toEqual({ usage: "codex 26% 5h" });
+		expect(statusListener).toHaveBeenCalledTimes(2);
+		expect(agentListener).not.toHaveBeenCalled();
+	});
+
+	it("ignores another session and clears immediately when switching", async () => {
+		const sessionPath = "/tmp/sessions/session-a.jsonl";
+		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath,
+			statuses: { usage: "claude 10% 5h" },
+		});
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath: "/tmp/sessions/other.jsonl",
+			statuses: { usage: "wrong session" },
+		});
+		expect(adapter.extensionStatuses.get("usage")).toBe("claude 10% 5h");
+
+		const switching = adapter.switchSession("/tmp/sessions/session-b.jsonl");
+		expect(adapter.extensionStatuses.size).toBe(0);
+		await switching;
+	});
+
+	it("clears for a virtual session but retains the last snapshot on detach", async () => {
+		const sessionPath = "/tmp/sessions/session-a.jsonl";
+		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+		simulateServerMessage({
+			type: "extension_status",
+			sessionPath,
+			statuses: { usage: "codex 25% 5h" },
+		});
+		simulateServerMessage({ type: "session_detached", sessionPath });
+		expect(adapter.extensionStatuses.get("usage")).toBe("codex 25% 5h");
+
+		await adapter.newSession("/tmp");
+		expect(adapter.extensionStatuses.size).toBe(0);
 	});
 });

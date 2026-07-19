@@ -1,4 +1,4 @@
-import type { Usage } from "@mariozechner/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import { i18n } from "./i18n.js";
 
 export function formatCost(cost: number): string {

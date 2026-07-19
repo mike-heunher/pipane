@@ -12,12 +12,30 @@
  * with the next prompt) and UI concerns like the steering queue.
  */
 
-import type { ImageContent, Model } from "@mariozechner/pi-ai";
-import type { AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
+import {
+	clampThinkingLevel,
+	modelsMatch,
+	toCompactModelRef,
+	type ThinkingLevelValue,
+} from "../shared/thinking-levels.js";
 
 export type SessionStatus = "virtual" | "detached" | "attached";
+
+export interface AdapterState {
+	systemPrompt: string;
+	model: any;
+	thinkingLevel: ThinkingLevelValue;
+	tools: AgentTool<any>[];
+	messages: AgentMessage[];
+	isStreaming: boolean;
+	streamMessage: AgentMessage | null;
+	pendingToolCalls: Set<string>;
+	error?: string;
+}
 
 type SessionSyncChanges = {
 	content: boolean;
@@ -26,7 +44,7 @@ type SessionSyncChanges = {
 };
 
 type WsCommand =
-	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel; images?: ImageContent[] }
+	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevelValue; controlRevision?: number; images?: ImageContent[] }
 	| { type: "steer"; sessionPath: string; message: string }
 	| { type: "abort"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
@@ -66,7 +84,7 @@ export class WsAgentAdapter {
 	streamFn: any = () => {};
 	getApiKey: any = undefined;
 
-	private _state: AgentState = {
+	private _state: AdapterState = {
 		systemPrompt: "",
 		model: undefined as any,
 		thinkingLevel: "off",
@@ -88,17 +106,28 @@ export class WsAgentAdapter {
 	/** Per-session steering queues keyed by session path. */
 	private _steeringQueues = new Map<string, string[]>();
 	private _steeringQueueListeners = new Set<() => void>();
+	/** Complete extension status snapshot for the current session. */
+	private _extensionStatuses = new Map<string, string>();
+	private _extensionStatusListeners = new Set<() => void>();
+	/** Monotonic client-local revision for model/thinking edits. */
+	private _controlRevision = 0;
 	/**
-	 * When true, the next session_messages push will restore model/thinkingLevel
-	 * from the server. Set on switchSession(); cleared after the first push.
-	 * Outside of session switches, model/thinkingLevel are client-local.
+	 * An unsent or not-yet-synced local control edit. While present, ordinary
+	 * session snapshots may update messages but cannot overwrite the controls.
 	 */
-	private _restoreModelFromServer = false;
-	/**
-	 * One-shot override selected in the UI, applies only to the next prompt
-	 * in the currently active conversation. Cleared immediately after sending.
-	 */
-	private _nextPromptModelOverride: Model<any> | undefined;
+	private _pendingControl: {
+		revision: number;
+		sessionNonce: number;
+		phase: "local" | "sent" | "acknowledged";
+		model?: any;
+		thinkingLevel?: ThinkingLevelValue;
+	} | undefined;
+	/** Last server-confirmed controls for rolling back a failed sent revision. */
+	private _lastAuthoritativeControl: {
+		sessionNonce: number;
+		model: any;
+		thinkingLevel: ThinkingLevelValue;
+	} | undefined;
 
 	/** Cached available models for model matching */
 	private _availableModels: any[] | null = null;
@@ -130,6 +159,13 @@ export class WsAgentAdapter {
 	 * distinguish a valid virtual→attached transition from a stale message.
 	 */
 	private _pendingNewPrompt = false;
+	/** Coordinate rapid sends while a session's first turn is still attaching. */
+	private _startingPrompts = new Map<string, {
+		ready: Promise<string | undefined>;
+		resolveReady: (sessionPath: string | undefined) => void;
+		finished: Promise<void>;
+		resolveFinished: () => void;
+	}>();
 
 	/** Current synced JSON string from server */
 	private _syncJson = "";
@@ -148,7 +184,7 @@ export class WsAgentAdapter {
 	private _contentListeners = new Set<() => void>();
 	private _statusListeners = new Set<() => void>();
 
-	get state(): AgentState { return this._state; }
+	get state(): AdapterState { return this._state; }
 	get sessionId(): string { return this._sessionId; }
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
@@ -174,6 +210,32 @@ export class WsAgentAdapter {
 		return this._steeringQueues.get(this._sessionPath) ?? [];
 	}
 
+	get extensionStatuses(): ReadonlyMap<string, string> {
+		return this._extensionStatuses;
+	}
+
+	onExtensionStatusChange(fn: () => void): () => void {
+		this._extensionStatusListeners.add(fn);
+		return () => this._extensionStatusListeners.delete(fn);
+	}
+
+	private replaceExtensionStatuses(statuses: unknown): void {
+		const next = new Map<string, string>();
+		if (statuses && typeof statuses === "object" && !Array.isArray(statuses)) {
+			for (const [key, value] of Object.entries(statuses)) {
+				if (typeof value === "string") next.set(key, value);
+			}
+		}
+		if (next.size === this._extensionStatuses.size
+			&& [...next].every(([key, value]) => this._extensionStatuses.get(key) === value)) return;
+		this._extensionStatuses = next;
+		for (const fn of this._extensionStatusListeners) fn();
+	}
+
+	private clearExtensionStatuses(): void {
+		this.replaceExtensionStatuses({});
+	}
+
 	/** Get the global status of a session by path. Returns "running", "done", or undefined (idle). */
 	getSessionStatus(sessionPath: string): "running" | "done" | undefined {
 		return this._globalSessionStatus.get(sessionPath);
@@ -189,6 +251,9 @@ export class WsAgentAdapter {
 
 	private setGlobalSessionStatus(sessionPath: string, status: "running" | "done") {
 		this._globalSessionStatus.set(sessionPath, status);
+		if (status === "running") {
+			this._startingPrompts.get(sessionPath)?.resolveReady(sessionPath);
+		}
 		this.emitGlobalStatusChange();
 	}
 
@@ -348,6 +413,14 @@ export class WsAgentAdapter {
 				}
 				this.pendingRequests.clear();
 
+				// A sent edit may have failed before its acknowledgement; allow the
+				// reconnect snapshot to restore truth. Keep genuinely unsent edits.
+				if (this._pendingControl?.phase === "sent") {
+					this.rollbackSentControl(this._pendingControl.revision);
+				} else if (this._pendingControl?.phase === "acknowledged") {
+					this._pendingControl = undefined;
+				}
+
 				if (wasConnected) {
 					console.log("[ws-adapter] WebSocket disconnected, will reconnect...");
 					this.emitConnectionChange(false);
@@ -501,6 +574,13 @@ export class WsAgentAdapter {
 			return;
 		}
 
+		// Complete extension status snapshot for the active session.
+		if (data.type === "extension_status") {
+			if (data.sessionPath !== this._sessionPath) return;
+			this.replaceExtensionStatuses(data.statuses);
+			return;
+		}
+
 		// Hash-verified session sync from server (authoritative)
 		if (data.type === "session_sync") {
 			const sp = data.sessionPath as string;
@@ -510,6 +590,18 @@ export class WsAgentAdapter {
 				__sessionPath: sp,
 				__sessionNonce: this._sessionNonce,
 			});
+			return;
+		}
+
+		// Effective model/thinking after pi has applied and clamped a request.
+		if (data.type === "control_state") {
+			if (data.sessionPath !== this._sessionPath) return;
+			const applied = this.applyAuthoritativeControlState(
+				data.model,
+				data.thinkingLevel,
+				data.controlRevision,
+			);
+			if (applied) this.emitContentChange();
 			return;
 		}
 
@@ -532,15 +624,7 @@ export class WsAgentAdapter {
 			const sp = data.sessionPath as string;
 			if (sp === this._sessionPath) {
 				this._state.messages = data.messages ?? [];
-				if (this._restoreModelFromServer) {
-					if (data.model) {
-						this._state.model = this.findModelMatch(data.model) ?? this._state.model;
-					}
-					if (data.thinkingLevel) {
-						this._state.thinkingLevel = data.thinkingLevel;
-					}
-					this._restoreModelFromServer = false;
-				}
+				this.applyAuthoritativeControlState(data.model, data.thinkingLevel);
 				this.emitContentChange();
 			}
 			return;
@@ -565,6 +649,7 @@ export class WsAgentAdapter {
 					const filename = path.basename(data.sessionPath, ".jsonl");
 					const parts = filename.split("_");
 					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+					this._startingPrompts.get(`virtual:${this._sessionNonce}`)?.resolveReady(data.sessionPath);
 				}
 				this._sessionStatus = "attached";
 				this._state.isStreaming = true;
@@ -669,23 +754,15 @@ export class WsAgentAdapter {
 	private async flushSessionSyncQueue() {
 		if (this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushInProgress = true;
-		const changes: SessionSyncChanges = { content: false, status: false, steering: false };
+		// Process at most one frame-sized batch. Messages received while hashing
+		// remain queued for the next animation frame, preserving progressive
+		// streaming instead of starving rendering until a long turn finishes.
+		const batch = this._pendingSessionSyncs.splice(0);
 		try {
-			while (this._pendingSessionSyncs.length > 0) {
-				// Hash and parse the latest state once for the whole currently queued
-				// chain. New frames received during async hashing form the next batch.
-				const batch = this._pendingSessionSyncs.splice(0);
-				const batchChanges = await this.applySessionSyncBatch(batch);
-				if (batchChanges) {
-					changes.content ||= batchChanges.content;
-					changes.status ||= batchChanges.status;
-					changes.steering ||= batchChanges.steering;
-				}
-			}
+			const changes = await this.applySessionSyncBatch(batch);
+			if (changes) this.emitSessionSyncChanges(changes);
 		} finally {
 			this._sessionSyncFlushInProgress = false;
-			this.emitSessionSyncChanges(changes);
-			// If something arrived while we were finalizing, schedule another frame.
 			if (this._pendingSessionSyncs.length > 0 && !this._sessionSyncFlushScheduled) {
 				this._sessionSyncFlushScheduled = true;
 				requestAnimationFrame(() => {
@@ -774,15 +851,7 @@ export class WsAgentAdapter {
 		// Everything is in the flat messages array.
 		this._state.streamMessage = null;
 
-		if (this._restoreModelFromServer) {
-			if (state.model) {
-				this._state.model = this.findModelMatch(state.model) ?? this._state.model;
-			}
-			if (state.thinkingLevel) {
-				this._state.thinkingLevel = state.thinkingLevel;
-			}
-			this._restoreModelFromServer = false;
-		}
+		this.applyAuthoritativeControlState(state.model, state.thinkingLevel);
 		if (Array.isArray(state.steeringQueue)) {
 			if (state.steeringQueue.length > 0) this._steeringQueues.set(syncSessionPath, [...state.steeringQueue]);
 			else this._steeringQueues.delete(syncSessionPath);
@@ -868,39 +937,115 @@ export class WsAgentAdapter {
 
 	// ── Models ─────────────────────────────────────────────────────────────
 
-	/** Fetch available models from the server (uses any idle pi process) */
+	/** Fetch and cache the full model catalog used to resolve session model refs. */
 	async fetchAvailableModels(): Promise<any[]> {
 		const data = await this.send({ type: "get_available_models" });
 		const models = data?.models ?? [];
 		this._availableModels = models;
+
+		// Enrich a compact fallback model once metadata becomes available.
+		const current = this.resolveModel(this._state.model);
+		if (current) this._state.model = current;
 		return models;
 	}
 
-	/** Find a matching model from the available models cache */
-	private findModelMatch(serverModel: { provider: string; modelId: string }): any | undefined {
-		if (!this._availableModels) return undefined;
-		return this._availableModels.find(
-			(m: any) => m.provider === serverModel.provider && m.id === serverModel.modelId,
-		);
+	/** Resolve both full runtime models and compact persisted session refs. */
+	private resolveModel(serverModel: any): any | undefined {
+		if (!serverModel) return undefined;
+		const cached = this._availableModels?.find((model: any) => modelsMatch(model, serverModel));
+		if (cached) return cached;
+
+		const ref = toCompactModelRef(serverModel);
+		if (!ref) return undefined;
+		// Never retain an unrelated previous session's model when metadata is
+		// unavailable. A shallow full-model shape is still correct for prompting.
+		return { ...serverModel, provider: ref.provider, id: ref.modelId };
+	}
+
+	private markControlPending(): number {
+		const revision = ++this._controlRevision;
+		this._pendingControl = {
+			revision,
+			sessionNonce: this._sessionNonce,
+			phase: "local",
+		};
+		return revision;
+	}
+
+	private markControlSent(revision: number): void {
+		if (this._pendingControl?.revision === revision
+			&& this._pendingControl.sessionNonce === this._sessionNonce) {
+			this._pendingControl.phase = "sent";
+		}
+	}
+
+	private rollbackSentControl(revision: number): void {
+		const pending = this._pendingControl;
+		if (!pending || pending.revision !== revision || pending.phase !== "sent") return;
+		this._pendingControl = undefined;
+		const previous = this._lastAuthoritativeControl;
+		if (previous?.sessionNonce === this._sessionNonce) {
+			this._state.model = previous.model;
+			this._state.thinkingLevel = previous.thinkingLevel as any;
+			this.emitContentChange();
+		}
+	}
+
+	private rememberAuthoritativeControl(model: any, thinkingLevel: ThinkingLevelValue): void {
+		this._lastAuthoritativeControl = {
+			sessionNonce: this._sessionNonce,
+			model,
+			thinkingLevel,
+		};
 	}
 
 	/**
-	 * Determine whether a model supports adjustable thinking.
-	 *
-	 * We prefer explicit provider metadata (`reasoning: true|false`).
-	 * For known model families where metadata can be missing, infer support.
+	 * Apply controls from a snapshot or a direct, revisioned acknowledgement.
+	 * Snapshots cannot overwrite an unsent local edit. After an acknowledgement,
+	 * the barrier remains until its matching snapshot arrives, protecting against
+	 * an older full sync already queued for asynchronous hash verification.
 	 */
-	private modelSupportsThinking(model: any): boolean {
-		if (!model) return false;
-		if (typeof model.reasoning === "boolean") return model.reasoning;
+	private applyAuthoritativeControlState(
+		serverModel: any,
+		thinkingLevel: string | undefined,
+		controlRevision?: number,
+	): boolean {
+		const resolvedModel = this.resolveModel(serverModel);
+		const resolvedThinking = thinkingLevel as ThinkingLevelValue | undefined;
+		const pending = this._pendingControl;
 
-		const provider = String(model.provider ?? "").toLowerCase();
-		const id = String(model.id ?? "").toLowerCase();
+		if (controlRevision !== undefined) {
+			if (pending) {
+				if (pending.sessionNonce !== this._sessionNonce || pending.revision !== controlRevision) {
+					return false;
+				}
+				pending.phase = "acknowledged";
+				pending.model = resolvedModel;
+				pending.thinkingLevel = resolvedThinking;
+			}
+			if (resolvedModel) this._state.model = resolvedModel;
+			if (resolvedThinking) this._state.thinkingLevel = resolvedThinking as any;
+			if (resolvedModel && resolvedThinking) {
+				this.rememberAuthoritativeControl(resolvedModel, resolvedThinking);
+			}
+			return !!resolvedModel || !!resolvedThinking;
+		}
 
-		if (provider === "openai-codex") return true;
-		if (provider === "openai" && id.startsWith("gpt-5")) return true;
+		if (pending) {
+			const matchesAcknowledged = pending.phase === "acknowledged"
+				&& !!pending.model
+				&& modelsMatch(serverModel, pending.model)
+				&& resolvedThinking === pending.thinkingLevel;
+			if (!matchesAcknowledged) return false;
+			this._pendingControl = undefined;
+		}
 
-		return false;
+		if (resolvedModel) this._state.model = resolvedModel;
+		if (resolvedThinking) this._state.thinkingLevel = resolvedThinking as any;
+		if (resolvedModel && resolvedThinking) {
+			this.rememberAuthoritativeControl(resolvedModel, resolvedThinking);
+		}
+		return !!resolvedModel || !!resolvedThinking;
 	}
 
 	async installPi(): Promise<void> {
@@ -911,12 +1056,7 @@ export class WsAgentAdapter {
 	async loadDefaultModel(): Promise<void> {
 		if (this._state.model) return;
 		const data = await this.send({ type: "get_default_model" });
-		if (data?.model) {
-			this._state.model = data.model;
-		}
-		if (data?.thinkingLevel) {
-			this._state.thinkingLevel = data.thinkingLevel;
-		}
+		this.applyAuthoritativeControlState(data?.model, data?.thinkingLevel);
 	}
 
 	// ── Agent interface methods ────────────────────────────────────────────
@@ -933,7 +1073,26 @@ export class WsAgentAdapter {
 		return this._pendingCwd;
 	}
 
-	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]) {
+	private createStartingPrompt(key: string) {
+		let resolveReady!: (sessionPath: string | undefined) => void;
+		let resolveFinished!: () => void;
+		const entry = {
+			ready: new Promise<string | undefined>((resolve) => { resolveReady = resolve; }),
+			resolveReady: (sessionPath: string | undefined) => resolveReady(sessionPath),
+			finished: new Promise<void>((resolve) => { resolveFinished = resolve; }),
+			resolveFinished: () => resolveFinished(),
+		};
+		this._startingPrompts.set(key, entry);
+		return entry;
+	}
+
+	private finishStartingPrompt(key: string, entry: ReturnType<WsAgentAdapter["createStartingPrompt"]>, attachedPath?: string): void {
+		entry.resolveReady(attachedPath);
+		entry.resolveFinished();
+		if (this._startingPrompts.get(key) === entry) this._startingPrompts.delete(key);
+	}
+
+	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
 		let text: string;
 		if (typeof input === "string") {
 			text = input;
@@ -946,6 +1105,22 @@ export class WsAgentAdapter {
 		// Handle client-side slash commands
 		const handled = await this.handleSlashCommand(text);
 		if (handled) return;
+
+		const promptStartKey = this._sessionStatus === "virtual"
+			? `virtual:${this._sessionNonce}`
+			: this._sessionPath;
+		const existingStart = promptStartKey ? this._startingPrompts.get(promptStartKey) : undefined;
+		if (existingStart) {
+			const attachedPath = await existingStart.ready;
+			if (attachedPath && this._globalSessionStatus.get(attachedPath) === "running") {
+				this.enqueueSteering(attachedPath, text);
+				await this.send({ type: "steer", sessionPath: attachedPath, message: text });
+				return;
+			}
+			await existingStart.finished;
+			if (!attachedPath) throw new Error("The session failed to start before the queued prompt could be sent");
+			return this.prompt(input, images);
+		}
 
 		// If the *current* session's agent is running, route as a steering message.
 		// We check the global session status map (server-authoritative) to determine
@@ -965,19 +1140,22 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		const effectiveModel = this._nextPromptModelOverride ?? this._state.model;
+		const effectiveModel = this._state.model;
 		if (!effectiveModel) {
 			throw new Error(`BUG: effective model is undefined when sending prompt. sessionStatus=${this._sessionStatus}, sessionPath=${this._sessionPath}`);
 		}
-		const modelPayload = { provider: effectiveModel.provider, modelId: effectiveModel.id };
+		const modelPayload = toCompactModelRef(effectiveModel);
+		if (!modelPayload) throw new Error("BUG: active model has no provider/model ID");
+		const thinkingLevel = this._state.thinkingLevel as ThinkingLevelValue;
+		const controlRevision = this._pendingControl?.revision ?? this._controlRevision;
+		this.markControlSent(controlRevision);
+		const startingKey = promptStartKey ?? `virtual:${this._sessionNonce}`;
+		const startingEntry = this.createStartingPrompt(startingKey);
 
 		if (this._sessionStatus === "virtual") {
-			// Consume one-shot override exactly once (for this prompt only).
-			this._nextPromptModelOverride = undefined;
-			// Capture session nonce before the await. The prompt RPC blocks
-			// until the pi process finishes the entire turn (after agent_end),
-			// so the user may navigate away (e.g. create a new session) during
-			// the await. If the nonce changed, the response is stale — ignore it.
+			// Capture the session nonce before the await. Pipane keeps this request
+			// open until the accepted turn settles, so the user may navigate away
+			// while it is running. Ignore the eventual response after navigation.
 			const nonce = this._sessionNonce;
 			this._pendingNewPrompt = true;
 			try {
@@ -987,7 +1165,8 @@ export class WsAgentAdapter {
 					cwd: this._pendingCwd,
 					message: text,
 					model: modelPayload,
-					thinkingLevel: this._state.thinkingLevel,
+					thinkingLevel,
+					controlRevision,
 					images,
 				});
 				if (this._sessionNonce !== nonce) {
@@ -1006,25 +1185,35 @@ export class WsAgentAdapter {
 					this.emitSessionChange();
 					this.emitStatusChange();
 				}
+			} catch (err) {
+				this.rollbackSentControl(controlRevision);
+				throw err;
 			} finally {
 				this._pendingNewPrompt = false;
+				const attachedPath = this._sessionNonce === nonce ? this._sessionPath : undefined;
+				this.finishStartingPrompt(startingKey, startingEntry, attachedPath);
 			}
 			return;
 		}
 
 		if (!this._sessionPath) throw new Error("No session loaded");
 
-		// Consume one-shot override exactly once (for this prompt only).
-		this._nextPromptModelOverride = undefined;
-
-		await this.send({
-			type: "prompt",
-			sessionPath: this._sessionPath,
-			message: text,
-			model: modelPayload,
-			thinkingLevel: this._state.thinkingLevel,
-			images,
-		});
+		try {
+			await this.send({
+				type: "prompt",
+				sessionPath: this._sessionPath,
+				message: text,
+				model: modelPayload,
+				thinkingLevel,
+				controlRevision,
+				images,
+			});
+		} catch (err) {
+			this.rollbackSentControl(controlRevision);
+			throw err;
+		} finally {
+			this.finishStartingPrompt(startingKey, startingEntry, this._sessionPath);
+		}
 	}
 
 	private extractText(msg: AgentMessage): string {
@@ -1233,20 +1422,24 @@ export class WsAgentAdapter {
 	}
 
 	setModel(m: Model<any>) {
-		// One-shot override: applies only to the next prompt in the current session.
-		this._nextPromptModelOverride = m;
-		// Reflect selection in the UI immediately.
-		this._state.model = m;
-		// Whenever the user selects a model, reset thinking to a consistent default.
-		// Use "medium" for reasoning-capable models, otherwise force "off".
-		this._state.thinkingLevel = this.modelSupportsThinking(m) ? "medium" : "off";
+		const resolved = this.resolveModel(m) ?? m;
+		const sameModel = modelsMatch(this._state.model, resolved);
+		const nextThinking = clampThinkingLevel(resolved, this._state.thinkingLevel);
+		if (sameModel && nextThinking === this._state.thinkingLevel) return;
+
+		this._state.model = resolved;
+		// Preserve the user's level when supported; otherwise preview the exact
+		// upward-then-downward clamp that pi will apply.
+		this._state.thinkingLevel = nextThinking as any;
+		this.markControlPending();
 		this.emitContentChange();
 	}
 
-	setThinkingLevel(l: ThinkingLevel) {
-		// Client-side only until a prompt is sent
-		this._state.thinkingLevel = l;
-		// Notify UI immediately so the selector reflects the change.
+	setThinkingLevel(level: ThinkingLevelValue) {
+		const nextLevel = clampThinkingLevel(this._state.model, level);
+		if (nextLevel === this._state.thinkingLevel) return;
+		this._state.thinkingLevel = nextLevel as any;
+		this.markControlPending();
 		this.emitContentChange();
 	}
 
@@ -1296,17 +1489,27 @@ export class WsAgentAdapter {
 		if (!this._state.model) {
 			throw new Error(`BUG: _state.model is undefined when sending fork_prompt. sessionPath=${this._sessionPath}`);
 		}
-		const modelPayload = { provider: this._state.model.provider, modelId: this._state.model.id };
+		const modelPayload = toCompactModelRef(this._state.model);
+		if (!modelPayload) throw new Error("BUG: active model has no provider/model ID");
+		const controlRevision = this._pendingControl?.revision ?? this._controlRevision;
+		this.markControlSent(controlRevision);
 
 		const nonce = this._sessionNonce;
-		const data = await this.send({
-			type: "fork_prompt",
-			sessionPath: this._sessionPath,
-			message: text,
-			model: modelPayload,
-			thinkingLevel: this._state.thinkingLevel,
-			images,
-		});
+		let data: any;
+		try {
+			data = await this.send({
+				type: "fork_prompt",
+				sessionPath: this._sessionPath,
+				message: text,
+				model: modelPayload,
+				thinkingLevel: this._state.thinkingLevel as ThinkingLevelValue,
+				controlRevision,
+				images,
+			});
+		} catch (err) {
+			this.rollbackSentControl(controlRevision);
+			throw err;
+		}
 
 		// Switch to the new forked session (only if user hasn't navigated away)
 		if (this._sessionNonce !== nonce) {
@@ -1314,12 +1517,9 @@ export class WsAgentAdapter {
 			return;
 		}
 		if (data?.newSessionPath) {
-			this._sessionPath = data.newSessionPath;
-			const filename = path.basename(data.newSessionPath, ".jsonl");
-			const parts = filename.split("_");
-			this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
-			// The session_attached event from the server will set status to "attached"
-			this.emitSessionChange();
+			// Re-enter through normal restoration so the fork's authoritative,
+			// potentially clamped controls are loaded from its final snapshot.
+			await this.switchSession(data.newSessionPath);
 		}
 	}
 
@@ -1378,15 +1578,17 @@ export class WsAgentAdapter {
 
 	/** Switch to an existing session (load messages from server cache) */
 	async switchSession(sessionPath: string): Promise<void> {
-		this._sessionNonce++;
+		const nonce = ++this._sessionNonce;
 		this._pendingNewPrompt = false;
+		this._pendingControl = undefined;
+		this._lastAuthoritativeControl = undefined;
 		this._sessionPath = sessionPath;
+		this.clearExtensionStatuses();
 		// Extract session ID from filename
 		const filename = path.basename(sessionPath, ".jsonl");
 		const parts = filename.split("_");
 		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 		this._sessionStatus = "detached";
-		this._restoreModelFromServer = true;
 
 		// Clear current state — including isStreaming since a detached session is never streaming
 		this._state.messages = [];
@@ -1402,6 +1604,7 @@ export class WsAgentAdapter {
 		// Subscribe to this session on the server — it will push session_sync
 		// with the full state.
 		await this.subscribeToSession(sessionPath);
+		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
 
 		// If the session is currently running on the server, restore streaming state
 		// so the stop button is visible, and mark as "attached" to prevent file-watcher
@@ -1419,6 +1622,7 @@ export class WsAgentAdapter {
 	async newSession(cwd?: string): Promise<void> {
 		this._sessionNonce++;
 		this._pendingNewPrompt = false;
+		this._pendingControl = undefined;
 		this._sessionId = typeof crypto.randomUUID === "function"
 			? crypto.randomUUID()
 			: Array.from(crypto.getRandomValues(new Uint8Array(16)))
@@ -1426,8 +1630,17 @@ export class WsAgentAdapter {
 				.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
 		this._sessionPath = undefined;
 		this._sessionName = undefined;
+		this.clearExtensionStatuses();
 		this._sessionStatus = "virtual";
 		this._pendingCwd = cwd;
+		if (this._state.model) {
+			this.rememberAuthoritativeControl(
+				this._state.model,
+				this._state.thinkingLevel as ThinkingLevelValue,
+			);
+		} else {
+			this._lastAuthoritativeControl = undefined;
+		}
 
 		this._state.messages = [];
 		this._state.isStreaming = false;

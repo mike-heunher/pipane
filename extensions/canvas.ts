@@ -5,7 +5,7 @@
  * content in a side panel. Accepts either inline content or a file path.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";

@@ -19,6 +19,12 @@ import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionP
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
+import {
+	THINKING_LEVEL_ORDER,
+	clampThinkingLevel,
+	getSupportedThinkingLevels,
+	type ThinkingLevelValue,
+} from "../shared/thinking-levels.js";
 
 import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 initThemes();
@@ -117,7 +123,7 @@ function handleSend(input: string, attachments?: any[]) {
 	}
 
 	autoScroll = true;
-	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err) => {
+	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err: unknown) => {
 		agent.reportError(err, "Prompt failed");
 		console.error("Prompt failed:", err);
 	});
@@ -176,28 +182,22 @@ function renderSteeringQueue() {
 	`;
 }
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-
-function modelSupportsThinking(model: any): boolean {
-	if (!model) return false;
-	if (typeof model.reasoning === "boolean") return model.reasoning;
-	const provider = String(model.provider ?? "").toLowerCase();
-	const id = String(model.id ?? "").toLowerCase();
-	if (provider === "openai-codex") return true;
-	if (provider === "openai" && id.startsWith("gpt-5")) return true;
-	return false;
-}
-
 function renderThinkingButton() {
 	if (!agent) return "";
 	const model = agent.state?.model;
-	if (!modelSupportsThinking(model)) return "";
+	const supportedLevels = getSupportedThinkingLevels(model);
+	if (supportedLevels.length < 2) return "";
 
-	const level = agent.state?.thinkingLevel ?? "off";
-	const idx = THINKING_LEVELS.indexOf(level);
-	const nextLevel = THINKING_LEVELS[(idx + 1) % THINKING_LEVELS.length];
+	const rawLevel = String(agent.state?.thinkingLevel ?? "off");
+	const level = supportedLevels.includes(rawLevel as ThinkingLevelValue)
+		? rawLevel as ThinkingLevelValue
+		: clampThinkingLevel(model, rawLevel);
+	const idx = supportedLevels.indexOf(level);
+	const nextLevel = supportedLevels[(idx + 1) % supportedLevels.length];
 
-	const filledBars = Math.max(0, idx);
+	// Six bars represent the global minimal→max scale. Models with capability
+	// holes still cycle only through their actually supported levels.
+	const filledBars = Math.max(0, THINKING_LEVEL_ORDER.indexOf(level));
 	const title = `Thinking: ${level} (click to switch to ${nextLevel})`;
 
 	return html`
@@ -210,8 +210,9 @@ function renderThinkingButton() {
 				<path d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z"/>
 				<path d="M9 21h6"/>
 			</svg>
+			<span class="thinking-level-label">${level}</span>
 			<span class="thinking-bars" data-level="${filledBars}">
-				${[0, 1, 2, 3, 4].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
+				${[0, 1, 2, 3, 4, 5].map(i => html`<span class="thinking-bar ${i < filledBars ? "filled" : ""}"></span>`)}
 			</span>
 		</button>
 	`;
@@ -683,7 +684,7 @@ async function initApp() {
 				return;
 			}
 			if (info.installing) return;
-			const yes = window.confirm(`${info.message}\n\nInstall pi now? (npm install -g @mariozechner/pi-coding-agent)`);
+			const yes = window.confirm(`${info.message}\n\nInstall pi now? (npm install -g @earendil-works/pi-coding-agent)`);
 			if (!yes) return;
 			await agent.installPi();
 			alert("pi installed. You can retry your action now.");
@@ -726,8 +727,14 @@ async function initApp() {
 	// Load auto-collapse settings
 	loadAutoCollapseSettings();
 
-	// Load models
+	// Load the full model catalog before restoring a session. Persisted sessions
+	// contain only provider/modelId refs, so restoration needs this metadata.
 	const endLoadModelSpan = traceSpanStart("frontend_load_default_model");
+	try {
+		await agent.fetchAvailableModels();
+	} catch (err) {
+		console.warn("Failed to preload available models; using compact session metadata", err);
+	}
 	await agent.loadDefaultModel();
 	endLoadModelSpan();
 

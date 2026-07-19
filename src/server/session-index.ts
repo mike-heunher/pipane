@@ -9,7 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { getAgentDir, parseSessionEntries } from "@mariozechner/pi-coding-agent";
+import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 
 export interface SessionListItem {
 	id: string;

@@ -107,6 +107,41 @@ test.describe("Real stack e2e", () => {
 		expect(syncFailures, "session sync should not enter full-sync recovery").toEqual([]);
 	});
 
+	test("preserves, clamps, executes, and restores effective thinking across model changes", async ({ page }) => {
+		harness.setScenarios([
+			{ match: "thinking-state-e2e", chunks: textChunks("Thinking state persisted.") },
+		]);
+
+		await gotoFreshSession(page);
+		const thinkingButton = page.locator(".thinking-icon-btn");
+		await expect(thinkingButton).toBeVisible();
+		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("medium");
+
+		// The full model supports high → xhigh. The sparse model has a hole at
+		// xhigh but supports max, so pi's upward-first clamp must preview as max.
+		await thinkingButton.click();
+		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("high");
+		await thinkingButton.click();
+		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("xhigh");
+
+		await page.getByText("mock-model", { exact: true }).click();
+		await expect(page.locator(".model-picker-overlay")).toBeVisible();
+		await page.getByText("mock/mock-sparse", { exact: true }).click();
+		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("max");
+
+		const textarea = page.locator("message-editor").locator("textarea").first();
+		await textarea.fill("thinking-state-e2e");
+		await textarea.press("Enter");
+		await expect(page.getByText("Thinking state persisted.", { exact: false })).toBeVisible({ timeout: 15000 });
+		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("max");
+
+		// A full reload exercises compact session model restoration and the final
+		// authoritative detach snapshot, not just optimistic local UI state.
+		await page.reload();
+		await expect(page.locator("message-editor")).toBeVisible({ timeout: 10000 });
+		await expect(page.getByText("mock-sparse", { exact: true })).toBeVisible({ timeout: 10000 });
+		await expect(page.locator(".thinking-icon-btn .thinking-level-label")).toHaveText("max");
+	});
 
 	test("can execute a tool call and see the result", async ({ page }) => {
 		harness.setScenarios([

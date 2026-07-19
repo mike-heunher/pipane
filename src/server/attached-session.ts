@@ -15,8 +15,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import {
 	parseSessionEntries,
 	buildSessionContext,
-} from "@mariozechner/pi-coding-agent";
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-coding-agent";
+import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
