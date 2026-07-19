@@ -1,5 +1,9 @@
 # pipane Agent Guidelines
 
+## Completing Changes
+
+Once a change is finished, solid, and verified, commit it to Git rather than leaving completed work uncommitted. Do not commit partial or known-broken work.
+
 ## Testing
 
 Run **all** tests before committing:
