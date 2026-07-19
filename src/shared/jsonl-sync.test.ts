@@ -12,6 +12,7 @@ import {
 	computeHash,
 	computeSyncOp,
 	applySyncOp,
+	applySyncOps,
 	type Patch,
 } from "./jsonl-sync.js";
 
@@ -267,6 +268,61 @@ describe("computeSyncOp", () => {
 });
 
 // ── applySyncOp ────────────────────────────────────────────────────────────
+
+describe("applySyncOps", () => {
+	it("applies a full snapshot and hash-chained deltas as one batch", async () => {
+		const states = ["a", "ab", "abc"];
+		const hashes = await Promise.all(states.map(computeHash));
+		const result = await applySyncOps("", "", [
+			{ op: "full", data: states[0], hash: hashes[0] },
+			{
+				op: "delta",
+				patches: computePatches(states[0], states[1]),
+				baseHash: hashes[0],
+				hash: hashes[1],
+			},
+			{
+				op: "delta",
+				patches: computePatches(states[1], states[2]),
+				baseHash: hashes[1],
+				hash: hashes[2],
+			},
+		]);
+
+		expect(result).toEqual({ data: states[2], hash: hashes[2] });
+	});
+
+	it("rejects a broken intermediate base-hash chain", async () => {
+		const hash = await computeHash("a");
+		const result = await applySyncOps("", "", [
+			{ op: "full", data: "a", hash },
+			{
+				op: "delta",
+				patches: [{ offset: 1, deleteCount: 0, insert: "b" }],
+				baseHash: "not-the-full-hash",
+				hash: await computeHash("ab"),
+			},
+		]);
+
+		expect(result).toBeNull();
+	});
+
+	it("rejects a corrupted intermediate patch by verifying the final hash", async () => {
+		const firstHash = await computeHash("a");
+		const expectedFinalHash = await computeHash("abc");
+		const result = await applySyncOps("", "", [
+			{ op: "full", data: "a", hash: firstHash },
+			{
+				op: "delta",
+				patches: [{ offset: 1, deleteCount: 0, insert: "WRONG" }],
+				baseHash: firstHash,
+				hash: expectedFinalHash,
+			},
+		]);
+
+		expect(result).toBeNull();
+	});
+});
 
 describe("applySyncOp", () => {
 	it("applies full sync", async () => {

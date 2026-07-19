@@ -181,11 +181,56 @@ function getLanguageFromPath(path: string): string {
 	return extToLanguage[ext] || "";
 }
 
+const MAX_HIGHLIGHT_INPUT_CHARS = 100_000;
+const MAX_HIGHLIGHT_CACHE_CHARS = 4_000_000;
+const MAX_HIGHLIGHT_CACHE_ENTRIES = 256;
+
+type HighlightCacheEntry = {
+	language: string;
+	code: string;
+	html: string;
+	size: number;
+};
+
+const highlightCacheByLanguage = new Map<string, Map<string, HighlightCacheEntry>>();
+const highlightCacheLru = new Set<HighlightCacheEntry>();
+let highlightCacheChars = 0;
+
 function highlightCode(code: string, language: string): string {
-	if (language && hljs.getLanguage(language)) {
-		return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+	if (!language || !hljs.getLanguage(language) || code.length > MAX_HIGHLIGHT_INPUT_CHARS) return "";
+
+	const languageCache = highlightCacheByLanguage.get(language);
+	const cached = languageCache?.get(code);
+	if (cached) {
+		highlightCacheLru.delete(cached);
+		highlightCacheLru.add(cached);
+		return cached.html;
 	}
-	return "";
+
+	const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
+	const entry: HighlightCacheEntry = {
+		language,
+		code,
+		html: highlighted,
+		size: code.length + highlighted.length,
+	};
+	if (entry.size > MAX_HIGHLIGHT_CACHE_CHARS) return highlighted;
+
+	const cache = languageCache ?? new Map<string, HighlightCacheEntry>();
+	if (!languageCache) highlightCacheByLanguage.set(language, cache);
+	cache.set(code, entry);
+	highlightCacheLru.add(entry);
+	highlightCacheChars += entry.size;
+
+	while (highlightCacheLru.size > MAX_HIGHLIGHT_CACHE_ENTRIES || highlightCacheChars > MAX_HIGHLIGHT_CACHE_CHARS) {
+		const oldest = highlightCacheLru.values().next().value as HighlightCacheEntry | undefined;
+		if (!oldest) break;
+		highlightCacheLru.delete(oldest);
+		highlightCacheByLanguage.get(oldest.language)?.delete(oldest.code);
+		highlightCacheChars -= oldest.size;
+	}
+
+	return highlighted;
 }
 
 function resultText(result: ToolResultMessage | undefined): string {
@@ -284,7 +329,7 @@ class ReadRenderer implements ToolRenderer {
 
 		const content = output ? truncate(output, 4000) : "";
 		const language = getLanguageFromPath(path);
-		const highlighted = content && !isError ? highlightCode(content, language) : "";
+		const highlighted = content && !isError && !isStreaming ? highlightCode(content, language) : "";
 		const hasBody = !!content;
 
 		return {
@@ -344,7 +389,7 @@ class WriteRenderer implements ToolRenderer {
 
 		const language = getLanguageFromPath(path);
 		const displayContent = fileContent ? truncate(fileContent, 4000) : "";
-		const highlighted = displayContent && !isError ? highlightCode(displayContent, language) : "";
+		const highlighted = displayContent && !isError && !isStreaming ? highlightCode(displayContent, language) : "";
 		const hasBody = !!displayContent;
 
 		return {
@@ -625,7 +670,7 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 			: "";
 
 		const hasBody = !!bodyContent || state === "inprogress";
-		const highlighted = bodyContent ? highlightCode(bodyContent, "json") : "";
+		const highlighted = bodyContent && !isError && !isStreaming ? highlightCode(bodyContent, "json") : "";
 
 		return {
 			content: html`

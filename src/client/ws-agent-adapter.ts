@@ -15,9 +15,15 @@
 import type { ImageContent, Model } from "@mariozechner/pi-ai";
 import type { AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
-import { applySyncOp, type SyncOp } from "../shared/jsonl-sync.js";
+import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 
 export type SessionStatus = "virtual" | "detached" | "attached";
+
+type SessionSyncChanges = {
+	content: boolean;
+	status: boolean;
+	steering: boolean;
+};
 
 type WsCommand =
 	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevel; images?: ImageContent[] }
@@ -663,13 +669,22 @@ export class WsAgentAdapter {
 	private async flushSessionSyncQueue() {
 		if (this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushInProgress = true;
+		const changes: SessionSyncChanges = { content: false, status: false, steering: false };
 		try {
 			while (this._pendingSessionSyncs.length > 0) {
-				const next = this._pendingSessionSyncs.shift();
-				if (next) await this.applySessionSync(next);
+				// Hash and parse the latest state once for the whole currently queued
+				// chain. New frames received during async hashing form the next batch.
+				const batch = this._pendingSessionSyncs.splice(0);
+				const batchChanges = await this.applySessionSyncBatch(batch);
+				if (batchChanges) {
+					changes.content ||= batchChanges.content;
+					changes.status ||= batchChanges.status;
+					changes.steering ||= batchChanges.steering;
+				}
 			}
 		} finally {
 			this._sessionSyncFlushInProgress = false;
+			this.emitSessionSyncChanges(changes);
 			// If something arrived while we were finalizing, schedule another frame.
 			if (this._pendingSessionSyncs.length > 0 && !this._sessionSyncFlushScheduled) {
 				this._sessionSyncFlushScheduled = true;
@@ -681,43 +696,57 @@ export class WsAgentAdapter {
 		}
 	}
 
+	/** Single-operation wrapper retained for focused tests and recovery paths. */
 	private async applySessionSync(syncMsg: any) {
-		const syncSessionPath = syncMsg.__sessionPath as string | undefined;
-		const syncSessionNonce = syncMsg.__sessionNonce as number | undefined;
-		if (syncSessionPath !== this._sessionPath || syncSessionNonce !== this._sessionNonce) return;
+		const changes = await this.applySessionSyncBatch([syncMsg]);
+		if (changes) this.emitSessionSyncChanges(changes);
+	}
 
-		const syncOp: SyncOp = {
+	private emitSessionSyncChanges(changes: SessionSyncChanges) {
+		if (changes.steering) this.emitSteeringQueueChange();
+		if (changes.content) this.emitContentChange();
+		if (changes.status) this.emitStatusChange();
+	}
+
+	private async applySessionSyncBatch(syncMessages: any[]): Promise<SessionSyncChanges | undefined> {
+		const syncSessionPath = this._sessionPath;
+		const syncSessionNonce = this._sessionNonce;
+		if (!syncSessionPath || syncMessages.length === 0) return;
+		if (syncMessages.some((message) =>
+			message.__sessionPath !== syncSessionPath || message.__sessionNonce !== syncSessionNonce
+		)) return;
+
+		const syncOps: SyncOp[] = syncMessages.map((syncMsg) => ({
 			op: syncMsg.op,
 			...(syncMsg.op === "full"
 				? { data: syncMsg.data, hash: syncMsg.hash }
 				: { patches: syncMsg.patches, hash: syncMsg.hash, baseHash: syncMsg.baseHash }),
-		};
+		}) as SyncOp);
 
 		// After reconnect/re-subscribe, we must receive a full sync first.
 		// Ignore early deltas until a base hash exists.
-		if (syncOp.op === "delta" && !this._syncHash) {
+		if (syncOps[0]?.op === "delta" && !this._syncHash) {
 			console.warn("[ws-adapter] Ignoring delta while awaiting full sync");
 			return;
 		}
 
-		const result = await applySyncOp(this._syncJson, this._syncHash, syncOp);
+		const result = await applySyncOps(this._syncJson, this._syncHash, syncOps);
 		// Hashing is asynchronous. Never let an old session commit into a newer one.
 		if (syncSessionPath !== this._sessionPath || syncSessionNonce !== this._sessionNonce) return;
 		if (!result) {
 			// Hash verification failed — request a full sync by re-subscribing.
 			console.error("[ws-adapter] Sync verification failed, re-subscribing");
-			if (this._sessionPath) {
-				this._syncJson = "";
-				this._syncHash = "";
-				this.subscribeToSession(this._sessionPath);
-			}
+			this._syncJson = "";
+			this._syncHash = "";
+			this.subscribeToSession(syncSessionPath);
 			return;
 		}
 
 		this._syncJson = result.data;
 		this._syncHash = result.hash;
 
-		// Parse the synced state and apply it
+		// Parse only the final state in the batch. Intermediate hash-chain states
+		// were never observable between animation frames.
 		let state: any;
 		try {
 			state = JSON.parse(result.data);
@@ -725,6 +754,11 @@ export class WsAgentAdapter {
 			console.error("[ws-adapter] Failed to parse synced state");
 			return;
 		}
+
+		const previousStreaming = this._state.isStreaming;
+		const previousSessionStatus = this._sessionStatus;
+		const previousError = this._state.error;
+		const previousSteering = [...(this._steeringQueues.get(syncSessionPath) ?? [])];
 
 		// The server sends a flat messages array with everything merged in.
 		// Just use it directly — no splitting, no fixups.
@@ -749,19 +783,21 @@ export class WsAgentAdapter {
 			}
 			this._restoreModelFromServer = false;
 		}
-		if (Array.isArray(state.steeringQueue) && this._sessionPath) {
-			if (state.steeringQueue.length > 0) this._steeringQueues.set(this._sessionPath, [...state.steeringQueue]);
-			else this._steeringQueues.delete(this._sessionPath);
-			this.emitSteeringQueueChange();
+		if (Array.isArray(state.steeringQueue)) {
+			if (state.steeringQueue.length > 0) this._steeringQueues.set(syncSessionPath, [...state.steeringQueue]);
+			else this._steeringQueues.delete(syncSessionPath);
 		}
-		if (state.error) {
-			this._state.error = state.error;
-		} else {
-			this._state.error = undefined;
-		}
+		this._state.error = state.error || undefined;
 
-		this.emitContentChange();
-		this.emitStatusChange();
+		const nextSteering = this._steeringQueues.get(syncSessionPath) ?? [];
+		return {
+			content: true,
+			status: previousStreaming !== this._state.isStreaming
+				|| previousSessionStatus !== this._sessionStatus
+				|| previousError !== this._state.error,
+			steering: previousSteering.length !== nextSteering.length
+				|| previousSteering.some((value, index) => value !== nextSteering[index]),
+		};
 	}
 
 	/**

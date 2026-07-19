@@ -259,3 +259,54 @@ export async function applySyncOp(
 
 	return { data: newStr, hash: op.hash };
 }
+
+/**
+ * Client-side: apply an ordered batch of hash-chained sync operations.
+ *
+ * Every advertised base hash is checked, but the resulting data is hashed only
+ * once after the final operation. Verifying the final SHA-256 still detects any
+ * corrupted intermediate patch while avoiding O(batch size) full-state hashes
+ * during bursty streaming.
+ */
+export async function applySyncOps(
+	currentStr: string,
+	currentHash: string,
+	ops: readonly SyncOp[],
+): Promise<{ data: string; hash: string } | null> {
+	if (ops.length === 0) return { data: currentStr, hash: currentHash };
+
+	let data = currentStr;
+	let hash = currentHash;
+	let finalOp: SyncOp | undefined;
+
+	for (const op of ops) {
+		finalOp = op;
+		if (op.op === "full") {
+			data = op.data;
+			hash = op.hash;
+			continue;
+		}
+
+		if (op.baseHash !== hash) {
+			console.warn("[jsonl-sync] Base hash mismatch, need full sync", {
+				expected: op.baseHash,
+				actual: hash,
+			});
+			return null;
+		}
+
+		data = applyPatches(data, op.patches);
+		hash = op.hash;
+	}
+
+	const actualHash = await computeHash(data);
+	if (actualHash !== hash) {
+		const message = finalOp?.op === "full"
+			? "[jsonl-sync] Full sync hash mismatch"
+			: "[jsonl-sync] Post-patch hash mismatch";
+		console.error(message, { expected: hash, actual: actualHash });
+		return null;
+	}
+
+	return { data, hash };
+}

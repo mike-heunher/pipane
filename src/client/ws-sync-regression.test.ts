@@ -95,4 +95,35 @@ describe("WsAgentAdapter burst session sync", () => {
 		);
 		expect(error).not.toHaveBeenCalledWith("[ws-adapter] Sync verification failed, re-subscribing");
 	});
+
+	it("publishes only the final state from a queued burst", async () => {
+		vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+		const { adapter } = createAdapter();
+		const a = adapter as any;
+		const contentChange = vi.fn();
+		const statusChange = vi.fn();
+		const steeringChange = vi.fn();
+		adapter.onContentChange(contentChange);
+		adapter.onStatusChange(statusChange);
+		adapter.onSteeringQueueChange(steeringChange);
+
+		const states = Array.from({ length: 25 }, (_, index) => sessionState(`chunk ${index}`));
+		const hashes = await Promise.all(states.map(computeHash));
+		deliver(adapter, { op: "full", data: states[0], hash: hashes[0] });
+		for (let index = 1; index < states.length; index++) {
+			deliver(adapter, {
+				op: "delta",
+				patches: computePatches(states[index - 1], states[index]),
+				baseHash: hashes[index - 1],
+				hash: hashes[index],
+			});
+		}
+
+		await a.flushSessionSyncQueue();
+
+		expect((adapter.state.messages[0] as any).content[0].text).toBe("chunk 24");
+		expect(contentChange).toHaveBeenCalledTimes(1);
+		expect(statusChange).toHaveBeenCalledTimes(1);
+		expect(steeringChange).not.toHaveBeenCalled();
+	});
 });

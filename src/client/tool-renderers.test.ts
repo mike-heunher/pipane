@@ -6,12 +6,17 @@
  * icon/spinner in console header, isCustom: true).
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import hljs from "highlight.js/lib/core";
 import { getToolRenderer } from "./ui/tool-registry.js";
 import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./ui/tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
 registerCodingAgentRenderers();
+
+beforeEach(() => {
+	vi.restoreAllMocks();
+});
 
 describe("stripCdPrefix", () => {
 	it("strips cd /path && prefix from command", () => {
@@ -30,6 +35,60 @@ describe("stripCdPrefix", () => {
 
 	it("strips cd prefix from multiline commands", () => {
 		expect(stripCdPrefix("cd /foo && echo a\necho b")).toBe("echo a\necho b");
+	});
+});
+
+describe("syntax highlighting", () => {
+	it("reuses highlighted output across unchanged historical tool renders", () => {
+		const highlight = vi.spyOn(hljs, "highlight");
+		const renderer = getToolRenderer("read")!;
+		const toolResult = {
+			role: "toolResult" as const,
+			isError: false,
+			content: [{ type: "text" as const, text: "const profileCacheSentinel = 8760520;" }],
+			toolCallId: "cache-test",
+			toolName: "read",
+			timestamp: Date.now(),
+		};
+
+		renderer.render({ path: "/tmp/profile-cache-test.ts" }, toolResult, false);
+		renderer.render({ path: "/tmp/profile-cache-test.ts" }, toolResult, false);
+
+		expect(highlight).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not repeatedly highlight tool output while it is streaming", () => {
+		const highlight = vi.spyOn(hljs, "highlight");
+		const renderer = getToolRenderer("read")!;
+		const toolResult = {
+			role: "toolResult" as const,
+			isError: false,
+			content: [{ type: "text" as const, text: "const streamingProfileSentinel = 1;" }],
+			toolCallId: "streaming-highlight-test",
+			toolName: "read",
+			timestamp: Date.now(),
+		};
+
+		renderer.render({ path: "/tmp/streaming-profile-test.ts" }, toolResult, true);
+
+		expect(highlight).not.toHaveBeenCalled();
+	});
+
+	it("leaves very large outputs as plain text", () => {
+		const highlight = vi.spyOn(hljs, "highlight");
+		const renderer = getToolRenderer("read")!;
+		const toolResult = {
+			role: "toolResult" as const,
+			isError: false,
+			content: [{ type: "text" as const, text: "x".repeat(100_001) }],
+			toolCallId: "large-highlight-test",
+			toolName: "read",
+			timestamp: Date.now(),
+		};
+
+		renderer.render({ path: "/tmp/large-profile-test.ts" }, toolResult, false);
+
+		expect(highlight).not.toHaveBeenCalled();
 	});
 });
 
