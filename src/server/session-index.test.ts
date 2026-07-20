@@ -151,6 +151,198 @@ describe("SessionIndex", () => {
 		expect(sessions.find((session) => session.id === "sess-b")?.worktreeName).toBe("project--wt-feature");
 	});
 
+	it("detects an existing worktree from completed file-tool activity end to end", async () => {
+		const repo = path.join(agentDir, "checkouts", "project");
+		const worktreeName = "project--wt-feature";
+		const worktree = path.join(agentDir, "checkouts", worktreeName);
+		const worktreeGitDir = path.join(repo, ".git", "worktrees", worktreeName);
+		mkdirSync(path.join(repo, "src"), { recursive: true });
+		mkdirSync(path.join(worktree, "src"), { recursive: true });
+		mkdirSync(worktreeGitDir, { recursive: true });
+		writeFileSync(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
+		writeFileSync(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
+
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "worktree.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "sess-worktree", cwd: repo, timestamp: "2026-01-01T10:00:00.000Z" },
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: null,
+				timestamp: "2026-01-01T10:00:01.000Z",
+				message: {
+					role: "assistant",
+					content: [{
+						type: "toolCall",
+						id: "edit-1",
+						name: "edit",
+						arguments: { path: path.join(worktree, "src", "feature.ts"), edits: [] },
+					}],
+				},
+			},
+			{
+				type: "message",
+				id: "result-1",
+				parentId: "assistant-1",
+				timestamp: "2026-01-01T10:00:02.000Z",
+				message: { role: "toolResult", toolCallId: "edit-1", content: [], isError: false },
+			},
+		]);
+
+		const index = new SessionIndex({ agentDir, extractorVersion: "worktree-e2e-v1" });
+		expect((await index.listSessions())[0].worktreeName).toBe(worktreeName);
+
+		// Worktree state is intentionally not cached across listings. Removing the
+		// checkout updates the label even though the session JSONL is unchanged.
+		rmSync(worktree, { recursive: true, force: true });
+		expect((await index.listSessions())[0].worktreeName).toBe("root");
+	});
+
+	it("passes successful file-tool activity to the worktree resolver and cache", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "activity.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "sess-activity", cwd: "/tmp/project", timestamp: "2026-01-01T10:00:00.000Z" },
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: null,
+				timestamp: "2026-01-01T10:00:01.000Z",
+				message: {
+					role: "assistant",
+					content: [{
+						type: "toolCall",
+						id: "read-1",
+						name: "read",
+						arguments: JSON.stringify({ path: "/tmp/project--wt-feature/src/feature.ts" }),
+					}],
+				},
+			},
+			{
+				type: "message",
+				id: "result-1",
+				parentId: "assistant-1",
+				timestamp: "2026-01-01T10:00:02.000Z",
+				message: { role: "toolResult", toolCallId: "read-1", content: [], isError: false },
+			},
+			{
+				type: "message",
+				id: "assistant-2",
+				parentId: "result-1",
+				timestamp: "2026-01-01T10:00:03.000Z",
+				message: {
+					role: "assistant",
+					content: [{
+						type: "toolCall",
+						id: "failed-write",
+						name: "write",
+						arguments: { path: "src/failed.ts", content: "nope" },
+					}],
+				},
+			},
+			{
+				type: "message",
+				id: "result-2",
+				parentId: "assistant-2",
+				timestamp: "2026-01-01T10:00:04.000Z",
+				message: { role: "toolResult", toolCallId: "failed-write", content: [], isError: true },
+			},
+			{
+				type: "message",
+				id: "assistant-3",
+				parentId: "result-2",
+				timestamp: "2026-01-01T10:00:05.000Z",
+				message: {
+					role: "assistant",
+					content: [{
+						type: "toolCall",
+						id: "parallel-1",
+						name: "multi_tool_use.parallel",
+						arguments: {
+							tool_uses: [
+								{ recipient_name: "functions.hypa_read", parameters: { path: "/tmp/project--wt-feature/src/second.ts" } },
+								{ recipient_name: "functions.edit", parameters: { path: "src/main.ts", edits: [] } },
+							],
+						},
+					}],
+				},
+			},
+			{
+				type: "message",
+				id: "result-3",
+				parentId: "assistant-3",
+				timestamp: "2026-01-01T10:00:06.000Z",
+				message: { role: "toolResult", toolCallId: "parallel-1", content: [], isError: false },
+			},
+		]);
+
+		const observedPaths: string[][] = [];
+		const index = new SessionIndex({
+			agentDir,
+			extractorVersion: "tool-activity-v1",
+			worktreeNameResolver: (_cwd, recentToolPaths = []) => {
+				observedPaths.push([...recentToolPaths]);
+				return "activity-derived";
+			},
+		});
+
+		expect((await index.listSessions())[0].worktreeName).toBe("activity-derived");
+		expect((await index.listSessions())[0].worktreeName).toBe("activity-derived");
+		expect(observedPaths).toEqual([
+			[
+				"/tmp/project--wt-feature/src/feature.ts",
+				"/tmp/project--wt-feature/src/second.ts",
+				"/tmp/project/src/main.ts",
+			],
+			[
+				"/tmp/project--wt-feature/src/feature.ts",
+				"/tmp/project--wt-feature/src/second.ts",
+				"/tmp/project/src/main.ts",
+			],
+		]);
+	});
+
+	it("bounds cached file-tool history", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "bounded.jsonl");
+		const lines: any[] = [
+			{ type: "session", id: "sess-bounded", cwd: "/tmp/project", timestamp: "2026-01-01T10:00:00.000Z" },
+		];
+		for (let i = 0; i < 70; i++) {
+			lines.push({
+				type: "message",
+				id: `assistant-${i}`,
+				parentId: null,
+				timestamp: "2026-01-01T10:00:01.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: `read-${i}`, name: "read", arguments: { path: `/tmp/project/src/${i}.ts` } }],
+				},
+			});
+			lines.push({
+				type: "message",
+				id: `result-${i}`,
+				parentId: `assistant-${i}`,
+				timestamp: "2026-01-01T10:00:02.000Z",
+				message: { role: "toolResult", toolCallId: `read-${i}`, content: [], isError: false },
+			});
+		}
+		writeSessionJsonl(sessionPath, lines);
+
+		let observedPaths: readonly string[] = [];
+		const index = new SessionIndex({
+			agentDir,
+			extractorVersion: "bounded-tool-activity-v1",
+			worktreeNameResolver: (_cwd, recentToolPaths = []) => {
+				observedPaths = recentToolPaths;
+				return "root";
+			},
+		});
+		await index.listSessions();
+
+		expect(observedPaths).toHaveLength(16);
+		expect(observedPaths[0]).toBe("/tmp/project/src/54.ts");
+		expect(observedPaths[15]).toBe("/tmp/project/src/69.ts");
+	});
+
 	it("invalidates by extractor version", async () => {
 		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
 		writeSessionJsonl(sessionPath, [

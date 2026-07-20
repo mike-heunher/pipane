@@ -10,7 +10,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
-import { resolveWorktreeName } from "./worktree-name.js";
+import {
+	createWorktreeNameResolver,
+	type WorktreeNameResolver,
+} from "./worktree-name.js";
 
 export interface SessionListItem {
 	id: string;
@@ -30,6 +33,12 @@ interface CachedSessionEntry {
 	fileMtimeMs: number;
 	fileSize: number;
 	meta: SessionListItem;
+	recentToolPaths?: string[];
+}
+
+interface ExtractedSessionMeta {
+	meta: SessionListItem;
+	recentToolPaths: string[];
 }
 
 interface SessionIndexCacheFile {
@@ -40,27 +49,37 @@ interface SessionIndexCacheFile {
 }
 
 const CACHE_FORMAT_VERSION = 1 as const;
-const DEFAULT_EXTRACTOR_VERSION = "2";
+const DEFAULT_EXTRACTOR_VERSION = "3";
+const MAX_RECENT_TOOL_PATHS = 16;
+const PATH_ACTIVITY_TOOLS = new Set([
+	"edit",
+	"hypa_find",
+	"hypa_grep",
+	"hypa_ls",
+	"hypa_read",
+	"read",
+	"write",
+]);
 
 export class SessionIndex {
 	private readonly agentDir: string;
 	private readonly extractorVersion: string;
 	private readonly cacheFilePath: string;
 	private readonly cwdDisplayFormatter?: (cwd: string) => string;
-	private readonly worktreeNameResolver: (cwd: string) => string;
+	private readonly worktreeNameResolver?: WorktreeNameResolver;
 	private inMemoryCache: SessionIndexCacheFile | null | undefined;
 
 	constructor(opts?: {
 		agentDir?: string;
 		extractorVersion?: string;
 		cwdDisplayFormatter?: (cwd: string) => string;
-		worktreeNameResolver?: (cwd: string) => string;
+		worktreeNameResolver?: WorktreeNameResolver;
 	}) {
 		this.agentDir = opts?.agentDir ?? getAgentDir();
 		this.extractorVersion = opts?.extractorVersion ?? DEFAULT_EXTRACTOR_VERSION;
 		this.cacheFilePath = path.join(this.agentDir, "cache", "pipane-session-index-v1.json");
 		this.cwdDisplayFormatter = opts?.cwdDisplayFormatter;
-		this.worktreeNameResolver = opts?.worktreeNameResolver ?? resolveWorktreeName;
+		this.worktreeNameResolver = opts?.worktreeNameResolver;
 	}
 
 	async listSessions(): Promise<SessionListItem[]> {
@@ -89,8 +108,8 @@ export class SessionIndex {
 				continue;
 			}
 
-			const meta = this.extractSessionMeta(sessionPath, stat.mtimeMs);
-			if (!meta) {
+			const extracted = this.extractSessionMeta(sessionPath, stat.mtimeMs);
+			if (!extracted) {
 				mutated = true;
 				continue;
 			}
@@ -98,9 +117,10 @@ export class SessionIndex {
 			nextEntries[sessionPath] = {
 				fileMtimeMs: stat.mtimeMs,
 				fileSize: stat.size,
-				meta,
+				meta: extracted.meta,
+				recentToolPaths: extracted.recentToolPaths,
 			};
-			sessions.push(meta);
+			sessions.push(extracted.meta);
 			mutated = true;
 		}
 
@@ -134,16 +154,19 @@ export class SessionIndex {
 			}
 		}
 
-		const worktreeNames = new Map<string, string>();
+		// A default resolver is scoped to one listing: its filesystem lookups are
+		// shared by every session, but discarded before the next request so newly
+		// created or removed worktrees are reflected immediately.
+		const worktreeNameResolver = this.worktreeNameResolver ?? createWorktreeNameResolver();
 		return sessions.map((session) => {
-			let worktreeName = worktreeNames.get(session.cwd);
-			if (!worktreeName) {
-				try {
-					worktreeName = this.worktreeNameResolver(session.cwd) || "root";
-				} catch {
-					worktreeName = "root";
-				}
-				worktreeNames.set(session.cwd, worktreeName);
+			let worktreeName = "root";
+			try {
+				worktreeName = worktreeNameResolver(
+					session.cwd,
+					nextEntries[session.path]?.recentToolPaths ?? [],
+				) || "root";
+			} catch {
+				worktreeName = "root";
 			}
 			return { ...session, worktreeName };
 		});
@@ -182,7 +205,7 @@ export class SessionIndex {
 		return files;
 	}
 
-	private extractSessionMeta(sessionPath: string, statMtimeMs: number): SessionListItem | null {
+	private extractSessionMeta(sessionPath: string, statMtimeMs: number): ExtractedSessionMeta | null {
 		try {
 			const content = readFileSync(sessionPath, "utf8");
 			const entries = parseSessionEntries(content) as Array<any>;
@@ -190,12 +213,15 @@ export class SessionIndex {
 
 			const header = entries[0];
 			if (header?.type !== "session" || typeof header.id !== "string") return null;
+			const cwd = typeof header.cwd === "string" ? header.cwd : "";
 
 			let name: string | undefined;
 			let messageCount = 0;
 			let firstMessage = "";
 			let lastActivityTime: number | undefined;
 			let lastUserPromptTimeMs = 0;
+			const pendingToolPaths = new Map<string, string[]>();
+			const recentToolPaths: string[] = [];
 
 			for (const entry of entries) {
 				if (entry?.type === "session_info" && typeof entry.name === "string") {
@@ -208,6 +234,20 @@ export class SessionIndex {
 
 				const msg = entry.message;
 				if (!msg || typeof msg.role !== "string" || !Object.prototype.hasOwnProperty.call(msg, "content")) continue;
+
+				if (msg.role === "assistant") {
+					this.rememberPendingToolPaths(msg.content, cwd, pendingToolPaths);
+				} else if (msg.role === "toolResult" && typeof msg.toolCallId === "string") {
+					const completedPaths = pendingToolPaths.get(msg.toolCallId);
+					pendingToolPaths.delete(msg.toolCallId);
+					if (msg.isError !== true && completedPaths) {
+						recentToolPaths.push(...completedPaths);
+						if (recentToolPaths.length > MAX_RECENT_TOOL_PATHS) {
+							recentToolPaths.splice(0, recentToolPaths.length - MAX_RECENT_TOOL_PATHS);
+						}
+					}
+				}
+
 				if (msg.role !== "user" && msg.role !== "assistant") continue;
 
 				const messageTs = typeof msg.timestamp === "number" ? msg.timestamp : undefined;
@@ -237,19 +277,76 @@ export class SessionIndex {
 				return new Date(statMtimeMs);
 			})();
 
-			const cwd = typeof header.cwd === "string" ? header.cwd : "";
 			return {
-				id: header.id,
-				path: sessionPath,
-				cwd,
-				cwdDisplay: cwd && this.cwdDisplayFormatter ? this.cwdDisplayFormatter(cwd) : cwd,
-				name,
-				created: created.toISOString(),
-				modified: modified.toISOString(),
-				lastUserPromptTime: lastUserPromptTimeMs > 0 ? new Date(lastUserPromptTimeMs).toISOString() : undefined,
-				messageCount,
-				firstMessage: firstMessage || "(no messages)",
+				meta: {
+					id: header.id,
+					path: sessionPath,
+					cwd,
+					cwdDisplay: cwd && this.cwdDisplayFormatter ? this.cwdDisplayFormatter(cwd) : cwd,
+					name,
+					created: created.toISOString(),
+					modified: modified.toISOString(),
+					lastUserPromptTime: lastUserPromptTimeMs > 0 ? new Date(lastUserPromptTimeMs).toISOString() : undefined,
+					messageCount,
+					firstMessage: firstMessage || "(no messages)",
+				},
+				recentToolPaths,
 			};
+		} catch {
+			return null;
+		}
+	}
+
+	private rememberPendingToolPaths(
+		content: unknown,
+		cwd: string,
+		pendingToolPaths: Map<string, string[]>,
+	): void {
+		if (!Array.isArray(content)) return;
+		for (const chunk of content) {
+			if (chunk?.type !== "toolCall" || typeof chunk.id !== "string") continue;
+			pendingToolPaths.set(
+				chunk.id,
+				this.extractToolPaths(chunk.name, chunk.arguments, cwd),
+			);
+		}
+	}
+
+	private extractToolPaths(toolName: unknown, rawArguments: unknown, cwd: string): string[] {
+		if (typeof toolName !== "string") return [];
+		const args = this.parseToolArguments(rawArguments);
+		if (!args) return [];
+
+		if (Array.isArray(args.tool_uses)) {
+			return args.tool_uses.flatMap((toolUse: any) => this.extractToolPaths(
+				toolUse?.recipient_name,
+				toolUse?.parameters,
+				cwd,
+			));
+		}
+
+		const shortName = toolName.toLowerCase().split(".").pop() ?? "";
+		if (!PATH_ACTIVITY_TOOLS.has(shortName)) return [];
+		const candidate = typeof args.path === "string"
+			? args.path
+			: typeof args.file_path === "string"
+				? args.file_path
+				: "";
+		if (!candidate || candidate.includes("\0")) return [];
+		if (!path.isAbsolute(candidate) && !cwd) return [];
+		return [path.resolve(cwd || path.parse(candidate).root, candidate)];
+	}
+
+	private parseToolArguments(rawArguments: unknown): Record<string, any> | null {
+		if (rawArguments && typeof rawArguments === "object" && !Array.isArray(rawArguments)) {
+			return rawArguments as Record<string, any>;
+		}
+		if (typeof rawArguments !== "string") return null;
+		try {
+			const parsed = JSON.parse(rawArguments);
+			return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+				? parsed as Record<string, any>
+				: null;
 		} catch {
 			return null;
 		}

@@ -14,6 +14,22 @@ function makeTempDir(): string {
 	return dir;
 }
 
+function makeRepoWithWorktree(name = "project--wt-fix-login"): {
+	repo: string;
+	worktree: string;
+} {
+	const root = makeTempDir();
+	const repo = path.join(root, "project");
+	const worktree = path.join(root, name);
+	const gitDir = path.join(repo, ".git", "worktrees", name);
+	mkdirSync(path.join(repo, "src"), { recursive: true });
+	mkdirSync(path.join(worktree, "src"), { recursive: true });
+	mkdirSync(gitDir, { recursive: true });
+	writeFileSync(path.join(gitDir, "commondir"), "../..\n", "utf8");
+	writeFileSync(path.join(worktree, ".git"), `gitdir: ${gitDir}\n`, "utf8");
+	return { repo, worktree };
+}
+
 afterEach(() => {
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
@@ -32,16 +48,50 @@ describe("resolveWorktreeName", () => {
 	});
 
 	it("uses the linked worktree directory name", () => {
-		const root = makeTempDir();
-		const worktree = path.join(root, "project--wt-fix-login");
-		const nested = path.join(worktree, "src");
-		const gitDir = path.join(root, "project", ".git", "worktrees", "project--wt-fix-login");
-		mkdirSync(nested, { recursive: true });
-		mkdirSync(gitDir, { recursive: true });
-		writeFileSync(path.join(gitDir, "commondir"), "../..\n", "utf8");
-		writeFileSync(path.join(worktree, ".git"), `gitdir: ${gitDir}\n`, "utf8");
+		const { worktree } = makeRepoWithWorktree();
 
-		expect(resolveWorktreeName(nested)).toBe("project--wt-fix-login");
+		expect(resolveWorktreeName(path.join(worktree, "src"))).toBe("project--wt-fix-login");
+	});
+
+	it("prefers recent same-repository tool activity over the session cwd", () => {
+		const { repo, worktree } = makeRepoWithWorktree("project--wt-feature");
+
+		expect(resolveWorktreeName(repo, [path.join(worktree, "src", "feature.ts")]))
+			.toBe("project--wt-feature");
+	});
+
+	it("uses the newest same-repository activity and ignores unrelated tool reads", () => {
+		const { repo, worktree } = makeRepoWithWorktree("project--wt-feature");
+		const unrelated = path.join(makeTempDir(), "skills", "worktree", "SKILL.md");
+		mkdirSync(path.dirname(unrelated), { recursive: true });
+		writeFileSync(unrelated, "skill", "utf8");
+
+		expect(resolveWorktreeName(repo, [
+			path.join(worktree, "src", "feature.ts"),
+			unrelated,
+		])).toBe("project--wt-feature");
+
+		expect(resolveWorktreeName(repo, [
+			path.join(worktree, "src", "feature.ts"),
+			path.join(repo, "src", "main.ts"),
+			unrelated,
+		])).toBe("root");
+	});
+
+	it("falls back to root after the active worktree is removed", () => {
+		const { repo, worktree } = makeRepoWithWorktree("project--wt-finished");
+		const activityPath = path.join(worktree, "src", "finished.ts");
+		rmSync(worktree, { recursive: true, force: true });
+
+		expect(resolveWorktreeName(repo, [activityPath])).toBe("root");
+	});
+
+	it("does not use activity from a different repository", () => {
+		const first = makeRepoWithWorktree("project--wt-first");
+		const second = makeRepoWithWorktree("project--wt-second");
+
+		expect(resolveWorktreeName(first.repo, [path.join(second.worktree, "src", "other.ts")]))
+			.toBe("root");
 	});
 
 	it("does not mistake a separate git directory for a linked worktree", () => {
