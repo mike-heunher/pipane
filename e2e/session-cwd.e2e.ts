@@ -159,61 +159,53 @@ test.describe("Session CWD stability", () => {
 		const activeCwdBeforeSend = await getActiveSessionGroupCwd(page);
 		expect(normalizeCwd(activeCwdBeforeSend!)).toBe(normalizeCwd(projectCwd!));
 
-		// Send the message
-		await textarea2.press("Meta+Enter");
-
-		// Step 4: Poll the active session's group cwd repeatedly during streaming.
-		// The session must NEVER leave the project group.
-		const pollResults: Array<{ time: number; cwd: string | null; debug?: string }> = [];
-		const startTime = Date.now();
-
-		// Poll for up to 10 seconds (covers the streaming + settlement period)
-		while (Date.now() - startTime < 10000) {
-			const info = await page.evaluate(() => {
-				const picker = document.querySelector("session-picker") as any;
-				if (!picker?.shadowRoot) return { cwd: null, debug: "no picker" };
-
-				// Dump all sessions data for debugging
-				const allSessions = (picker as any).sessions as Array<{id: string, path: string, cwd: string, firstMessage: string}>;
-				const sessionSummary = allSessions?.map((s: any) => `[${s.id?.slice(0,8)} cwd=${s.cwd?.slice(-30)||'""'} msg=${s.firstMessage?.slice(0,20)}]`).join(", ") || "?";
-
+		// Observe every sidebar mutation before sending. This catches transient
+		// regrouping without wall-clock polling sleeps.
+		await page.evaluate(() => {
+			const picker = document.querySelector("session-picker") as any;
+			if (!picker?.shadowRoot) throw new Error("No session picker to observe");
+			const startedAt = performance.now();
+			const observations: Array<{ time: number; cwd: string | null; debug: string }> = [];
+			const record = () => {
+				const allSessions = picker.sessions as Array<{ id: string; cwd: string; firstMessage: string }>;
+				const sessionSummary = allSessions?.map((session: any) =>
+					`[${session.id?.slice(0, 8)} cwd=${session.cwd?.slice(-30) || '""'} msg=${session.firstMessage?.slice(0, 20)}]`
+				).join(", ") || "?";
 				const active = picker.shadowRoot.querySelector(".session-item.active");
-				if (!active) {
-					return { cwd: null, debug: `no active | sessions: ${sessionSummary}` };
-				}
-
-				// Walk backwards to find group header
-				let el: Element | null = active;
+				let element: Element | null = active;
 				let groupCwd: string | null = null;
-				while (el) {
-					el = el.previousElementSibling;
-					if (el?.classList.contains("group-header")) {
-						groupCwd = el.getAttribute("title");
+				while (element) {
+					element = element.previousElementSibling;
+					if (element?.classList.contains("group-header")) {
+						groupCwd = element.getAttribute("title");
 						break;
 					}
 				}
+				observations.push({
+					time: Number((performance.now() - startedAt).toFixed(1)),
+					cwd: groupCwd,
+					debug: active
+						? `active: ${(active.getAttribute("title") || "").slice(0, 60)} | sessions: ${sessionSummary}`
+						: `no active | sessions: ${sessionSummary}`,
+				});
+			};
+			record();
+			const observer = new MutationObserver(record);
+			observer.observe(picker.shadowRoot, { childList: true, subtree: true, attributes: true });
+			(window as any).__cwdObserver = observer;
+			(window as any).__cwdObservations = observations;
+		});
 
-				const title = active.getAttribute("title") || "";
-				return { cwd: groupCwd, debug: `active: ${title.slice(0, 60)} | sessions: ${sessionSummary}` };
-			});
-			pollResults.push({ time: Date.now() - startTime, cwd: info.cwd, debug: info.debug });
-
-			// Break early once we see the response is complete
-			const hasResponse = await page
-				.getByText("second session response", { exact: false })
-				.isVisible()
-				.catch(() => false);
-			if (hasResponse) {
-				// Poll a few more times to catch any post-completion drift
-				for (let i = 0; i < 5; i++) {
-					await page.waitForTimeout(200);
-					const cwdPost = await getActiveSessionGroupCwd(page);
-					pollResults.push({ time: Date.now() - startTime, cwd: cwdPost });
-				}
-				break;
-			}
-			await page.waitForTimeout(100);
-		}
+		await textarea2.press("Meta+Enter");
+		await expect(page.getByText("second session response", { exact: false })).toBeVisible({ timeout: 15_000 });
+		await expect(page.locator(".status-stop-button")).toBeHidden({ timeout: 10_000 });
+		await page.evaluate(() => new Promise<void>((resolve) => {
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+		}));
+		const pollResults = await page.evaluate(() => {
+			((window as any).__cwdObserver as MutationObserver).disconnect();
+			return (window as any).__cwdObservations as Array<{ time: number; cwd: string | null; debug: string }>;
+		});
 
 		// Verify: the session was NEVER outside the project group
 		// (normalize to handle macOS /tmp → /private/tmp symlink)
@@ -234,8 +226,14 @@ test.describe("Session CWD stability", () => {
 			);
 		}
 
-		// Also verify the session eventually settled in the right group
-		const finalCwd = pollResults[pollResults.length - 1]?.cwd;
-		expect(normalizeCwd(finalCwd!)).toBe(normalizedProjectCwd);
+		// Also verify the current authoritative DOM eventually settled in the
+		// right group; a Lit replacement may produce a transient no-active item.
+		await expect.poll(async () => {
+			const finalCwd = await getActiveSessionGroupCwd(page);
+			return finalCwd ? normalizeCwd(finalCwd) : null;
+		}, {
+			timeout: 10_000,
+			message: "Expected the settled session to remain active in its project group",
+		}).toBe(normalizedProjectCwd);
 	});
 });

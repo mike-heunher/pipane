@@ -38,18 +38,21 @@ test.describe("Real stack e2e", () => {
 
 		// If there are existing sessions (from prior tests), the page auto-loads
 		// the most recent one. Create a new virtual session so tests start clean.
-		const hasExistingSessions = await page.evaluate(() => {
+		const existingSessionCount = await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
-			if (!picker?.shadowRoot) return false;
-			return picker.shadowRoot.querySelectorAll(".session-item").length > 0;
+			return picker?.shadowRoot?.querySelectorAll(".session-item").length ?? 0;
 		});
-		if (hasExistingSessions) {
+		if (existingSessionCount > 0) {
 			await page.evaluate(() => {
 				const picker = document.querySelector("session-picker") as any;
-				const btn = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
-				btn?.click();
+				const button = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
+				if (!button) throw new Error("New-session button was not rendered");
+				button.click();
 			});
-			await page.waitForTimeout(300);
+			await expect.poll(async () => page.evaluate(() => {
+				const picker = document.querySelector("session-picker") as any;
+				return picker?.agent?.sessionStatus;
+			})).toBe("virtual");
 		}
 	}
 
@@ -105,10 +108,11 @@ test.describe("Real stack e2e", () => {
 		await textarea.press("Enter");
 
 		await expect(page.getByText("BURST_COMPLETE", { exact: false }).first()).toBeVisible({ timeout: 15000 });
-		// Allow any queued RAF sync and automatic re-subscription to run before
-		// asserting that recovery was never needed.
-		await page.waitForTimeout(250);
-
+		await expect(page.locator(".status-stop-button")).toBeHidden({ timeout: 10_000 });
+		// Cross two paint boundaries so all queued session-sync frame work has run.
+		await page.evaluate(() => new Promise<void>((resolve) => {
+			requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+		}));
 		expect(syncFailures, "session sync should not enter full-sync recovery").toEqual([]);
 	});
 

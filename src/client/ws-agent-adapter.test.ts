@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -20,33 +20,32 @@ import { computeHash, computePatches } from "../shared/jsonl-sync.js";
  * Create an adapter with a mocked WebSocket. Returns the adapter and a
  * spy that captures all messages sent over the WS.
  */
-function createTestAdapter() {
-	const adapter = new WsAgentAdapter();
+function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 	const sent: any[] = [];
 	let messageHandler: ((ev: { data: string }) => void) | null = null;
 
-	// Mock WebSocket
 	const mockWs = {
-		readyState: 1, // WebSocket.OPEN
+		readyState: 1,
 		send: vi.fn((data: string) => {
 			const parsed = JSON.parse(data);
 			sent.push(parsed);
+			if (!parsed.id || !messageHandler) return;
 
-			// Auto-respond to requests so promises resolve
-			if (parsed.id) {
-				// Simulate server response
-				setTimeout(() => {
-					if (messageHandler) {
-						if (parsed.type === "prompt" && parsed.sessionPath === "__new__") {
-							// For new session: respond to prompt, then send session_attached, then response
-							messageHandler({ data: JSON.stringify({ type: "session_attached", sessionPath: "/tmp/sessions/new-session.jsonl", cwd: "/tmp" }) });
-							messageHandler({ data: JSON.stringify({ type: "response", id: parsed.id, success: true, data: {} }) });
-						} else {
-							messageHandler({ data: JSON.stringify({ type: "response", id: parsed.id, success: true, data: {} }) });
-						}
-					}
-				}, 0);
+			// Resolve requests synchronously: send() installs its pending request
+			// before writing to the socket, so arbitrary sleeps are unnecessary.
+			if (parsed.type === "prompt" && parsed.sessionPath === "__new__") {
+				messageHandler({ data: JSON.stringify({
+					type: "session_attached",
+					sessionPath: "/tmp/sessions/new-session.jsonl",
+					cwd: "/tmp",
+				}) });
 			}
+			messageHandler({ data: JSON.stringify({
+				type: "response",
+				id: parsed.id,
+				success: true,
+				data: {},
+			}) });
 		}),
 		close: vi.fn(),
 		onopen: null as any,
@@ -55,19 +54,19 @@ function createTestAdapter() {
 		onmessage: null as any,
 	};
 
-	// Patch the adapter's ws field directly
-	(adapter as any).ws = mockWs;
-
-	// Capture the message handler
-	Object.defineProperty(mockWs, 'onmessage', {
+	Object.defineProperty(mockWs, "onmessage", {
 		set(fn) { messageHandler = fn; },
 		get() { return messageHandler; },
 	});
 
-	// Wire up the adapter's handleMessage
-	messageHandler = (ev: { data: string }) => {
-		(adapter as any).handleMessage(ev.data);
-	};
+	const adapter = new WsAgentAdapter({
+		socket: mockWs as any,
+		fetch: options.fetch ?? (async (input) => {
+			throw new Error(`Unexpected adapter HTTP request: ${String(input)}`);
+		}),
+		startTrace: () => () => {},
+		getTraceId: () => "test-trace",
+	});
 
 	return { adapter, sent, mockWs, simulateServerMessage: (msg: any) => messageHandler?.({ data: JSON.stringify(msg) }) };
 }
@@ -91,6 +90,19 @@ function setupWithSession(sessionPath: string) {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
+describe("WsAgentAdapter transport injection", () => {
+	it("uses the injected HTTP transport instead of global fetch", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify([]), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		}));
+		const { adapter } = createTestAdapter({ fetch: fetchMock });
+
+		await expect(adapter.listSessions()).resolves.toEqual([]);
+		expect(fetchMock).toHaveBeenCalledWith("/api/sessions", {}, "frontend_fetch_sessions");
+	});
+});
+
 describe("WsAgentAdapter prompt routing", () => {
 	describe("prompt to idle session sends 'prompt' command", () => {
 		it("sends a prompt command when session is not running", async () => {
@@ -99,9 +111,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Session is not in globalSessionStatus → idle
 			await adapter.prompt("hello world");
-
-			// Wait for async
-			await new Promise((r) => setTimeout(r, 50));
 
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
 			expect(promptMsgs).toHaveLength(1);
@@ -143,7 +152,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			(adapter as any)._globalSessionStatus.set(sessionPath, "done");
 
 			await adapter.prompt("hello again");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
 			expect(promptMsgs).toHaveLength(1);
@@ -163,7 +171,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			(adapter as any)._globalSessionStatus.set(sessionPath, "running");
 
 			await adapter.prompt("steer me");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const steerMsgs = sent.filter((m) => m.type === "steer");
 			expect(steerMsgs).toHaveLength(1);
@@ -185,7 +192,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			await adapter.prompt("steer msg 1");
 			await adapter.prompt("steer msg 2");
-			await new Promise((r) => setTimeout(r, 50));
 
 			expect(adapter.steeringQueue).toHaveLength(2);
 			expect(adapter.steeringQueue[0]).toBe("steer msg 1");
@@ -204,7 +210,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			// Session B has no status → idle
 
 			await adapter.prompt("prompt for B");
-			await new Promise((r) => setTimeout(r, 50));
 
 			// Should send a prompt, NOT a steer
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
@@ -229,7 +234,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			// Session B is idle (not in the map)
 
 			await adapter.prompt("this should be a prompt not steer");
-			await new Promise((r) => setTimeout(r, 50));
 
 			// Should send prompt, NOT steer
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
@@ -250,7 +254,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Send a steer to session A (should work)
 			await adapter.prompt("steer for A");
-			await new Promise((r) => setTimeout(r, 50));
 
 			expect(sent.filter((m) => m.type === "steer")).toHaveLength(1);
 			expect(sent.filter((m) => m.type === "steer")[0].sessionPath).toBe(sessionA);
@@ -261,7 +264,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Send prompt to B (should be a prompt, not steer)
 			await adapter.prompt("prompt for B");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
 			expect(promptMsgs).toHaveLength(1);
@@ -273,7 +275,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Send another steer to A
 			await adapter.prompt("another steer for A");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const allSteers = sent.filter((m) => m.type === "steer");
 			expect(allSteers).toHaveLength(2);
@@ -327,7 +328,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			// Session A is still running on the server (adapter tracks this globally)
 
 			await adapter.prompt("new conversation");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const promptMsgs = sent.filter((m) => m.type === "prompt");
 			expect(promptMsgs).toHaveLength(1);
@@ -373,7 +373,6 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			await adapter.prompt("steer 1");
 			await adapter.prompt("steer 2");
-			await new Promise((r) => setTimeout(r, 50));
 
 			// Should see 2 items in the queue for session A
 			expect(adapter.steeringQueue).toHaveLength(2);
@@ -404,14 +403,12 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Queue steer for session A
 			await adapter.prompt("steer for A");
-			await new Promise((r) => setTimeout(r, 50));
 			expect(adapter.steeringQueue).toHaveLength(1);
 
 			// Switch to B and queue steer for B
 			(adapter as any)._sessionPath = sessionB;
 			(adapter as any)._sessionId = "session-b";
 			await adapter.prompt("steer for B");
-			await new Promise((r) => setTimeout(r, 50));
 			expect(adapter.steeringQueue).toHaveLength(1);
 			expect(adapter.steeringQueue[0]).toBe("steer for B");
 
@@ -433,12 +430,10 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// Queue steers for A
 			await adapter.prompt("steer A");
-			await new Promise((r) => setTimeout(r, 50));
 
 			// Switch to B and queue steers
 			(adapter as any)._sessionPath = sessionB;
 			await adapter.prompt("steer B");
-			await new Promise((r) => setTimeout(r, 50));
 
 			// Clear B's queue via internal API (clearSteeringQueue was removed)
 			(adapter as any)._steeringQueues.delete(sessionB);
@@ -458,7 +453,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			(adapter as any)._globalSessionStatus.set(sessionA, "running");
 
 			await adapter.prompt("steer");
-			await new Promise((r) => setTimeout(r, 50));
 			expect(adapter.steeringQueue.length > 0).toBe(true);
 
 			// Switch to B — no queued messages there
@@ -500,7 +494,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			// Mark A as running, queue a steer
 			(adapter as any)._globalSessionStatus.set(sessionA, "running");
 			await adapter.prompt("steer for A");
-			await new Promise((r) => setTimeout(r, 50));
 
 			expect(snapshot).toHaveLength(1);
 			expect(snapshot[0]).toBe("steer for A");
@@ -533,7 +526,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			// Mark A as running, queue a steer
 			(adapter as any)._globalSessionStatus.set(sessionA, "running");
 			await adapter.prompt("steer for A");
-			await new Promise((r) => setTimeout(r, 50));
 
 			expect(buggySnapshot).toHaveLength(1);
 
@@ -1104,7 +1096,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter, sent } = setupWithSession(sessionPath);
 
 			await adapter.prompt("/reload");
-			await new Promise((r) => setTimeout(r, 50));
 
 			const reloadMsgs = sent.filter((m) => m.type === "reload_processes");
 			expect(reloadMsgs).toHaveLength(1);

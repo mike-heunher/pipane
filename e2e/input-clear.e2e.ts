@@ -29,18 +29,21 @@ test.describe("Input clear on send", () => {
 		const textarea = editor.locator("textarea").first();
 		await expect(textarea).toBeEnabled({ timeout: 5000 });
 
-		const hasExistingSessions = await page.evaluate(() => {
+		const existingSessionCount = await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
-			if (!picker?.shadowRoot) return false;
-			return picker.shadowRoot.querySelectorAll(".session-item").length > 0;
+			return picker?.shadowRoot?.querySelectorAll(".session-item").length ?? 0;
 		});
-		if (hasExistingSessions) {
+		if (existingSessionCount > 0) {
 			await page.evaluate(() => {
 				const picker = document.querySelector("session-picker") as any;
-				const btn = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
-				btn?.click();
+				const button = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
+				if (!button) throw new Error("New-session button was not rendered");
+				button.click();
 			});
-			await page.waitForTimeout(300);
+			await expect.poll(async () => page.evaluate(() => {
+				const picker = document.querySelector("session-picker") as any;
+				return picker?.agent?.sessionStatus;
+			})).toBe("virtual");
 		}
 	}
 

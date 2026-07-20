@@ -2,139 +2,190 @@
  * E2E test harness: starts a real pipane server backed by a mock LLM.
  *
  * - Spins up a mock OpenAI-compatible server (mock-llm-server.ts)
- * - Creates a temp directory with a models.json pointing at the mock
- * - Launches the real pipane server with PI_CODING_AGENT_DIR set to the temp dir
- * - Provides a Playwright-friendly API for tests
+ * - Creates an isolated Pi agent directory and project
+ * - Launches the built pipane server on an OS-assigned port
+ * - Verifies a unique instance ID before exposing the server to tests
  */
 
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createMockLlmServer, type MockLlmServer, type Scenario } from "./mock-llm-server.js";
-import { createServer } from "node:net";
 
 export interface E2EHarness {
-	/** The port the real pipane server is listening on */
 	pipanePort: number;
-	/** The mock LLM server */
 	mockLlm: MockLlmServer;
-	/** Override LLM scenarios at runtime */
 	setScenarios(scenarios: Scenario[]): void;
-	/** The temp agent dir used for config/sessions */
 	agentDir: string;
-	/** The temp project cwd */
 	projectDir: string;
-	/** Tear everything down */
 	close(): Promise<void>;
 }
 
-/**
- * Wait for a port to accept connections.
- */
-async function waitForPort(port: number, timeoutMs = 15000): Promise<void> {
-	const start = Date.now();
-	while (Date.now() - start < timeoutMs) {
-		try {
-			const res = await fetch(`http://localhost:${port}/api/sessions`);
-			if (res.ok) return;
-		} catch {
-			// Not ready yet
-		}
-		await new Promise((r) => setTimeout(r, 200));
-	}
-	throw new Error(`Timed out waiting for port ${port} after ${timeoutMs}ms`);
-}
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const exitedChildren = new WeakSet<ChildProcess>();
 
-async function getFreePort(): Promise<number> {
-	return await new Promise<number>((resolve, reject) => {
-		const server = createServer();
-		server.listen(0, "127.0.0.1", () => {
-			const addr = server.address();
-			if (!addr || typeof addr === "string") {
-				server.close();
-				reject(new Error("Failed to allocate free port"));
-				return;
+async function waitForReportedServer(
+	child: ChildProcess,
+	getStdout: () => string,
+	getStderr: () => string,
+	instanceId: string,
+	timeoutMs = 30_000,
+): Promise<number> {
+	const startedAt = Date.now();
+	let spawnError: Error | undefined;
+	const onError = (error: Error) => { spawnError = error; };
+	child.on("error", onError);
+
+	try {
+		let port: number | undefined;
+		while (Date.now() - startedAt < timeoutMs) {
+			if (spawnError) throw spawnError;
+			if (child.exitCode !== null || child.signalCode !== null) {
+				throw new Error(`pipane exited before startup (code=${child.exitCode}, signal=${child.signalCode})`);
 			}
-			const port = addr.port;
-			server.close((err) => {
-				if (err) reject(err);
-				else resolve(port);
-			});
-		});
-		server.on("error", reject);
-	});
+
+			const match = getStdout().match(/Local:\s+http:\/\/localhost:(\d+)/);
+			if (match) {
+				port = Number(match[1]);
+				break;
+			}
+			await delay(25);
+		}
+
+		if (!port) throw new Error(`pipane did not report its bound port within ${timeoutMs}ms`);
+
+		while (Date.now() - startedAt < timeoutMs) {
+			if (spawnError) throw spawnError;
+			if (child.exitCode !== null || child.signalCode !== null) {
+				throw new Error(`pipane exited during readiness (code=${child.exitCode}, signal=${child.signalCode})`);
+			}
+			try {
+				const response = await fetch(`http://127.0.0.1:${port}/api/debug/health`, {
+					cache: "no-store",
+				});
+				if (response.ok) {
+					const body = await response.json() as { ok?: boolean; instanceId?: string };
+					if (body.ok === true && body.instanceId === instanceId) return port;
+				}
+			} catch {
+				// The child reported the port before HTTP was ready; continue polling.
+			}
+			await delay(50);
+		}
+
+		throw new Error(`pipane instance ${instanceId} did not become ready within ${timeoutMs}ms`);
+	} catch (error) {
+		const detail = [
+			error instanceof Error ? error.message : String(error),
+			"--- pipane stdout ---",
+			getStdout() || "(empty)",
+			"--- pipane stderr ---",
+			getStderr() || "(empty)",
+		].join("\n");
+		throw new Error(detail, { cause: error });
+	} finally {
+		child.off("error", onError);
+	}
 }
 
-/**
- * Warm up the pi process pool by requesting model info via WebSocket.
- * This triggers pi process acquisition without creating any sessions,
- * ensuring the first test doesn't pay the cold-start penalty.
- */
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (!child.pid || child.exitCode !== null || exitedChildren.has(child)) return;
+	try {
+		// The harness launches pipane as a process-group leader so Pi RPC children
+		// cannot survive a failed test run.
+		process.kill(-child.pid, signal);
+	} catch {
+		try { child.kill(signal); } catch { /* already exited */ }
+	}
+}
+
+async function stopProcessGroup(child: ChildProcess, graceMs = 3_000): Promise<void> {
+	if (child.exitCode !== null || exitedChildren.has(child)) return;
+
+	const waitForExit = () => new Promise<boolean>((resolve) => {
+		if (child.exitCode !== null || exitedChildren.has(child)) {
+			resolve(true);
+			return;
+		}
+		const onExit = () => {
+			clearTimeout(timer);
+			resolve(true);
+		};
+		const timer = setTimeout(() => {
+			child.off("exit", onExit);
+			resolve(false);
+		}, graceMs);
+		child.once("exit", onExit);
+	});
+
+	// Attach the exit listener before signalling; signalCode may be populated
+	// before the exit event while descendants can still recreate temp paths.
+	const gracefulExit = waitForExit();
+	signalProcessGroup(child, "SIGTERM");
+	if (await gracefulExit) return;
+	const forcedExit = waitForExit();
+	signalProcessGroup(child, "SIGKILL");
+	if (!await forcedExit) throw new Error(`pipane process group ${child.pid} did not exit after SIGKILL`);
+}
+
+/** Trigger Pi process acquisition without creating a session. */
 async function warmUpPiProcess(port: number): Promise<void> {
 	const { default: WebSocket } = await import("ws");
-
-	const ws = new WebSocket(`ws://localhost:${port}/ws`);
+	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
 
 	await new Promise<void>((resolve, reject) => {
-		const timeout = setTimeout(() => {
+		const finish = (error?: Error) => {
+			clearTimeout(timeout);
+			ws.removeAllListeners();
 			ws.close();
-			reject(new Error("Warm-up timed out"));
-		}, 30000);
+			error ? reject(error) : resolve();
+		};
+		const timeout = setTimeout(() => finish(new Error("Pi warm-up timed out")), 30_000);
 
-		ws.on("open", () => {
-			// Request model info — this triggers the pi process pool to
-			// acquire a process and validate the configuration without
-			// creating any sessions.
-			ws.send(JSON.stringify({
-				type: "get_default_model",
-				id: "warmup_1",
-			}));
+		ws.once("open", () => {
+			ws.send(JSON.stringify({ type: "get_default_model", id: "warmup_1" }));
 		});
-
 		ws.on("message", (data) => {
 			try {
-				const msg = JSON.parse(data.toString());
-				if (msg.type === "response" && msg.id === "warmup_1") {
-					clearTimeout(timeout);
-					ws.close();
-					resolve();
+				const message = JSON.parse(data.toString());
+				if (message.type !== "response" || message.id !== "warmup_1") return;
+				if (message.success === false) {
+					finish(new Error(message.error || "Pi warm-up request failed"));
+					return;
 				}
-			} catch { /* ignore parse errors */ }
+				finish();
+			} catch {
+				// Ignore unrelated/non-JSON records while waiting for our response.
+			}
 		});
-
-		ws.on("error", (err) => {
-			clearTimeout(timeout);
-			reject(err);
-		});
+		ws.once("error", (error) => finish(error));
 	});
 }
 
 export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> {
-	// 1. Start mock LLM
-	const mockLlm = await createMockLlmServer(scenarios);
+	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server/server.js");
+	if (!existsSync(serverScript)) {
+		throw new Error(`pipane server not built. Run 'npm run build' first. Missing: ${serverScript}`);
+	}
 
-	// 2. Create temp directories
-	// Use crypto.randomUUID() to avoid collisions when multiple harnesses
-	// start in parallel within the same millisecond (Date.now() is not unique).
+	const mockLlm = await createMockLlmServer(scenarios);
 	const tmpBase = path.join("/tmp", `pi-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`);
 	const agentDir = path.join(tmpBase, "agent");
 	const sessionsDir = path.join(agentDir, "sessions");
 	const projectDir = path.join(tmpBase, "project");
+	const instanceId = `e2e-${crypto.randomUUID()}`;
 
 	mkdirSync(sessionsDir, { recursive: true });
 	mkdirSync(projectDir, { recursive: true });
-
-	// Create a simple file in the project for tools to read
 	writeFileSync(
 		path.join(projectDir, "config.ts"),
 		'export const config = {\n  port: 3000,\n  host: "localhost",\n};\n',
 	);
 
-	// 3. Write models.json pointing at mock LLM
-	const modelsJson = {
+	writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({
 		providers: {
-			"mock": {
-				baseUrl: `http://localhost:${mockLlm.port}/v1`,
+			mock: {
+				baseUrl: `http://127.0.0.1:${mockLlm.port}/v1`,
 				apiKey: "mock-key",
 				api: "openai-completions",
 				models: [
@@ -167,111 +218,79 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 				],
 			},
 		},
-	};
-	writeFileSync(path.join(agentDir, "models.json"), JSON.stringify(modelsJson, null, 2));
-
-	// Write empty auth.json so pi doesn't prompt for login
+	}, null, 2));
 	writeFileSync(path.join(agentDir, "auth.json"), "{}");
+	writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
+		defaultProvider: "mock",
+		defaultModel: "mock-model",
+		defaultThinkingLevel: "medium",
+		autoCompaction: false,
+	}, null, 2));
 
-	// Write settings to disable auto-compaction and set the mock model as default
-	// NOTE: pi requires both defaultProvider AND defaultModel to resolve the saved default.
-	// If defaultProvider is missing, it falls through to "first model with valid API key",
-	// which picks up real providers (e.g., Bedrock) from ambient credentials.
-	writeFileSync(
-		path.join(agentDir, "settings.json"),
-		JSON.stringify({
-			defaultProvider: "mock",
-			defaultModel: "mock-model",
-			defaultThinkingLevel: "medium",
-			autoCompaction: false,
-		}, null, 2),
-	);
-
-	// 4. Find a guaranteed free port for pipane
-	const pipanePort = await getFreePort();
-
-	// 5. Build server path
-	const serverScript = path.resolve(import.meta.dirname, "../dist/server/server/server.js");
-	if (!existsSync(serverScript)) {
-		throw new Error(`pipane server not built. Run 'npm run build' first. Missing: ${serverScript}`);
-	}
-
-	// 6. Start real pipane server with a sanitized environment.
-	//    Strip API keys and cloud credentials so pi only sees the mock provider.
-	//    This prevents ambient AWS/Anthropic/OpenAI credentials from leaking in.
 	const sanitizedEnv: Record<string, string> = {};
 	const stripPrefixes = [
 		"AWS_", "ANTHROPIC_", "OPENAI_", "GOOGLE_", "AZURE_",
 		"XAI_", "GROQ_", "MISTRAL_", "GITHUB_TOKEN",
 	];
 	for (const [key, value] of Object.entries(process.env)) {
-		if (value === undefined) continue;
-		if (stripPrefixes.some((p) => key.startsWith(p))) continue;
+		if (value === undefined || stripPrefixes.some((prefix) => key.startsWith(prefix))) continue;
 		sanitizedEnv[key] = value;
 	}
 
-	const env: Record<string, string> = {
-		...sanitizedEnv,
-		PORT: String(pipanePort),
-		PI_CWD: projectDir,
-		PI_CODING_AGENT_DIR: agentDir,
-		// Exercise the exact runtime version pinned by pipane instead of whichever
-		// global `pi` happens to be first on the test runner's PATH.
-		PI_CLI: path.resolve(import.meta.dirname, "../node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
-		NODE_ENV: "production",
-		// Ensure pi uses our mock model
-		PI_MODEL: "mock/mock-model",
-	};
-
-	const child: ChildProcess = spawn("node", [serverScript], {
-		env,
-		stdio: ["pipe", "pipe", "pipe"],
+	const child = spawn(process.execPath, [serverScript], {
+		env: {
+			...sanitizedEnv,
+			PORT: "0",
+			PIPANE_INSTANCE_ID: instanceId,
+			PI_CWD: projectDir,
+			PI_CODING_AGENT_DIR: agentDir,
+			PI_CLI: path.resolve(import.meta.dirname, "../node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
+			NODE_ENV: "production",
+			PI_MODEL: "mock/mock-model",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+		detached: true,
 	});
 
-	// Collect output for debugging
+	child.once("exit", () => exitedChildren.add(child));
+
 	let stdout = "";
 	let stderr = "";
-	child.stdout?.on("data", (d) => { stdout += d.toString(); });
-	child.stderr?.on("data", (d) => { stderr += d.toString(); });
+	child.stdout?.on("data", (data) => { stdout += data.toString(); });
+	child.stderr?.on("data", (data) => { stderr += data.toString(); });
 
-	child.on("error", (err) => {
-		console.error("[pipane] spawn error:", err);
-	});
-
-	// 7. Wait for server to be ready
-	try {
-		await waitForPort(pipanePort, 30000);
-	} catch (err) {
-		console.error("[pipane] stdout:", stdout);
-		console.error("[pipane] stderr:", stderr);
-		child.kill("SIGTERM");
-		await mockLlm.close();
-		throw err;
-	}
-
-	// 8. Warm up the pi process pool by sending a probe prompt via WebSocket.
-	//    This ensures the first real test doesn't pay the pi cold-start cost.
-	try {
-		await warmUpPiProcess(pipanePort);
-	} catch (err) {
-		console.error("[pipane] warm-up failed (non-fatal):", err);
-	}
-
-	return {
-		pipanePort,
-		mockLlm,
-		setScenarios: (s) => mockLlm.setScenarios(s),
-		agentDir,
-		projectDir,
-		close: async () => {
-			child.kill("SIGTERM");
-			await new Promise<void>((r) => {
-				child.on("exit", () => r());
-				setTimeout(r, 3000); // force if stuck
-			});
-			await mockLlm.close();
-			// Clean up temp dirs
-			try { rmSync(tmpBase, { recursive: true, force: true }); } catch { /* */ }
-		},
+	let closed = false;
+	const cleanup = async () => {
+		if (closed) return;
+		closed = true;
+		const results = await Promise.allSettled([
+			stopProcessGroup(child),
+			mockLlm.close(),
+		]);
+		rmSync(tmpBase, { recursive: true, force: true });
+		const failures = results
+			.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+			.map((result) => result.reason);
+		if (failures.length > 0) throw new AggregateError(failures, "Failed to clean up E2E harness");
 	};
+
+	try {
+		const pipanePort = await waitForReportedServer(child, () => stdout, () => stderr, instanceId);
+		await warmUpPiProcess(pipanePort);
+		return {
+			pipanePort,
+			mockLlm,
+			setScenarios: (next) => mockLlm.setScenarios(next),
+			agentDir,
+			projectDir,
+			close: cleanup,
+		};
+	} catch (error) {
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], "E2E harness startup and cleanup failed");
+		}
+		throw error;
+	}
 }

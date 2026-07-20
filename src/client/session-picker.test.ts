@@ -22,10 +22,8 @@ async function createPicker(agent: MockAgent): Promise<SessionPicker> {
 	const el = document.createElement("session-picker") as SessionPicker;
 	(el as any).agent = agent;
 	document.body.appendChild(el);
-	// Wait for connectedCallback + loadSessions + Lit render
-	await el.updateComplete;
-	// loadSessions is async, wait for it to finish and re-render
-	await new Promise((r) => setTimeout(r, 50));
+	// Wait for the observable async load state and its Lit render; no timing sleep.
+	await vi.waitFor(() => expect((el as any).loading).toBe(false));
 	await el.updateComplete;
 	return el;
 }
@@ -307,8 +305,6 @@ describe("session-picker", () => {
 			agent.setSessionStatus(sessions[0].path, "running");
 			agent.emitGlobalStatusChange();
 			await el.updateComplete;
-			await new Promise((r) => setTimeout(r, 50));
-			await el.updateComplete;
 
 			items = getSessionItems(el);
 			expect(hasRunningBadge(items[0])).toBe(true);
@@ -316,8 +312,6 @@ describe("session-picker", () => {
 			// Set to done and emit change
 			agent.setSessionStatus(sessions[0].path, "done");
 			agent.emitGlobalStatusChange();
-			await el.updateComplete;
-			await new Promise((r) => setTimeout(r, 50));
 			await el.updateComplete;
 
 			items = getSessionItems(el);

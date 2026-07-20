@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== Building ==="
-npm run build
+npm run test:all
 
 echo ""
-echo "=== Unit tests ==="
-npm run test
-
-echo ""
-echo "=== E2E tests ==="
-npx playwright test --timeout 60000
-
-echo ""
-echo "✅ All tests passed"
+echo "✅ Typecheck, coverage, build, and E2E tests passed"

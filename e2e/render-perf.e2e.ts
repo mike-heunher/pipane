@@ -1,258 +1,247 @@
 /**
- * Render performance E2E test.
+ * Render performance E2E tests.
  *
- * Feeds a large synthetic session (1940 messages, ~4MB at 10x multiplier)
- * through a mock WebSocket server and measures how long the frontend takes
- * to render them all.
- *
- * Regenerate the fixture with a different multiplier:
- *   npx tsx e2e/fixtures/generate-large-session.ts 10
- *
- * Uses the same mock-server pattern as ui-screenshots.e2e.ts.
+ * The mock initially exposes no sessions so the application cannot auto-render
+ * the fixture before measurement begins. Each test reveals and opens the large
+ * session through an explicit, observable transition.
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { createServer, type Server } from "node:http";
 import express from "express";
-import path from "node:path";
-import { WebSocketServer, WebSocket } from "ws";
 import fs from "node:fs";
+import path from "node:path";
+import { WebSocket, WebSocketServer } from "ws";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
-
 const FIXTURE_PATH = path.resolve(import.meta.dirname, "fixtures/large-session-messages.json");
 if (!fs.existsSync(FIXTURE_PATH)) {
-	// Auto-generate the fixture with 10x multiplier
 	const { execSync } = await import("node:child_process");
-	console.log("Generating large session fixture (10x)…");
 	execSync("npx tsx e2e/fixtures/generate-large-session.ts 10", {
 		cwd: path.resolve(import.meta.dirname, ".."),
 		stdio: "inherit",
 	});
 }
 const largeSessionMessages: any[] = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
+const expectedToolMessages = largeSessionMessages.filter((message) => message.role === "toolResult").length;
 
 const SESSION_PATH = "/tmp/mock-sessions/perf-test-session.jsonl";
+const sessions = [{
+	id: "perf-1",
+	path: SESSION_PATH,
+	cwd: "/Users/dev/project",
+	name: "Render perf test",
+	created: "2026-01-01T00:00:00.000Z",
+	modified: "2026-01-01T00:10:00.000Z",
+	lastUserPromptTime: "2026-01-01T00:10:00.000Z",
+	messageCount: largeSessionMessages.length,
+	firstMessage: "Performance test session",
+}];
 
-const sessions = [
-	{
-		id: "perf-1",
-		path: SESSION_PATH,
-		cwd: "/Users/dev/project",
-		name: "Render perf test",
-		created: new Date(Date.now() - 3600000).toISOString(),
-		modified: new Date(Date.now() - 600000).toISOString(),
-		lastUserPromptTime: new Date(Date.now() - 600000).toISOString(),
-		messageCount: largeSessionMessages.length,
-		firstMessage: "Performance test session",
-	},
-];
+interface PerfMockServer {
+	server: Server;
+	wss: WebSocketServer;
+	port: number;
+	revealSession(): void;
+	hideSession(): void;
+	close(): Promise<void>;
+}
 
-function createMockServer(): Promise<{ server: Server; port: number }> {
+function createMockServer(): Promise<PerfMockServer> {
 	return new Promise((resolve) => {
 		const app = express();
 		const server = createServer(app);
 		const wss = new WebSocketServer({ server, path: "/ws" });
+		let sessionsVisible = false;
 
 		app.use(express.static(CLIENT_DIST));
-		app.get("/api/sessions", (_, res) => res.json(sessions));
-		app.get("/api/sessions/messages", (_, res) =>
-			res.json({ messages: largeSessionMessages }),
-		);
-		app.get("/api/browse", (_, res) =>
-			res.json({
-				path: "/Users/dev",
-				dirs: [{ name: "project", path: "/Users/dev/project" }],
-			}),
-		);
-		app.post("/api/debug/load-trace/event", express.json(), (_, res) => res.json({}));
+		app.get("/api/sessions", (_req, res) => res.json(sessionsVisible ? sessions : []));
+		app.get("/api/sessions/messages", (_req, res) => res.json({ messages: largeSessionMessages }));
+		app.get("/api/browse", (_req, res) => res.json({
+			path: "/Users/dev",
+			dirs: [{ name: "project", path: "/Users/dev/project" }],
+		}));
+		app.post("/api/debug/load-trace/event", express.json(), (_req, res) => res.json({}));
 
 		wss.on("connection", (ws) => {
 			ws.send(JSON.stringify({ type: "init", sessionStatuses: {} }));
 			ws.on("message", (raw) => {
-				const d = JSON.parse(raw.toString());
-				if (!d.id) return;
-				const resp = (data: any) =>
-					ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
-
-				if (d.type === "get_default_model") {
-					resp({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
-				} else if (d.type === "get_available_models") {
-					resp({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
-				} else if (d.type === "subscribe_session") {
+				const command = JSON.parse(raw.toString());
+				if (!command.id) return;
+				const respond = (data: any) => ws.send(JSON.stringify({
+					type: "response",
+					id: command.id,
+					success: true,
+					data,
+				}));
+				if (command.type === "get_default_model") {
+					respond({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
+				} else if (command.type === "get_available_models") {
+					respond({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
+				} else if (command.type === "subscribe_session") {
 					ws.send(JSON.stringify({
 						type: "session_messages",
-						sessionPath: d.sessionPath,
+						sessionPath: command.sessionPath,
 						messages: largeSessionMessages,
 						model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
 						thinkingLevel: "off",
 					}));
-					resp({});
+					respond({});
 				} else {
-					resp({});
+					respond({});
 				}
 			});
 		});
 
-		server.listen(0, () =>
-			resolve({ server, port: (server.address() as any).port }),
-		);
+		server.listen(0, () => {
+			const port = (server.address() as { port: number }).port;
+			resolve({
+				server,
+				wss,
+				port,
+				revealSession: () => {
+					sessionsVisible = true;
+					for (const client of wss.clients) {
+						if (client.readyState === WebSocket.OPEN) {
+							client.send(JSON.stringify({ type: "sessions_changed", file: SESSION_PATH }));
+						}
+					}
+				},
+				hideSession: () => { sessionsVisible = false; },
+				close: async () => {
+					for (const client of wss.clients) client.terminate();
+					await new Promise<void>((done) => wss.close(() => done()));
+					await new Promise<void>((done) => server.close(() => done()));
+				},
+			});
+		});
 	});
 }
 
-async function waitForSessionItems(page: Page) {
-	await page.waitForFunction(
-		() => {
-			const picker = document.querySelector("session-picker") as any;
-			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) > 0;
-		},
-		null,
-		{ timeout: 10000 },
-	);
+async function revealSession(page: Page, mock: PerfMockServer): Promise<void> {
+	mock.revealSession();
+	await page.waitForFunction(() => {
+		const picker = document.querySelector("session-picker") as any;
+		return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) === 1;
+	});
+}
+
+async function clickMeasuredSession(page: Page): Promise<void> {
+	await page.evaluate(() => {
+		const start = performance.now();
+		(window as any).__perfStart = start;
+		(window as any).__perfLastMutation = start;
+		(window as any).__perfMutationCount = 0;
+		const observer = new MutationObserver(() => {
+			(window as any).__perfLastMutation = performance.now();
+			(window as any).__perfMutationCount++;
+		});
+		observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+		(window as any).__perfObserver = observer;
+
+		const picker = document.querySelector("session-picker") as any;
+		const item = picker?.shadowRoot?.querySelector(".session-item") as HTMLElement | null;
+		if (!item) throw new Error("Performance session item was not rendered");
+		item.click();
+	});
+}
+
+async function waitForExactFixture(page: Page): Promise<void> {
+	await expect(page.locator("tool-message")).toHaveCount(expectedToolMessages, { timeout: 60_000 });
+	await page.waitForFunction(() => {
+		const start = (window as any).__perfStart as number;
+		const lastMutation = (window as any).__perfLastMutation as number;
+		const mutationCount = (window as any).__perfMutationCount as number;
+		return mutationCount > 0 && lastMutation >= start && performance.now() - lastMutation > 500;
+	}, null, { timeout: 60_000, polling: 100 });
 }
 
 test.describe("Render performance", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
-	let mock: Awaited<ReturnType<typeof createMockServer>>;
+	let mock: PerfMockServer;
 
-	test.beforeAll(async () => {
-		mock = await createMockServer();
-	});
-	test.afterAll(async () => {
-		await new Promise<void>((r) => mock.server.close(() => r()));
+	test.beforeAll(async () => { mock = await createMockServer(); });
+	test.afterAll(async () => { await mock.close(); });
+
+	test.beforeEach(async ({ page }) => {
+		mock.hideSession();
+		await page.goto(`http://127.0.0.1:${mock.port}`);
+		await expect(page.locator("message-editor")).toBeVisible({ timeout: 10_000 });
+		await revealSession(page, mock);
 	});
 
 	test("large session render time", async ({ page }) => {
-		await page.goto(`http://localhost:${mock.port}`);
-		await waitForSessionItems(page);
-
-		// Install MutationObserver before clicking to track when rendering finishes
-		await page.evaluate(() => {
-			(window as any).__perfLastMutation = performance.now();
-			const observer = new MutationObserver(() => {
-				(window as any).__perfLastMutation = performance.now();
-			});
-			observer.observe(document.body, { childList: true, subtree: true, attributes: true });
-			(window as any).__perfObserver = observer;
-		});
-
-		// Click the session — this triggers subscribe → session_messages → full render
-		await page.evaluate(() => {
-			(window as any).__perfStart = performance.now();
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
-		});
-
-		// Wait for tool-message elements to appear
-		await page.waitForFunction(
-			(min) => document.querySelectorAll("tool-message").length >= min,
-			Math.min(100, largeSessionMessages.filter((m: any) => m.role === "toolResult").length),
-			{ timeout: 60000 },
-		);
-
-		// Wait for DOM to settle (no mutations for 500ms)
-		await page.waitForFunction(
-			() => performance.now() - (window as any).__perfLastMutation > 500,
-			null,
-			{ timeout: 60000, polling: 200 },
-		);
+		await clickMeasuredSession(page);
+		await waitForExactFixture(page);
 
 		const metrics = await page.evaluate(() => {
 			((window as any).__perfObserver as MutationObserver).disconnect();
-			const start = (window as any).__perfStart as number;
-			const lastMutation = (window as any).__perfLastMutation as number;
-
 			return {
-				renderTimeMs: Number((lastMutation - start).toFixed(1)),
+				renderTimeMs: Number(((window as any).__perfLastMutation - (window as any).__perfStart).toFixed(1)),
+				mutationCount: (window as any).__perfMutationCount as number,
 				toolMessages: document.querySelectorAll("tool-message").length,
 				totalElements: document.querySelectorAll("*").length,
 			};
 		});
 
 		const fixtureSizeKB = (Buffer.byteLength(JSON.stringify(largeSessionMessages)) / 1024).toFixed(0);
-
-		console.log(`\n━━━ Render Performance ━━━`);
+		console.log("\n━━━ Render Performance ━━━");
 		console.log(`  Fixture: ${largeSessionMessages.length} messages (${fixtureSizeKB}KB)`);
 		console.log(`  tool-message elements: ${metrics.toolMessages}`);
 		console.log(`  Total DOM elements: ${metrics.totalElements}`);
+		console.log(`  Mutations observed: ${metrics.mutationCount}`);
 		console.log(`  Render time: ${metrics.renderTimeMs}ms`);
-		console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+		console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-		// Budget: 10 seconds for a 10x session. Generous — the goal is to track regressions.
-		expect(metrics.renderTimeMs).toBeLessThan(10000);
+		expect(metrics.mutationCount).toBeGreaterThan(0);
+		expect(metrics.renderTimeMs).toBeGreaterThan(0);
+		expect(metrics.renderTimeMs).toBeLessThan(10_000);
+		expect(metrics.toolMessages).toBe(expectedToolMessages);
+		expect(metrics.totalElements).toBeLessThan(220_000);
 	});
 
 	test("scroll performance after render", async ({ page }) => {
-		await page.goto(`http://localhost:${mock.port}`);
-		await waitForSessionItems(page);
+		await clickMeasuredSession(page);
+		await waitForExactFixture(page);
 
-		// Open session
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			picker.shadowRoot.querySelectorAll(".session-item")[0]?.click();
-		});
-
-		// Wait for render to complete
-		await page.waitForFunction(
-			(min) => document.querySelectorAll("tool-message").length >= min,
-			Math.min(100, largeSessionMessages.filter((m: any) => m.role === "toolResult").length),
-			{ timeout: 60000 },
-		);
-		await page.waitForTimeout(500); // let async rendering settle
-
-		// Measure scroll frame times
 		const scrollMetrics = await page.evaluate(async () => {
-			// Find the scrollable container
-			let scrollEl: Element | null = null;
-			for (const el of document.querySelectorAll("*")) {
-				if (el.scrollHeight > el.clientHeight + 500) {
-					const style = getComputedStyle(el);
-					if (style.overflowY === "auto" || style.overflowY === "scroll") {
-						scrollEl = el;
-						break;
-					}
-				}
+			((window as any).__perfObserver as MutationObserver).disconnect();
+			const scrollElement = document.getElementById("chat-scroll-area");
+			if (!scrollElement || scrollElement.scrollHeight <= scrollElement.clientHeight + 500) {
+				return { found: false, longFrames: 0, maxFrameMs: 0, avgFrameMs: 0, frameTimes: [] as number[] };
 			}
 
-			if (!scrollEl) return { found: false, longFrames: 0, maxFrameMs: 0, avgFrameMs: 0 };
-
-			// Scroll in 20 steps, measuring each frame
+			scrollElement.scrollTop = 0;
 			const frameTimes: number[] = [];
-			const step = Math.floor(scrollEl.scrollHeight / 20);
-
-			for (let i = 0; i < 20; i++) {
+			const step = Math.max(1, Math.floor(scrollElement.scrollHeight / 20));
+			for (let index = 0; index < 20; index++) {
 				const before = performance.now();
-				scrollEl.scrollTop += step;
-				await new Promise<void>(r => requestAnimationFrame(() => r()));
+				scrollElement.scrollTop += step;
+				await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 				frameTimes.push(performance.now() - before);
 			}
-
-			const longFrames = frameTimes.filter(t => t > 50).length;
-
 			return {
 				found: true,
-				longFrames,
+				longFrames: frameTimes.filter((duration) => duration > 50).length,
 				maxFrameMs: Number(Math.max(...frameTimes).toFixed(1)),
-				avgFrameMs: Number((frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length).toFixed(1)),
-				frameTimes: frameTimes.map(t => Number(t.toFixed(1))),
+				avgFrameMs: Number((frameTimes.reduce((sum, value) => sum + value, 0) / frameTimes.length).toFixed(1)),
+				frameTimes: frameTimes.map((duration) => Number(duration.toFixed(1))),
 			};
 		});
 
-		console.log(`\n━━━ Scroll Performance ━━━`);
-		if (scrollMetrics.found) {
-			console.log(`  Long frames (>50ms): ${scrollMetrics.longFrames}/20`);
-			console.log(`  Max frame: ${scrollMetrics.maxFrameMs}ms`);
-			console.log(`  Avg frame: ${scrollMetrics.avgFrameMs}ms`);
-			console.log(`  Frames: [${(scrollMetrics as any).frameTimes?.join(", ")}]`);
-		} else {
-			console.log(`  No scrollable container found`);
-		}
-		console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━\n`);
+		console.log("\n━━━ Scroll Performance ━━━");
+		console.log(`  Scroll container found: ${scrollMetrics.found}`);
+		console.log(`  Long frames (>50ms): ${scrollMetrics.longFrames}/20`);
+		console.log(`  Max frame: ${scrollMetrics.maxFrameMs}ms`);
+		console.log(`  Avg frame: ${scrollMetrics.avgFrameMs}ms`);
+		console.log(`  Frames: [${scrollMetrics.frameTimes.join(", ")}]`);
+		console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
-		if (scrollMetrics.found) {
-			// Most frames should be smooth (< 50ms)
-			expect(scrollMetrics.longFrames).toBeLessThan(15);
-		}
+		expect(scrollMetrics.found).toBe(true);
+		expect(scrollMetrics.frameTimes).toHaveLength(20);
+		// Generous CI-safe ceilings catch catastrophic regressions while tolerating
+		// contention from the concurrently running real-stack worker.
+		expect(scrollMetrics.avgFrameMs).toBeLessThan(150);
+		expect(scrollMetrics.maxFrameMs).toBeLessThan(300);
 	});
 });

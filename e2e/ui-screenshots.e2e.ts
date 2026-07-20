@@ -4,6 +4,7 @@ import express from "express";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import fs from "node:fs";
+import { computeHash } from "../src/shared/jsonl-sync.js";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
 const LATEST_DIR = path.resolve(import.meta.dirname, "latest");
@@ -208,11 +209,15 @@ async function waitForSessionItems(page: Page) {
 
 async function openMainSession(page: Page) {
 	await waitForSessionItems(page);
-	await page.evaluate(() => {
+	await page.evaluate(async (sessionPath) => {
 		const picker = document.querySelector("session-picker") as any;
-		const items = picker.shadowRoot.querySelectorAll(".session-item");
-		if (items.length > 0) items[0].click();
-	});
+		if (!picker?.agent) throw new Error("Session picker agent was not ready");
+		await picker.agent.switchSession(sessionPath);
+	}, SESSION_PATH);
+	await expect.poll(async () => page.evaluate(() => {
+		const picker = document.querySelector("session-picker") as any;
+		return picker?.agent?.sessionFile;
+	})).toBe(SESSION_PATH);
 	await expect(page.locator("tool-message").first()).toBeVisible();
 }
 
@@ -259,18 +264,21 @@ test.describe("UI visual goldens", () => {
 		await page.goto(`http://localhost:${mock.port}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
-		// The page auto-loads the latest session which may open the canvas panel.
-		// Close it to get a consistent editor width for the screenshot.
-		await page.waitForTimeout(300);
+		// The page auto-loads the latest session, which opens its canvas. Wait for
+		// that authoritative content before closing the panel for a stable width.
+		await expect(page.locator("tool-message")).toHaveCount(6);
 		const canvasCloseBtn = page.locator("button.canvas-close");
-		if (await canvasCloseBtn.isVisible().catch(() => false)) {
+		if (await canvasCloseBtn.count() > 0) {
+			await expect(canvasCloseBtn).toBeVisible();
 			await canvasCloseBtn.click();
-			await page.waitForTimeout(200);
+			await expect(canvasCloseBtn).toBeHidden();
 		}
 		await captureAndCompare(editor, "input-empty.png");
 
-		await editor.locator("textarea").first().fill("Can you help me refactor the database module to use connection pooling?");
-		await page.waitForTimeout(150);
+		const textarea = editor.locator("textarea").first();
+		await textarea.fill("Can you help me refactor the database module to use connection pooling?");
+		await expect(textarea).toHaveValue("Can you help me refactor the database module to use connection pooling?");
+		await editor.evaluate((element: any) => element.updateComplete);
 		await captureAndCompare(editor, "input-with-text.png");
 	});
 
@@ -369,7 +377,6 @@ test.describe("UI visual goldens", () => {
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
 			if (items.length > 1) items[1].click();
 		});
-		await page.waitForTimeout(100);
 		await page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
 			const items = picker.shadowRoot.querySelectorAll(".session-item");
@@ -387,28 +394,42 @@ test.describe("UI visual goldens", () => {
 		await openMainSession(page);
 
 		const ws = mock.ws()!;
-		const send = (msg: any) => ws.send(JSON.stringify(msg));
-		send({ type: "session_attached", sessionPath: SESSION_PATH });
-		send({ type: "agent_start", sessionPath: SESSION_PATH });
-		send({ type: "message_end", sessionPath: SESSION_PATH, message: { role: "user", content: [{ type: "text", text: "run build" }], timestamp: 3000 } });
 		const assistantMsg = { role: "assistant", content: [{ type: "toolCall", id: "t-progress", name: "Bash", arguments: { command: "npm run build" } }], usage: usage(500, 40, 0.005), timestamp: 3001, stopReason: "tool_use" };
-		send({ type: "message_start", sessionPath: SESSION_PATH, message: { role: "assistant", content: [] } });
-		send({ type: "message_update", sessionPath: SESSION_PATH, message: assistantMsg });
-		send({ type: "message_end", sessionPath: SESSION_PATH, message: assistantMsg });
-		send({ type: "tool_execution_start", sessionPath: SESSION_PATH, toolCallId: "t-progress" });
-		// Wait for the in-progress tool to render (spinner indicator appears)
-		await page.waitForFunction(() => {
-			const tools = document.querySelectorAll("tool-message");
-			// Find the tool with the progress indicator (the bash tool we just sent)
-			for (const t of tools) {
-				const sr = t.shadowRoot;
-				if (sr?.querySelector(".spinner, .progress-indicator, .tool-running")) return true;
-			}
-			// Alternatively, just check the tool appeared with the right content
-			return document.querySelector("tool-message:last-of-type") !== null;
-		}, null, { timeout: 5000 }).catch(() => {});
-		// Small buffer for rendering to settle
-		await page.waitForTimeout(100);
+		const stateJson = JSON.stringify({
+			messages: [
+				...toolMessages,
+				{ role: "user", content: [{ type: "text", text: "run build" }], timestamp: 3000 },
+				assistantMsg,
+			],
+			isStreaming: true,
+			pendingToolCalls: ["t-progress"],
+			model: MOCK_MODEL,
+			thinkingLevel: "off",
+			steeringQueue: [],
+		});
+		ws.send(JSON.stringify({
+			type: "session_sync",
+			sessionPath: SESSION_PATH,
+			op: "full",
+			data: stateJson,
+			hash: await computeHash(stateJson),
+		}));
+
+		await expect.poll(async () => page.evaluate(() => {
+			const picker = document.querySelector("session-picker") as any;
+			return {
+				sessionPath: picker?.agent?.sessionFile,
+				messageCount: picker?.agent?.state?.messages?.length,
+				pending: [...(picker?.agent?.pendingToolCallIds ?? [])],
+			};
+		})).toEqual({
+			sessionPath: SESSION_PATH,
+			messageCount: toolMessages.length + 2,
+			pending: ["t-progress"],
+		});
+		const tools = page.locator("tool-message");
+		await expect(tools).toHaveCount(7);
+		await expect(page.getByText("npm run build", { exact: false }).last()).toBeVisible();
 		await captureAndCompare(page, "tool-bash-in-progress.png");
 	});
 });

@@ -4,7 +4,7 @@
  * @vitest-environment node
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
 	computePatches,
@@ -293,6 +293,7 @@ describe("applySyncOps", () => {
 	});
 
 	it("rejects a broken intermediate base-hash chain", async () => {
+		const diagnostic = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const hash = await computeHash("a");
 		const result = await applySyncOps("", "", [
 			{ op: "full", data: "a", hash },
@@ -305,9 +306,11 @@ describe("applySyncOps", () => {
 		]);
 
 		expect(result).toBeNull();
+		expect(diagnostic).toHaveBeenCalledOnce();
 	});
 
 	it("rejects a corrupted intermediate patch by verifying the final hash", async () => {
+		const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
 		const firstHash = await computeHash("a");
 		const expectedFinalHash = await computeHash("abc");
 		const result = await applySyncOps("", "", [
@@ -321,6 +324,7 @@ describe("applySyncOps", () => {
 		]);
 
 		expect(result).toBeNull();
+		expect(diagnostic).toHaveBeenCalledOnce();
 	});
 });
 
@@ -338,12 +342,14 @@ describe("applySyncOp", () => {
 	});
 
 	it("rejects full sync with wrong hash", async () => {
+		const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
 		const result = await applySyncOp("old", "old_hash", {
 			op: "full",
 			data: "hello",
 			hash: "wrong_hash",
 		});
 		expect(result).toBeNull();
+		expect(diagnostic).toHaveBeenCalledOnce();
 	});
 
 	it("applies delta sync", async () => {
@@ -365,6 +371,7 @@ describe("applySyncOp", () => {
 	});
 
 	it("rejects delta sync with wrong baseHash", async () => {
+		const diagnostic = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const result = await applySyncOp("hello", "wrong_hash", {
 			op: "delta",
 			patches: [{ offset: 5, deleteCount: 0, insert: " world" }],
@@ -372,9 +379,11 @@ describe("applySyncOp", () => {
 			baseHash: "expected_hash",
 		});
 		expect(result).toBeNull();
+		expect(diagnostic).toHaveBeenCalledOnce();
 	});
 
 	it("rejects delta sync with corrupted patch", async () => {
+		const diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
 		const oldStr = "hello";
 		const oldHash = await computeHash(oldStr);
 		const wrongNewHash = await computeHash("hello world");
@@ -387,6 +396,7 @@ describe("applySyncOp", () => {
 			baseHash: oldHash,
 		});
 		expect(result).toBeNull();
+		expect(diagnostic).toHaveBeenCalledOnce();
 	});
 
 	it("handles no-op delta (identical strings)", async () => {

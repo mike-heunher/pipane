@@ -62,6 +62,16 @@ Provider usage is supplied by the bundled `@sreetej510/pi-usage` Pi extension an
 
 The renderer tree under [`src/client/ui/`](src/client/ui/) is maintained directly by pipane. It is derived from the final pi-mono `web-ui` release (`v0.75.3`) with pipane's flat message renderer, steering editor, thinking display, attachment handling, and tool renderers integrated into one local path. Pipane does not patch or load an external `pi-web-ui` package. See [`UPSTREAM.md`](src/client/ui/UPSTREAM.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
+## Testing
+
+Run the complete local verification gate with:
+
+```bash
+npm run test:all
+```
+
+This typechecks the repository, runs Vitest with coverage thresholds, builds the production client/server, and runs the deterministic Playwright suite. The real-credential walkthrough is separate: `npm run test:walkthrough`.
+
 ## License
 
 [MIT](LICENSE)

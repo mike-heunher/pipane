@@ -107,7 +107,7 @@ test.describe("Wide viewport layout", () => {
 		const canvasCloseBtn = page.locator("button.canvas-close");
 		if (await canvasCloseBtn.isVisible().catch(() => false)) {
 			await canvasCloseBtn.click();
-			await page.waitForTimeout(200);
+			await expect(canvasCloseBtn).toBeHidden();
 		}
 
 		// Measure the message container width vs its parent scroll area

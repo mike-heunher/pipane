@@ -35,7 +35,8 @@ import { fetchLatestVersion, compareSemver } from "./update-check.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
-const PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
+const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
+const INSTANCE_ID = process.env.PIPANE_INSTANCE_ID || null;
 const PI_CWD = process.env.PI_CWD || process.cwd();
 
 // Quiet mode: only show URLs unless --verbose or PIPANE_VERBOSE=1
@@ -79,7 +80,6 @@ const PKG_NAME = "pipane";
 const AUTH_COOKIE_NAME = "pipane_auth";
 const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("base64url");
 const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
-const AUTH_URL = `http://${PUBLIC_HOSTNAME}:${PORT}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
 
 function parseCookies(header: string | undefined): Record<string, string> {
 	const out: Record<string, string> = {};
@@ -171,6 +171,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 		return;
 	}
 	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pipane terminal.</p>");
+});
+
+// A harness can provide a unique ID and verify that it reached the child it
+// launched, rather than an unrelated process that happened to acquire a port.
+app.get("/api/debug/health", (_req, res) => {
+	res.json({ ok: true, instanceId: INSTANCE_ID, pid: process.pid });
 });
 
 const traceStore = new LoadTraceStore();
@@ -393,7 +399,10 @@ if (PI_AVAILABLE) {
 	console.log(`[pi] ${makePiNotFoundMessage(PI_LAUNCH.command)}`);
 }
 
-server.listen(PORT, async () => {
+server.listen(REQUESTED_PORT, async () => {
+	const address = server.address();
+	const port = address && typeof address !== "string" ? address.port : REQUESTED_PORT;
+	const authUrl = `http://${PUBLIC_HOSTNAME}:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
 	log("");
 	log("        _                        ");
 	log("  _ __ (_)_ __   __ _ _ __   ___ ");
@@ -403,8 +412,8 @@ server.listen(PORT, async () => {
 	log(" |_|     |_|                      ");
 	log(`  v${PKG_VERSION}`);
 	log("");
-	log(`  Local:  http://localhost:${PORT}`);
-	log(`  Remote: ${AUTH_URL}`);
+	log(`  Local:  http://localhost:${port}`);
+	log(`  Remote: ${authUrl}`);
 	if (!process.env.PIPANE_AUTH_TOKEN) {
 		log(`\n  Auth token is random and changes on restart.`);
 		log(`  Set PIPANE_AUTH_TOKEN to use a fixed token.`);

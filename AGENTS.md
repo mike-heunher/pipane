@@ -6,54 +6,75 @@ Once a change is finished, solid, and verified, commit it to Git rather than lea
 
 ## Testing
 
-Run **all** tests before committing:
+Run the canonical full verification before committing:
 
 ```bash
-npm run test && npx playwright test --timeout 60000
+npm run test:all
 ```
 
-### Unit Tests (`npm run test`)
+This performs, in order:
 
-136 tests across 13 files, run via Vitest. Cover:
+1. `npm run check` — strict TypeScript checking
+2. `npm run test:coverage` — all Vitest tests plus enforced coverage thresholds
+3. `npm run test:e2e` — a clean production build followed by all deterministic Playwright tests
 
-- **Client:** WebSocket agent adapter, tool renderers, session picker, model picker, input menu, rerun duplicate prevention, pi install flow
-- **Server:** Process pool, session lifecycle state machine, session message cache, pi runtime detection, pi launch resolution, global CLI
+Do not hard-code test/file counts in documentation; use the runner output when current counts are needed.
 
-### E2E Tests (`npx playwright test`)
+### Unit and component tests
 
-10 tests across 3 files, run via Playwright (headless Chromium).
+```bash
+npm run test:unit
+npm run test:watch
+npm run test:coverage
+```
 
-#### `e2e/real-stack.e2e.ts` — Real stack integration (4 tests)
+- Tests live next to source as `*.test.ts`.
+- Node-only tests should declare `@vitest-environment node`; browser component tests use Happy DOM.
+- Unit tests must not make unmocked network requests or emit unscoped warnings/errors.
+- Mock expected failures explicitly with a scoped `vi.spyOn(console, ...)`.
+- Prefer observable promises/events over fixed sleeps.
 
-Starts the **real pipane server** with real pi RPC processes, backed by a **mock OpenAI-compatible LLM** (`e2e/mock-llm-server.ts`). Tests the full pipeline: UI → WebSocket → pipane → pi RPC → mock LLM → back to UI.
+### Deterministic E2E tests
 
-- Sending a prompt and seeing the streamed response
-- Tool call execution (read) with multi-turn continuation
-- Custom tool renderer display (read header format)
-- Session appearing in the picker after a prompt
+```bash
+npm run test:e2e
+```
 
-Infrastructure:
-- `e2e/mock-llm-server.ts` — Scenario-based mock `/v1/chat/completions` with SSE streaming. Match on user text and `hasToolResults` for multi-turn flows.
-- `e2e/harness.ts` — Creates temp `PI_CODING_AGENT_DIR` with `models.json` pointing at mock, starts real pipane server.
+Playwright tests live in `e2e/*.e2e.ts`. The command always builds first. The suite includes:
 
-#### `e2e/ui-screenshots.e2e.ts` — Visual golden tests (5 tests)
+- Real-stack tests: real pipane server and pinned Pi RPC runtime backed by `e2e/mock-llm-server.ts`
+- Mock-transport UI and regression tests
+- Visual golden tests in `e2e/goldens/`
+- Render/scroll performance checks
 
-Uses a mock WebSocket server (no real pi process) to feed canned messages. Captures screenshots and compares against golden files in `e2e/goldens/`.
+The real-stack harness uses an isolated `PI_CODING_AGENT_DIR`, sanitized credentials, an OS-assigned server port, and a unique readiness identity. Preserve those isolation guarantees.
 
-- Session list, tool renderers, input, steering queue, tool in progress
+To update visual goldens after an intentional visual change:
 
-To update goldens after intentional visual changes:
 ```bash
 npm run test:screenshots:update
 ```
 
-#### `e2e/rerun-duplicate.e2e.ts` — Regression test (1 test)
+To stress the critical real-stack and duplicate-render regressions:
 
-Verifies that rerunning a prompt doesn't cause duplicate tool blocks in the UI (the message_end → agent_end streaming race condition).
+```bash
+npm run test:e2e:stress
+```
 
-### Adding Tests
+### Walkthrough media
 
-- Unit tests go next to their source file as `*.test.ts`
-- E2E tests go in `e2e/` as `*.e2e.ts`
-- For real-stack e2e tests, add scenarios to `mock-llm-server.ts` and use the harness from `harness.ts`
-- Build before running e2e tests: `npm run build`
+The walkthrough uses real credentials/model traffic and is deliberately excluded from normal tests:
+
+```bash
+npm run test:walkthrough
+```
+
+Its source is `e2e/video-walkthrough.walkthrough.ts` and it writes README media under `e2e/screenshots/` and `e2e/videos/`.
+
+### Adding tests
+
+- Unit/component tests: colocate as `*.test.ts`.
+- Deterministic browser tests: add `e2e/*.e2e.ts`.
+- Real-stack scenarios: extend `e2e/mock-llm-server.ts` and use `e2e/harness.ts`.
+- Never silence a readiness failure with `.catch(() => {})` or an arbitrary timeout.
+- Coverage is a regression floor, not a substitute for meaningful behavior assertions.

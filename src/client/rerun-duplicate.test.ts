@@ -79,7 +79,11 @@ function setupAdapter() {
  * This is how the server sends ALL state now.
  * Must be async because computeHash is async (uses SubtleCrypto).
  */
-async function pushSessionSync(simulateServerMessage: (msg: any) => void, state: any) {
+async function pushSessionSync(
+	adapter: WsAgentAdapter,
+	simulateServerMessage: (msg: any) => void,
+	state: any,
+) {
 	const json = JSON.stringify(state);
 	const hash = await computeHash(json);
 	simulateServerMessage({
@@ -89,8 +93,7 @@ async function pushSessionSync(simulateServerMessage: (msg: any) => void, state:
 		data: json,
 		hash,
 	});
-	// Wait a tick for async hash verification in applySyncOp to complete
-	await new Promise(r => setTimeout(r, 10));
+	await (adapter as any).flushSessionSyncQueue();
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -99,7 +102,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 	it("session_sync sets messages from flat array", async () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "hello", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 1001 },
@@ -120,7 +123,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 	it("session_sync with streaming includes stream message in flat array", async () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "hello", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "text", text: "I'm thinking..." }], timestamp: 1001 },
@@ -141,7 +144,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 	it("session_sync with pending tool calls and partial results", async () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "run ls", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "Bash", arguments: '{"command":"ls"}' }], stopReason: "toolUse", timestamp: 1001 },
@@ -164,7 +167,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
 		// First push: streaming
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "hello", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "text", text: "partial" }], timestamp: 1001 },
@@ -178,7 +181,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 		expect(adapter.state.messages).toHaveLength(2);
 
 		// Second push: message complete, tool executing
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "hello", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "text", text: "done" }, { type: "toolCall", id: "t1", name: "Bash", arguments: "{}" }], stopReason: "toolUse", timestamp: 1001 },
@@ -193,7 +196,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 		expect(adapter.state.messages).toHaveLength(2);
 
 		// Third push: tool done, final response
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [
 				{ role: "user", content: "hello", timestamp: 1000 },
 				{ role: "assistant", content: [{ type: "text", text: "done" }, { type: "toolCall", id: "t1", name: "Bash", arguments: "{}" }], stopReason: "toolUse", timestamp: 1001 },
@@ -214,7 +217,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
 		// Start streaming
-		await pushSessionSync(simulateServerMessage, {
+		await pushSessionSync(adapter, simulateServerMessage, {
 			messages: [{ role: "user", content: "hello", timestamp: 1000 }],
 			isStreaming: true,
 			pendingToolCalls: [],

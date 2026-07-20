@@ -5,7 +5,7 @@
  * accurate timestamps, then encodes to high-quality mp4 with ffmpeg.
  *
  * Run (requires real API keys in ~/.pi/agent):
- *   npm run build && npx playwright test e2e/video-walkthrough.e2e.ts --timeout 180000
+ *   npm run test:walkthrough
  *
  * Output:
  *   e2e/videos/walkthrough.mp4             — high-quality video

@@ -172,7 +172,7 @@ describe("localhost bypass", () => {
 	let server: RunningServer | null = null;
 
 	beforeAll(async () => {
-		server = await startServer({});
+		server = await startServer({ PIPANE_INSTANCE_ID: "auth-test-instance" });
 	});
 
 	afterAll(async () => {
@@ -180,9 +180,16 @@ describe("localhost bypass", () => {
 		server = null;
 	});
 
-	it("localhost is allowed and sets auth cookie automatically", async () => {
+	it("localhost is allowed, identifies the instance, and sets auth cookie automatically", async () => {
 		const res = await fetch(`${server!.baseUrl}/api/sessions`);
 		expect(res.status).toBe(200);
 		expect(res.headers.get("set-cookie") || "").toContain("pipane_auth=");
+
+		const health = await fetch(`${server!.baseUrl}/api/debug/health`);
+		expect(health.status).toBe(200);
+		expect(await health.json()).toMatchObject({
+			ok: true,
+			instanceId: "auth-test-instance",
+		});
 	});
 });

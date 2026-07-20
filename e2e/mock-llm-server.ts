@@ -275,7 +275,10 @@ export function createMockLlmServer(
 				setScenarios: (s: Scenario[]) => { currentScenarios = s; },
 				get callCount() { return callCount; },
 				get lastRequest() { return lastRequest; },
-				close: () => new Promise<void>((r) => server.close(() => r())),
+				close: () => new Promise<void>((resolve) => {
+					server.close(() => resolve());
+					server.closeAllConnections();
+				}),
 			});
 		});
 	});

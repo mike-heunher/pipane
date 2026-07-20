@@ -72,8 +72,28 @@ export interface PiInstallRequiredInfo {
 	message: string;
 }
 
+export type AdapterSocket = Pick<
+	WebSocket,
+	"readyState" | "send" | "close" | "onopen" | "onerror" | "onclose" | "onmessage"
+>;
+
+export interface WsAgentAdapterOptions {
+	/** Existing socket for deterministic tests; production normally uses createWebSocket. */
+	socket?: AdapterSocket;
+	createWebSocket?: (url: string) => AdapterSocket;
+	fetch?: typeof tracedFetch;
+	startTrace?: typeof traceSpanStart;
+	getTraceId?: typeof getLoadTraceId;
+	requestFrame?: (callback: FrameRequestCallback) => number;
+}
+
 export class WsAgentAdapter {
-	private ws: WebSocket | null = null;
+	private ws: AdapterSocket | null = null;
+	private readonly createWebSocket: (url: string) => AdapterSocket;
+	private readonly fetch: typeof tracedFetch;
+	private readonly startTrace: typeof traceSpanStart;
+	private readonly getTraceId: typeof getLoadTraceId;
+	private readonly requestFrame: (callback: FrameRequestCallback) => number;
 	private listeners = new Set<(e: AgentEvent) => void>();
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
@@ -195,12 +215,24 @@ export class WsAgentAdapter {
 	private _contentListeners = new Set<() => void>();
 	private _statusListeners = new Set<() => void>();
 
+	constructor(options: WsAgentAdapterOptions = {}) {
+		this.createWebSocket = options.createWebSocket ?? ((url) => new WebSocket(url));
+		this.fetch = options.fetch ?? tracedFetch;
+		this.startTrace = options.startTrace ?? traceSpanStart;
+		this.getTraceId = options.getTraceId ?? getLoadTraceId;
+		this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
+		if (options.socket) {
+			this.ws = options.socket;
+			this.ws.onmessage = (event) => this.handleMessage(String(event.data));
+		}
+	}
+
 	get state(): AdapterState { return this._state; }
 	get sessionId(): string { return this._sessionId; }
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
-	get isConnected(): boolean { return this.ws?.readyState === WebSocket.OPEN; }
+	get isConnected(): boolean { return this.ws?.readyState === 1; }
 	get isReconnecting(): boolean { return this._reconnecting; }
 
 	onConnectionChange(fn: (connected: boolean) => void): () => void {
@@ -408,7 +440,7 @@ export class WsAgentAdapter {
 	 */
 	private connectWs(url: string, isReconnect: boolean): Promise<void> {
 		return new Promise<void>((resolve, reject) => {
-			const ws = new WebSocket(url);
+			const ws = this.createWebSocket(url);
 
 			ws.onopen = () => {
 				this.ws = ws;
@@ -781,7 +813,7 @@ export class WsAgentAdapter {
 		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
 		this._sessionSyncFlushScheduled = true;
 
-		requestAnimationFrame(() => {
+		this.requestFrame(() => {
 			this._sessionSyncFlushScheduled = false;
 			this.flushSessionSyncQueue();
 		});
@@ -806,7 +838,7 @@ export class WsAgentAdapter {
 			this._sessionSyncFlushInProgress = false;
 			if (this._pendingSessionSyncs.length > 0 && !this._sessionSyncFlushScheduled) {
 				this._sessionSyncFlushScheduled = true;
-				requestAnimationFrame(() => {
+				this.requestFrame(() => {
 					this._sessionSyncFlushScheduled = false;
 					this.flushSessionSyncQueue();
 				});
@@ -951,7 +983,7 @@ export class WsAgentAdapter {
 		}
 
 		const id = `req_${++this.requestId}`;
-		const endSpan = traceSpanStart(`frontend_ws_command ${command.type}`);
+		const endSpan = this.startTrace(`frontend_ws_command ${command.type}`);
 		return new Promise((resolve, reject) => {
 			const timeoutMs = command.type === "prompt" || command.type === "fork_prompt" ? 90000 : 30000;
 			const timeout = setTimeout(() => {
@@ -970,7 +1002,7 @@ export class WsAgentAdapter {
 				...command,
 				id,
 				__trace: {
-					traceId: getLoadTraceId(),
+					traceId: this.getTraceId(),
 				},
 			}));
 		});
@@ -1493,7 +1525,7 @@ export class WsAgentAdapter {
 	/** Get user messages from the current session for the fork selector. */
 	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
 		if (!this._sessionPath) return [];
-		const res = await tracedFetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`, {}, "frontend_fetch_fork_messages");
+		const res = await this.fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`, {}, "frontend_fetch_fork_messages");
 		if (!res.ok) throw new Error(`Failed to get fork messages: ${res.statusText}`);
 		const data = await res.json();
 		return data.messages ?? [];
@@ -1567,7 +1599,7 @@ export class WsAgentAdapter {
 	// ── Session management ─────────────────────────────────────────────────
 
 	async listSessions(): Promise<SessionInfoDTO[]> {
-		const res = await tracedFetch("/api/sessions", {}, "frontend_fetch_sessions");
+		const res = await this.fetch("/api/sessions", {}, "frontend_fetch_sessions");
 		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
 		const sessions: SessionInfoDTO[] = await res.json();
 
@@ -1609,7 +1641,7 @@ export class WsAgentAdapter {
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		const res = await tracedFetch("/api/sessions", {
+		const res = await this.fetch("/api/sessions", {
 			method: "DELETE",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ path: sessionPath }),

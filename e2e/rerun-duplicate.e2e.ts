@@ -15,6 +15,7 @@ import { createServer, type Server } from "node:http";
 import express from "express";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
+import { computeHash } from "../src/shared/jsonl-sync.js";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
 const SESSION_PATH = "/tmp/mock-sessions/test-session.jsonl";
@@ -131,34 +132,48 @@ test.describe("Rerun duplicate rendering regression", () => {
 			stopReason: "tool_use",
 		};
 
-		send({ type: "session_attached", sessionPath: SESSION_PATH });
-		send({ type: "agent_start", sessionPath: SESSION_PATH });
-		send({ type: "message_end", sessionPath: SESSION_PATH, message: { role: "user", content: [{ type: "text", text: "sleep 200" }], timestamp: 2000 } });
-		await page.waitForTimeout(50);
+		const rerunMessages = [
+			...messages,
+			{ role: "user", content: [{ type: "text", text: "sleep 200" }], timestamp: 2000 },
+			newAssistant,
+		];
+		const pushState = async (pendingToolCalls: string[]) => {
+			const data = JSON.stringify({
+				messages: rerunMessages,
+				isStreaming: true,
+				pendingToolCalls,
+				model: { provider: "anthropic", modelId: "sonnet" },
+				thinkingLevel: "off",
+				steeringQueue: [],
+			});
+			send({
+				type: "session_sync",
+				sessionPath: SESSION_PATH,
+				op: "full",
+				data,
+				hash: await computeHash(data),
+			});
+			await page.evaluate(() => new Promise<void>((resolve) => {
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+			}));
+		};
 
-		// Stream the assistant message
-		send({ type: "message_start", sessionPath: SESSION_PATH, message: { role: "assistant", content: [{ type: "thinking", thinking: "" }] } });
-		send({ type: "message_update", sessionPath: SESSION_PATH, message: newAssistant });
-		await page.waitForTimeout(200);
+		// During streaming there must be exactly one historical and one rerun tool.
+		await pushState([]);
+		await expect(page.locator("tool-message")).toHaveCount(2);
+		await expect(page.locator("tool-message").filter({ hasText: "sleep 200" })).toHaveCount(2);
 
-		// During streaming: old tool in message-list + new tool in streaming container = 2
-		toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);
-		expect(toolCount).toBeLessThanOrEqual(2);
+		// Re-publishing the authoritative message_end state must replace, not append,
+		// the rerun tool block.
+		await pushState([]);
+		toolCount = await page.locator("tool-message").count();
+		console.log(`After message_end state: ${toolCount} tool-message elements (expected 2)`);
+		expect(toolCount).toBe(2);
 
-		// message_end: THE CRITICAL MOMENT — the tool should NOT appear 3 times
-		send({ type: "message_end", sessionPath: SESSION_PATH, message: newAssistant });
-		await page.waitForTimeout(300);
-
-		toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);
-		console.log(`After message_end: ${toolCount} tool-message elements (expected ≤ 2)`);
-		expect(toolCount).toBeLessThanOrEqual(2); // old + new, NOT old + new + streaming duplicate
-
-		// tool_execution_start
-		send({ type: "tool_execution_start", sessionPath: SESSION_PATH, toolCallId: "t2" });
-		await page.waitForTimeout(300);
-
-		toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);
-		console.log(`After tool_start: ${toolCount} tool-message elements (expected ≤ 2)`);
-		expect(toolCount).toBeLessThanOrEqual(2);
+		// Starting the new tool only changes pending state; it cannot duplicate it.
+		await pushState(["t2"]);
+		toolCount = await page.locator("tool-message").count();
+		console.log(`After tool_start state: ${toolCount} tool-message elements (expected 2)`);
+		expect(toolCount).toBe(2);
 	});
 });
