@@ -4,16 +4,18 @@
  * Stateless handlers that read session data from JSONL files on disk.
  */
 
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { existsSync, readFileSync, readdirSync, watchFile } from "node:fs";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { SessionIndex } from "./session-index.js";
 import { LocalSettingsStore } from "./local-settings.js";
+import { SessionPathError, SessionPathGuard } from "./session-path.js";
 
 interface RegisterRestApiOptions {
 	localSettingsStore?: LocalSettingsStore;
+	sessionPaths?: SessionPathGuard;
 	onLocalSettingsReloaded?: () => void;
 	runSessionMutation?: (
 		sessionPath: string,
@@ -51,8 +53,18 @@ async function readJsonBody(req: any): Promise<any> {
 	return JSON.parse(raw || "{}");
 }
 
+function sendError(res: Response, error: unknown): void {
+	if (error instanceof SessionPathError) {
+		res.status(error.code === "not_found" ? 404 : 400).json({ error: error.message });
+		return;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	res.status(500).json({ error: message });
+}
+
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}) {
 	localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
+	const sessionPaths = options.sessionPaths ?? new SessionPathGuard();
 	sessionIndex = new SessionIndex({
 		cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
 	});
@@ -133,19 +145,8 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 
 	app.delete("/api/sessions", async (req, res) => {
 		try {
-			const chunks: Buffer[] = [];
-			for await (const chunk of req) chunks.push(chunk);
-			const body = JSON.parse(Buffer.concat(chunks).toString());
-
-			const { path: sessionPath } = body;
-			if (!sessionPath || typeof sessionPath !== "string") {
-				res.status(400).json({ error: "Missing session path" });
-				return;
-			}
-			if (!sessionPath.endsWith(".jsonl") || !existsSync(sessionPath)) {
-				res.status(404).json({ error: "Session not found" });
-				return;
-			}
+			const body = await readJsonBody(req);
+			const sessionPath = sessionPaths.resolveExisting(body.path);
 			const remove = () => unlink(sessionPath);
 			if (options.runSessionMutation) {
 				await options.runSessionMutation(sessionPath, "delete session", remove);
@@ -153,23 +154,14 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				await remove();
 			}
 			res.json({ success: true });
-		} catch (err: any) {
-			res.status(500).json({ error: err.message });
+		} catch (error) {
+			sendError(res, error);
 		}
 	});
 
 	app.get("/api/sessions/fork-messages", (req, res) => {
 		try {
-			const sessionPath = req.query.path as string;
-			if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
-				res.status(400).json({ error: "Missing or invalid session path" });
-				return;
-			}
-			if (!existsSync(sessionPath)) {
-				res.status(404).json({ error: "Session file not found" });
-				return;
-			}
-
+			const sessionPath = sessionPaths.resolveExisting(req.query.path);
 			const content = readFileSync(sessionPath, "utf8");
 			const entries = parseSessionEntries(content);
 			const messages: Array<{ entryId: string; text: string }> = [];
@@ -195,27 +187,18 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 			}
 
 			res.json({ messages });
-		} catch (err: any) {
-			res.status(500).json({ error: err.message });
+		} catch (error) {
+			sendError(res, error);
 		}
 	});
 
 	app.get("/api/sessions/raw", (req, res) => {
 		try {
-			const sessionPath = req.query.path as string;
-			if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
-				res.status(400).json({ error: "Missing or invalid session path" });
-				return;
-			}
-			if (!existsSync(sessionPath)) {
-				res.status(404).json({ error: "Session file not found" });
-				return;
-			}
-
+			const sessionPath = sessionPaths.resolveExisting(req.query.path);
 			const content = readFileSync(sessionPath, "utf8");
 			res.type("text/plain").send(content);
-		} catch (err: any) {
-			res.status(500).json({ error: err.message });
+		} catch (error) {
+			sendError(res, error);
 		}
 	});
 

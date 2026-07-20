@@ -33,6 +33,7 @@ import { LocalSettingsStore } from "./local-settings.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 import { UpdateManager } from "./update-manager.js";
 import { registerUpdateApi } from "./update-api.js";
+import { SessionPathGuard } from "./session-path.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -179,6 +180,8 @@ app.get("/api/debug/health", (_req, res) => {
 
 const localSettingsStore = new LocalSettingsStore();
 const registry = new SessionRegistry();
+const SESSIONS_DIR = path.join(getAgentDir(), "sessions");
+const sessionPaths = new SessionPathGuard(SESSIONS_DIR);
 
 // Serve static files in production
 const clientDist = path.resolve(__dirname, "../../client");
@@ -187,6 +190,7 @@ app.use(express.static(clientDist));
 // Register REST endpoints
 registerRestApi(app, {
 	localSettingsStore,
+	sessionPaths,
 	runSessionMutation: (sessionPath, operation, mutation) => {
 		const actor = registry.get(sessionPath);
 		return actor.enqueue(operation, async () => {
@@ -245,6 +249,7 @@ const pool = new ProcessPool(
 const wsHandler = new WsHandler({
 	registry,
 	pool,
+	sessionPaths,
 	defaultCwd: PI_CWD,
 	piLaunch: PI_LAUNCH,
 	ensurePool: () => {
@@ -330,8 +335,6 @@ setInterval(tick, 1000); tick();
 // ============================================================================
 // Sessions Directory Watcher
 // ============================================================================
-
-const SESSIONS_DIR = path.join(getAgentDir(), "sessions");
 
 function startSessionsWatcher(): FSWatcher | null {
 	if (!existsSync(SESSIONS_DIR)) {

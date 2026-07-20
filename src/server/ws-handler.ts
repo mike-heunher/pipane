@@ -12,9 +12,8 @@
 import { WebSocket, type WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
 import { copyFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import path from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { SessionRegistry } from "./session-registry.js";
 import type { SessionActor } from "./session-actor.js";
 import { ProcessPool, type RpcProcess, type RpcProcessLease } from "./process-pool.js";
@@ -29,6 +28,7 @@ import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFound
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ExtensionStatusMessage, ProviderUsageMessage } from "../shared/ws-protocol.js";
+import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import {
 	extensionStatusSnapshot,
 	isValidExtensionStatusKey,
@@ -41,6 +41,7 @@ import {
 export interface WsHandlerOptions {
 	registry: SessionRegistry;
 	pool: ProcessPool;
+	sessionPaths?: SessionPathGuard;
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
@@ -77,6 +78,7 @@ function debugTurn(stage: string, data: Record<string, any>) {
 export class WsHandler {
 	private registry: SessionRegistry;
 	private pool: ProcessPool;
+	private sessionPaths: SessionPathGuard;
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
@@ -101,6 +103,7 @@ export class WsHandler {
 	constructor(options: WsHandlerOptions) {
 		this.registry = options.registry;
 		this.pool = options.pool;
+		this.sessionPaths = options.sessionPaths ?? new SessionPathGuard();
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
@@ -459,9 +462,9 @@ export class WsHandler {
 	private handleSubscribeSession(ws: WebSocket, id: string, command: any): void {
 		const client = this.clients.get(ws);
 		if (!client) return;
-		const sessionPath = command.sessionPath as string;
+		const requestedPath = command.sessionPath;
 
-		if (!sessionPath) {
+		if (!requestedPath) {
 			client.subscribedSession = null;
 			client.lastVersion = 0;
 			client.lastJson = "";
@@ -470,6 +473,17 @@ export class WsHandler {
 			return;
 		}
 
+		let sessionPath: string;
+		try {
+			sessionPath = this.sessionPaths.resolveExisting(requestedPath);
+		} catch (error) {
+			// Pi allocates a new path before its first prompt flushes the file. The
+			// actor proves that such a confined pending path belongs to this server.
+			if (!(error instanceof SessionPathError) || error.code !== "not_found") throw error;
+			const pendingPath = this.sessionPaths.resolvePending(requestedPath);
+			if (!this.registry.find(pendingPath)?.isAttached) throw error;
+			sessionPath = pendingPath;
+		}
 		client.subscribedSession = sessionPath;
 
 		// If the session is attached, send from its actor-owned in-memory state
@@ -510,8 +524,11 @@ export class WsHandler {
 	}
 
 	private async handlePrompt(ws: WebSocket, id: string, command: any): Promise<void> {
-		let sessionPath = command.sessionPath as string;
-		if (!sessionPath) throw new Error("Missing sessionPath");
+		const requestedPath = command.sessionPath;
+		if (!requestedPath) throw new Error("Missing sessionPath");
+		let sessionPath = requestedPath === "__new__"
+			? requestedPath
+			: this.sessionPaths.resolveExisting(requestedPath);
 
 		const turnId = makeTurnId();
 		debugTurn("prompt_start", { turnId, sessionPath, hasModel: !!command.model });
@@ -530,8 +547,9 @@ export class WsHandler {
 				this.beginPendingExtensionStatusCapture(proc);
 				await this.replacePiSession(proc, { type: "new_session" }, "new_session");
 				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
-				sessionPath = stateResp.data?.sessionFile;
-				if (!sessionPath) throw new Error("Failed to get session path from new session");
+				const createdPath = stateResp.data?.sessionFile;
+				if (!createdPath) throw new Error("Failed to get session path from new session");
+				sessionPath = this.sessionPaths.resolvePending(createdPath);
 			}
 
 			actor = this.registry.get(sessionPath);
@@ -672,8 +690,7 @@ export class WsHandler {
 	}
 
 	private async handleCompact(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
-		if (!sessionPath) throw new Error("Missing sessionPath");
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("compact", async () => {
 			actor.assertAvailable("compact");
@@ -743,8 +760,7 @@ export class WsHandler {
 	}
 
 	private async handleFork(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
-		if (!sessionPath) throw new Error("Missing sessionPath");
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const entryId = command.entryId as string;
 		if (!entryId) throw new Error("Missing entryId");
 
@@ -755,7 +771,13 @@ export class WsHandler {
 			try {
 				const response = await this.pool.sendRpc(proc, { type: "fork", entryId });
 				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
-				return { response, newSessionPath: stateResp.data?.sessionFile };
+				const returnedPath = stateResp.data?.sessionFile;
+				return {
+					response,
+					newSessionPath: returnedPath
+						? this.sessionPaths.resolveExisting(returnedPath)
+						: undefined,
+				};
 			} finally {
 				this.releaseActor(actor);
 			}
@@ -772,19 +794,18 @@ export class WsHandler {
 	}
 
 	private async handleForkPrompt(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
-		if (!sessionPath) throw new Error("Missing sessionPath");
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const message = command.message as string;
 		if (!message) throw new Error("Missing message");
 
-		const sessionsDir = path.join(getAgentDir(), "sessions");
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 		const newId = crypto.randomUUID().slice(0, 8);
-		const newSessionPath = path.join(sessionsDir, `${timestamp}_${newId}.jsonl`);
+		let newSessionPath = this.sessionPaths.createPath(`${timestamp}_${newId}.jsonl`);
 		const sourceActor = this.registry.get(sessionPath);
 		await sourceActor.enqueue("fork prompt source", async () => {
 			sourceActor.assertAvailable("fork and prompt");
-			await copyFile(sessionPath, newSessionPath);
+			await copyFile(sessionPath, newSessionPath, fsConstants.COPYFILE_EXCL);
+			newSessionPath = this.sessionPaths.resolveExisting(newSessionPath);
 		});
 
 		const forkCwd = getSessionCwd(sessionPath);
@@ -849,8 +870,7 @@ export class WsHandler {
 	}
 
 	private async handleSetSessionName(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
-		if (!sessionPath) throw new Error("Missing sessionPath");
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("set session name", async () => {
 			actor.assertAvailable("rename session");

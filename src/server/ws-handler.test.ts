@@ -1,13 +1,25 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { SessionJsonl } from "./session-jsonl.js";
 import { SessionRegistry } from "./session-registry.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import { WsHandler } from "./ws-handler.js";
+import { SessionPathGuard } from "./session-path.js";
 
 function makeHandler(overrides: Record<string, any> = {}) {
 	const registry = new SessionRegistry();
+	const {
+		sessionPaths = {
+			resolveExisting: (value: unknown) => value,
+			resolvePending: (value: unknown) => value,
+			createPath: (filename: string) => path.join("/tmp", filename),
+		},
+		...poolOverrides
+	} = overrides;
 	const poolEventListeners = new Set<(proc: any, event: any) => void>();
 	const pool = {
 		sendRpcChecked: vi.fn(async () => ({ success: true, data: {} })),
@@ -26,12 +38,13 @@ function makeHandler(overrides: Record<string, any> = {}) {
 			poolEventListeners.add(listener);
 			return () => poolEventListeners.delete(listener);
 		}),
-		...overrides,
+		...poolOverrides,
 	} as any;
 	const ensurePool = vi.fn();
 	const handler = new WsHandler({
 		registry,
 		pool,
+		sessionPaths,
 		defaultCwd: "/tmp",
 		piLaunch: { command: "pi", baseArgs: [] },
 		ensurePool,
@@ -331,6 +344,136 @@ describe("WsHandler actor orchestration", () => {
 			child.emit("exit", 1);
 		});
 		await expect(waiting).rejects.toThrow("exited before the turn settled");
+	});
+});
+
+describe("WsHandler session path confinement", () => {
+	function createFixture() {
+		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-ws-path-"));
+		const sessionsRoot = path.join(tmpDir, "agent", "sessions");
+		mkdirSync(sessionsRoot, { recursive: true });
+		const sessionPath = path.join(sessionsRoot, "session.jsonl");
+		const outsidePath = path.join(tmpDir, "outside.jsonl");
+		const symlinkPath = path.join(sessionsRoot, "escape.jsonl");
+		writeFileSync(sessionPath, "");
+		writeFileSync(outsidePath, "");
+		symlinkSync(outsidePath, symlinkPath);
+		return {
+			tmpDir,
+			sessionsRoot,
+			sessionPath,
+			outsidePath,
+			symlinkPath,
+			sessionPaths: new SessionPathGuard(sessionsRoot),
+		};
+	}
+
+	it("rejects outside and symlink paths before subscribing", () => {
+		const fixture = createFixture();
+		try {
+			const { handler } = makeHandler({ sessionPaths: fixture.sessionPaths });
+			const { ws } = makeWs();
+			handler.clients.set(ws, {
+				subscribedSession: null,
+				lastVersion: 0,
+				lastJson: "",
+				lastHash: "",
+			});
+
+			expect(() => handler.handleSubscribeSession(ws, "outside", {
+				sessionPath: fixture.outsidePath,
+			})).toThrow("within the Pi sessions directory");
+			expect(() => handler.handleSubscribeSession(ws, "symlink", {
+				sessionPath: fixture.symlinkPath,
+			})).toThrow("escapes the Pi sessions directory");
+			expect(() => handler.handleSubscribeSession(ws, "missing", {
+				sessionPath: path.join(fixture.sessionsRoot, "missing.jsonl"),
+			})).toThrow("Session file not found");
+			expect(handler.clients.get(ws)?.subscribedSession).toBeNull();
+		} finally {
+			rmSync(fixture.tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("subscribes to an actor-owned new path before Pi flushes the file", () => {
+		const fixture = createFixture();
+		try {
+			const pendingPath = path.join(fixture.sessionsRoot, "pending.jsonl");
+			const { handler, registry } = makeHandler({ sessionPaths: fixture.sessionPaths });
+			attachActor(registry, pendingPath, { id: 42 });
+			const { ws, sent } = makeWs();
+			handler.clients.set(ws, {
+				subscribedSession: null,
+				lastVersion: 0,
+				lastJson: "",
+				lastHash: "",
+			});
+
+			handler.handleSubscribeSession(ws, "pending", { sessionPath: pendingPath });
+
+			expect(handler.clients.get(ws)?.subscribedSession).toBe(pendingPath);
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "session_sync",
+				sessionPath: pendingPath,
+				op: "full",
+			}));
+		} finally {
+			rmSync(fixture.tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects outside fork sources before acquiring a process or copying", async () => {
+		const fixture = createFixture();
+		try {
+			const { handler, pool } = makeHandler({ sessionPaths: fixture.sessionPaths });
+			const { ws } = makeWs();
+
+			await expect(handler.handleFork(ws, "fork", {
+				sessionPath: fixture.outsidePath,
+				entryId: "entry",
+			})).rejects.toThrow("within the Pi sessions directory");
+			await expect(handler.handleForkPrompt(ws, "fork-prompt", {
+				sessionPath: fixture.symlinkPath,
+				message: "continue",
+			})).rejects.toThrow("escapes the Pi sessions directory");
+			expect(pool.acquire).not.toHaveBeenCalled();
+		} finally {
+			rmSync(fixture.tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("canonicalizes a client path before switching the Pi process", async () => {
+		const fixture = createFixture();
+		try {
+			const proc = { id: 41 };
+			const release = vi.fn();
+			const acquire = vi.fn(() => ({ process: proc, release }));
+			const sendRpcChecked = vi.fn(async () => ({ success: true, data: {} }));
+			const sendRpc = vi.fn(async () => ({ success: true, data: {} }));
+			const { handler, registry } = makeHandler({
+				sessionPaths: fixture.sessionPaths,
+				acquire,
+				sendRpcChecked,
+				sendRpc,
+			});
+			const { ws } = makeWs();
+			const nonCanonicalPath = `${fixture.sessionsRoot}${path.sep}unused${path.sep}..${path.sep}session.jsonl`;
+
+			await handler.handleSetSessionName(ws, "rename", {
+				sessionPath: nonCanonicalPath,
+				name: "renamed",
+			});
+
+			expect(sendRpcChecked).toHaveBeenCalledWith(proc, {
+				type: "switch_session",
+				sessionPath: fixture.sessionPath,
+			});
+			expect(registry.find(fixture.sessionPath)).toBeDefined();
+			expect(registry.find(nonCanonicalPath)).toBeUndefined();
+			expect(release).toHaveBeenCalledOnce();
+		} finally {
+			rmSync(fixture.tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 
