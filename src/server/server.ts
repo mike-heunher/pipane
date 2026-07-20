@@ -14,8 +14,8 @@
  * only routes transport commands and publishes actor state.
  */
 
-import express, { type Request, type Response, type NextFunction } from "express";
-import { createServer, type IncomingMessage } from "node:http";
+import express from "express";
+import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { hostname } from "node:os";
@@ -34,6 +34,7 @@ import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 import { UpdateManager } from "./update-manager.js";
 import { registerUpdateApi } from "./update-api.js";
 import { SessionPathGuard } from "./session-path.js";
+import { AuthGuard } from "./auth-guard.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -76,44 +77,13 @@ const PKG_VERSION: string = (() => {
 })();
 const PKG_NAME = "pipane";
 
-const AUTH_COOKIE_NAME = "pipane_auth";
 const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("base64url");
 const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
-
-function parseCookies(header: string | undefined): Record<string, string> {
-	const out: Record<string, string> = {};
-	if (!header) return out;
-	for (const part of header.split(";")) {
-		const idx = part.indexOf("=");
-		if (idx <= 0) continue;
-		const k = part.slice(0, idx).trim();
-		const v = part.slice(idx + 1).trim();
-		out[k] = decodeURIComponent(v);
-	}
-	return out;
-}
-
-function isLocalAddress(addr: string | undefined | null): boolean {
-	if (!addr) return false;
-	return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
-}
-
-function isLocalRequest(req: Pick<IncomingMessage, "socket">): boolean {
-	if (process.env.PIPANE_DISABLE_LOCAL_BYPASS === "1") return false;
-	return isLocalAddress(req.socket.remoteAddress);
-}
-
-function setAuthCookie(res: Response): void {
-	const secure = process.env.PIPANE_SECURE_COOKIE === "1" ? "; Secure" : "";
-	const maxAgeSeconds = 60 * 60 * 24 * 30;
-	res.setHeader("Set-Cookie", `${AUTH_COOKIE_NAME}=${encodeURIComponent(AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`);
-}
-
-function isAuthorizedRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
-	if (isLocalRequest(req)) return true;
-	const cookies = parseCookies(req.headers.cookie);
-	return cookies[AUTH_COOKIE_NAME] === AUTH_TOKEN;
-}
+const authGuard = new AuthGuard({
+	token: AUTH_TOKEN,
+	disableLocalBypass: process.env.PIPANE_DISABLE_LOCAL_BYPASS === "1",
+	secureCookie: process.env.PIPANE_SECURE_COOKIE === "1",
+});
 
 // ============================================================================
 // Express + HTTP server
@@ -151,26 +121,7 @@ const pingInterval = setInterval(() => {
 
 wss.on("close", () => { clearInterval(pingInterval); });
 
-app.get("/auth", (req: Request, res: Response) => {
-	const token = typeof req.query.token === "string" ? req.query.token : undefined;
-	if (isLocalRequest(req) || token === AUTH_TOKEN) {
-		setAuthCookie(res);
-		res.redirect("/");
-		return;
-	}
-	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Invalid auth token.</p>");
-});
-
-app.use((req: Request, res: Response, next: NextFunction) => {
-	if (isAuthorizedRequest(req)) {
-		if (isLocalRequest(req)) {
-			setAuthCookie(res);
-		}
-		next();
-		return;
-	}
-	res.status(401).type("html").send("<h3>Unauthorized</h3><p>Open the one-time auth URL shown in the pipane terminal.</p>");
-});
+authGuard.register(app);
 
 // A harness can provide a unique ID and verify that it reached the child it
 // launched, rather than an unrelated process that happened to acquire a port.
@@ -257,7 +208,7 @@ const wsHandler = new WsHandler({
 			pool.prewarm(PI_CWD);
 		}
 	},
-	isRequestAuthorized: (req) => isAuthorizedRequest(req),
+	isRequestAuthorized: (req) => authGuard.isAuthorizedRequest(req),
 });
 
 // Register WS handler

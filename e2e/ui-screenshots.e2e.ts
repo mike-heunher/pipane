@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 const LATEST_DIR = path.resolve(import.meta.dirname, "latest");
+const captureLatest = process.env.PIPANE_CAPTURE_LATEST_SCREENSHOTS === "1";
 
-fs.mkdirSync(LATEST_DIR, { recursive: true });
-for (const f of fs.readdirSync(LATEST_DIR)) {
-	if (f.endsWith(".png")) fs.unlinkSync(path.join(LATEST_DIR, f));
+if (captureLatest) {
+	fs.mkdirSync(LATEST_DIR, { recursive: true });
+	for (const file of fs.readdirSync(LATEST_DIR)) {
+		if (file.endsWith(".png")) fs.unlinkSync(path.join(LATEST_DIR, file));
+	}
 }
 
 const usage = (input: number, output: number, total: number, totalTokens?: number) => ({
@@ -172,7 +175,9 @@ function createMockServer(): Promise<MockPipaneServer> {
 }
 
 async function captureAndCompare(target: Locator | Page, name: string) {
-	await target.screenshot({ path: path.join(LATEST_DIR, name), animations: "disabled" });
+	if (captureLatest) {
+		await target.screenshot({ path: path.join(LATEST_DIR, name), animations: "disabled" });
+	}
 	await expect(target as any).toHaveScreenshot(name, { animations: "disabled", maxDiffPixelRatio: 0.015 });
 }
 

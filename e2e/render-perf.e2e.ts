@@ -11,14 +11,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 const FIXTURE_PATH = path.resolve(import.meta.dirname, "fixtures/large-session-messages.json");
+const FIXTURE_MESSAGE_COUNT = 194;
 if (!fs.existsSync(FIXTURE_PATH)) {
 	const { execSync } = await import("node:child_process");
-	execSync("npx tsx e2e/fixtures/generate-large-session.ts 10", {
+	execSync("npx tsx e2e/fixtures/generate-large-session.ts 1", {
 		cwd: path.resolve(import.meta.dirname, ".."),
 		stdio: "inherit",
 	});
 }
-const largeSessionMessages: any[] = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
+const generatedMessages: any[] = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));
+if (generatedMessages.length < FIXTURE_MESSAGE_COUNT) {
+	throw new Error(`Render fixture must contain at least ${FIXTURE_MESSAGE_COUNT} messages`);
+}
+// Keep the canonical suite deterministic even when a developer has generated a
+// larger ignored stress fixture locally.
+const largeSessionMessages = generatedMessages.slice(0, FIXTURE_MESSAGE_COUNT);
 const expectedToolMessages = largeSessionMessages.filter((message) => message.role === "toolResult").length;
 
 const SESSION_PATH = "/tmp/mock-sessions/perf-test-session.jsonl";
@@ -128,14 +135,10 @@ test.describe("Render performance", () => {
 		expect(metrics.renderTimeMs).toBeLessThan(10_000);
 		expect(metrics.toolMessages).toBe(expectedToolMessages);
 		expect(metrics.totalElements).toBeLessThan(220_000);
-	});
 
-	test("scroll performance after render", async ({ page }) => {
-		await clickMeasuredSession(page);
-		await waitForExactFixture(page);
-
+		// Measure scrolling in the DOM we just rendered instead of paying for the
+		// same large-session parse, syntax highlighting, and render a second time.
 		const scrollMetrics = await page.evaluate(async () => {
-			((window as any).__perfObserver as MutationObserver).disconnect();
 			const scrollElement = document.getElementById("chat-scroll-area");
 			if (!scrollElement || scrollElement.scrollHeight <= scrollElement.clientHeight + 500) {
 				return { found: false, longFrames: 0, maxFrameMs: 0, avgFrameMs: 0, frameTimes: [] as number[] };

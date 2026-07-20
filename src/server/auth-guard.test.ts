@@ -1,89 +1,65 @@
 /** @vitest-environment node */
 
+import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import { createServer } from "node:net";
-import type { Readable } from "node:stream";
+import { createServer, type Server } from "node:http";
+import { WebSocketServer } from "ws";
 import WebSocket from "ws";
+import { AuthGuard, type AuthGuardOptions } from "./auth-guard.js";
 
 type RunningServer = {
-	proc: ChildProcessByStdio<null, Readable, Readable>;
+	server: Server;
+	wss: WebSocketServer;
 	port: number;
 	baseUrl: string;
 	wsUrl: string;
 };
 
-async function getFreePort(): Promise<number> {
-	return await new Promise((resolve, reject) => {
-		const s = createServer();
-		s.on("error", reject);
-		s.listen(0, "127.0.0.1", () => {
-			const addr = s.address();
-			if (!addr || typeof addr === "string") {
-				s.close();
-				reject(new Error("Failed to allocate free port"));
+async function startServer(options: AuthGuardOptions, instanceId: string): Promise<RunningServer> {
+	const app = express();
+	const authGuard = new AuthGuard(options);
+	authGuard.register(app);
+	app.get("/api/sessions", (_req, res) => res.json([]));
+	app.get("/debug/pool", (_req, res) => res.json({ processes: [] }));
+	app.get("/api/debug/health", (_req, res) => res.json({ ok: true, instanceId }));
+
+	const server = createServer(app);
+	const wss = new WebSocketServer({ server, path: "/ws" });
+	wss.on("connection", (ws, req) => {
+		if (!authGuard.isAuthorizedRequest(req)) {
+			ws.close(1008, "Unauthorized");
+			return;
+		}
+		ws.send(JSON.stringify({ type: "init" }));
+	});
+
+	const port = await new Promise<number>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			server.off("error", reject);
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				reject(new Error("Auth test server did not bind to a TCP port"));
 				return;
 			}
-			const port = addr.port;
-			s.close((err) => (err ? reject(err) : resolve(port)));
-		});
-	});
-}
-
-async function startServer(envOverrides: Record<string, string>): Promise<RunningServer> {
-	const port = await getFreePort();
-	const env = {
-		...process.env,
-		PORT: String(port),
-		PI_CLI: "definitely-not-an-installed-pi-binary",
-		PIPANE_AUTH_TOKEN: "test-auth-token",
-		...envOverrides,
-	};
-
-	const proc = spawn(process.execPath, ["--import", "tsx", "src/server/server.ts"], {
-		cwd: process.cwd(),
-		env,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
-
-	await new Promise<void>((resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error("Timed out waiting for server startup")), 15000);
-		const onData = (chunk: Buffer) => {
-			const text = chunk.toString("utf8");
-			if (text.includes("Local:")) {
-				clearTimeout(timeout);
-				proc.stdout.off("data", onData);
-				proc.stderr.off("data", onData);
-				resolve();
-			}
-		};
-		proc.stdout.on("data", onData);
-		proc.stderr.on("data", onData);
-		proc.on("exit", (code) => {
-			clearTimeout(timeout);
-			reject(new Error(`Server exited before startup (code=${code})`));
+			resolve(address.port);
 		});
 	});
 
 	return {
-		proc,
+		server,
+		wss,
 		port,
 		baseUrl: `http://127.0.0.1:${port}`,
 		wsUrl: `ws://127.0.0.1:${port}/ws`,
 	};
 }
 
-async function stopServer(server: RunningServer | null): Promise<void> {
-	if (!server) return;
-	if (server.proc.killed) return;
-	await new Promise<void>((resolve) => {
-		server.proc.once("exit", () => resolve());
-		server.proc.kill("SIGTERM");
-		setTimeout(() => {
-			if (!server.proc.killed) server.proc.kill("SIGKILL");
-			resolve();
-		}, 3000);
-	});
+async function stopServer(running: RunningServer | null): Promise<void> {
+	if (!running) return;
+	for (const client of running.wss.clients) client.terminate();
+	await new Promise<void>((resolve) => running.wss.close(() => resolve()));
+	await new Promise<void>((resolve, reject) => running.server.close((error) => error ? reject(error) : resolve()));
 }
 
 function extractCookiePair(setCookieHeader: string | null): string {
@@ -95,7 +71,7 @@ describe("auth guard", () => {
 	let server: RunningServer | null = null;
 
 	beforeAll(async () => {
-		server = await startServer({ PIPANE_DISABLE_LOCAL_BYPASS: "1" });
+		server = await startServer({ token: "test-auth-token", disableLocalBypass: true }, "remote-auth-test");
 	});
 
 	afterAll(async () => {
@@ -136,31 +112,28 @@ describe("auth guard", () => {
 				try {
 					expect(code).toBe(1008);
 					resolve();
-				} catch (err) {
-					reject(err);
+				} catch (error) {
+					reject(error);
 				}
 			});
 			ws.on("error", () => {
-				// Expected on some platforms when closed immediately by server.
+				// Expected on some platforms when closed immediately by the server.
 			});
 		});
 
-		const authResp = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
-		const cookiePair = extractCookiePair(authResp.headers.get("set-cookie"));
+		const authResponse = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
+		const cookiePair = extractCookiePair(authResponse.headers.get("set-cookie"));
 
 		await new Promise<void>((resolve, reject) => {
-			const ws = new WebSocket(server!.wsUrl, {
-				headers: { Cookie: cookiePair },
-			});
-
+			const ws = new WebSocket(server!.wsUrl, { headers: { Cookie: cookiePair } });
 			ws.on("message", (raw) => {
 				try {
-					const msg = JSON.parse(raw.toString("utf8"));
-					expect(msg.type).toBe("init");
+					const message = JSON.parse(raw.toString("utf8"));
+					expect(message.type).toBe("init");
 					ws.close();
 					resolve();
-				} catch (err) {
-					reject(err);
+				} catch (error) {
+					reject(error);
 				}
 			});
 			ws.on("error", reject);
@@ -172,7 +145,7 @@ describe("localhost bypass", () => {
 	let server: RunningServer | null = null;
 
 	beforeAll(async () => {
-		server = await startServer({ PIPANE_INSTANCE_ID: "auth-test-instance" });
+		server = await startServer({ token: "test-auth-token" }, "auth-test-instance");
 	});
 
 	afterAll(async () => {
@@ -181,9 +154,9 @@ describe("localhost bypass", () => {
 	});
 
 	it("localhost is allowed, identifies the instance, and sets auth cookie automatically", async () => {
-		const res = await fetch(`${server!.baseUrl}/api/sessions`);
-		expect(res.status).toBe(200);
-		expect(res.headers.get("set-cookie") || "").toContain("pipane_auth=");
+		const response = await fetch(`${server!.baseUrl}/api/sessions`);
+		expect(response.status).toBe(200);
+		expect(response.headers.get("set-cookie") || "").toContain("pipane_auth=");
 
 		const health = await fetch(`${server!.baseUrl}/api/debug/health`);
 		expect(health.status).toBe(200);

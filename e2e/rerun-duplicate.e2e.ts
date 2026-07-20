@@ -62,15 +62,11 @@ test.describe("Rerun duplicate rendering regression", () => {
 			(document.querySelector("session-picker") as any).shadowRoot.querySelector(".session-item")?.click();
 		});
 
-		// Wait for tool-message to appear (session loaded)
-		await page.waitForFunction(() =>
-			document.querySelectorAll("tool-message").length > 0,
-			null, { timeout: 10000 },
-		);
-
-		// Verify initial: 1 tool-message (from aborted run)
-		let toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);
-		expect(toolCount).toBe(1);
+		// Verify the authoritative initial render directly. A separate presence wait
+		// followed by a raw count can land between Lit replacing the old and new DOM.
+		const tools = page.locator("tool-message");
+		await expect(tools).toHaveCount(1, { timeout: 10_000 });
+		let toolCount = 1;
 
 		// Simulate rerun with authoritative flat-state snapshots.
 		mock.sendSessionStatus(SESSION_PATH, "running");

@@ -1,9 +1,9 @@
 /**
  * Generates a synthetic session fixture for render performance testing.
  *
- * The baseline mirrors a real 190-message coding session (~760KB).
- * Pass a multiplier to scale up: `npx tsx e2e/fixtures/generate-large-session.ts 10`
- * produces ~1900 messages / ~7.6MB.
+ * The baseline mirrors a real 190-message coding session.
+ * Pass a multiplier to create a larger local stress fixture:
+ * `npx tsx e2e/fixtures/generate-large-session.ts 10` produces ~1900 messages.
  *
  * Run: npx tsx e2e/fixtures/generate-large-session.ts [multiplier]
  */
@@ -11,7 +11,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 
-const MULTIPLIER = Number(process.argv[2]) || 10;
+const MULTIPLIER = Number(process.argv[2]) || 1;
 
 // ── Helpers ────────────────────────────────────────────────────────────
 

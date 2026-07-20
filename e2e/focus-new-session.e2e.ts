@@ -3,8 +3,8 @@
  * should focus the input textarea so the user can start typing immediately.
  */
 
-import { test, expect, type Page } from "@playwright/test";
-import { startHarness, type E2EHarness } from "./harness.js";
+import { type Page } from "@playwright/test";
+import { test, expect } from "./real-stack-fixture.js";
 import { textChunks } from "./mock-llm-server.js";
 
 /**
@@ -57,17 +57,7 @@ async function isTextareaFocused(page: Page): Promise<boolean> {
 test.describe("Focus on new session", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
-	let harness: E2EHarness;
-
-	test.beforeAll(async () => {
-		harness = await startHarness();
-	}, 30000);
-
-	test.afterAll(async () => {
-		await harness?.close();
-	});
-
-	test("clicking group '+' button focuses the input textarea", async ({ page }) => {
+	test("clicking group '+' button focuses the input textarea", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("First session response.") },
 		]);

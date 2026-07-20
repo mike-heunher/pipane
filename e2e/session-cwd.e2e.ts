@@ -6,8 +6,8 @@
  * before sending a message, while the LLM responds, and after the response.
  */
 
-import { test, expect, type Page } from "@playwright/test";
-import { startHarness, type E2EHarness } from "./harness.js";
+import { type Page } from "@playwright/test";
+import { test, expect } from "./real-stack-fixture.js";
 import { textChunks } from "./mock-llm-server.js";
 
 /**
@@ -80,17 +80,7 @@ async function clickGroupNewButton(page: Page, cwd: string): Promise<void> {
 test.describe("Session CWD stability", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
-	let harness: E2EHarness;
-
-	test.beforeAll(async () => {
-		harness = await startHarness();
-	}, 30000);
-
-	test.afterAll(async () => {
-		await harness?.close();
-	});
-
-	test("new session from group '+' stays in the correct project group", async ({ page }) => {
+	test("new session from group '+' stays in the correct project group", async ({ page, harness }) => {
 		// Use a slow response so we can observe the session during streaming
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("This is the first response from the mock LLM.") },
@@ -102,6 +92,18 @@ test.describe("Session CWD stability", () => {
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();
+		const existingSessionCount = await getSessionCount(page);
+		if (existingSessionCount > 0) {
+			const existingGroups = await getAllGroupCwds(page);
+			const projectBasename = harness.projectDir.split("/").pop()!;
+			const existingProjectCwd = existingGroups.find((cwd) => cwd.endsWith(projectBasename));
+			expect(existingProjectCwd).toBeTruthy();
+			await clickGroupNewButton(page, existingProjectCwd!);
+			await expect.poll(async () => page.evaluate(() => {
+				const picker = document.querySelector("session-picker") as any;
+				return picker?.agent?.sessionStatus;
+			})).toBe("virtual");
+		}
 		await textarea.fill("First session message");
 		await textarea.press("Meta+Enter");
 
@@ -129,23 +131,27 @@ test.describe("Session CWD stability", () => {
 		// to the real path after session creation. Normalize for comparison.
 		const normalizeCwd = (p: string) => p.replace(/^\/private\/tmp\//, "/tmp/");
 
-		// The active session should be in the project group
-		const activeCwd1 = await getActiveSessionGroupCwd(page);
-		expect(activeCwd1).toBeTruthy();
-		expect(normalizeCwd(activeCwd1!)).toBe(normalizeCwd(projectCwd!));
+		// Session-list refresh can briefly replace the active Lit node after the
+		// response; wait for the authoritative active item to settle.
+		await expect.poll(async () => {
+			const activeCwd = await getActiveSessionGroupCwd(page);
+			return activeCwd ? normalizeCwd(activeCwd) : null;
+		}).toBe(normalizeCwd(projectCwd!));
 
-		// Step 2: Click the "+" button on the project group to create a new session
-		const sessionCountBefore = await getSessionCount(page);
+		// Step 2: Click the "+" button on the project group to create a new session.
+		// The visible count can remain capped when the shared harness already has
+		// several sessions, so observe the authoritative virtual-session state.
 		await clickGroupNewButton(page, projectCwd!);
-		// Wait for the new session item to appear
-		await page.waitForFunction((expected) => {
+		await expect.poll(async () => page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;
-			return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) > expected;
-		}, sessionCountBefore, { timeout: 5000 });
+			return picker?.agent?.sessionStatus;
+		})).toBe("virtual");
 
-		// The new (virtual) session should immediately appear in the correct group
-		const activeCwdAfterNew = await getActiveSessionGroupCwd(page);
-		expect(normalizeCwd(activeCwdAfterNew!)).toBe(normalizeCwd(projectCwd!));
+		// The new (virtual) session should appear in the correct group.
+		await expect.poll(async () => {
+			const activeCwd = await getActiveSessionGroupCwd(page);
+			return activeCwd ? normalizeCwd(activeCwd) : null;
+		}).toBe(normalizeCwd(projectCwd!));
 
 		// Step 3: Set up a new scenario and send a message in the new session
 		harness.setScenarios([
@@ -155,9 +161,11 @@ test.describe("Session CWD stability", () => {
 		const textarea2 = editor.locator("textarea").first();
 		await textarea2.fill("Second session message");
 
-		// Check the session is still in the right group right before sending
-		const activeCwdBeforeSend = await getActiveSessionGroupCwd(page);
-		expect(normalizeCwd(activeCwdBeforeSend!)).toBe(normalizeCwd(projectCwd!));
+		// Check the session is still in the right group right before sending.
+		await expect.poll(async () => {
+			const activeCwd = await getActiveSessionGroupCwd(page);
+			return activeCwd ? normalizeCwd(activeCwd) : null;
+		}).toBe(normalizeCwd(projectCwd!));
 
 		// Observe every sidebar mutation before sending. This catches transient
 		// regrouping without wall-clock polling sleeps.

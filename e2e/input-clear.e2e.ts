@@ -5,24 +5,15 @@
  * pressing Enter to send, because `handleSend` didn't clear the editor.
  */
 
-import { test, expect } from "@playwright/test";
-import { startHarness, type E2EHarness } from "./harness.js";
+import type { Page } from "@playwright/test";
+import type { E2EHarness } from "./harness.js";
+import { test, expect } from "./real-stack-fixture.js";
 import { textChunks } from "./mock-llm-server.js";
 
 test.describe("Input clear on send", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
-	let harness: E2EHarness;
-
-	test.beforeAll(async () => {
-		harness = await startHarness();
-	}, 30000);
-
-	test.afterAll(async () => {
-		await harness?.close();
-	});
-
-	async function gotoFreshSession(page: import("@playwright/test").Page) {
+	async function gotoFreshSession(page: Page, harness: E2EHarness) {
 		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
@@ -34,11 +25,12 @@ test.describe("Input clear on send", () => {
 			return picker?.shadowRoot?.querySelectorAll(".session-item").length ?? 0;
 		});
 		if (existingSessionCount > 0) {
-			await page.evaluate(() => {
+			await page.evaluate(async () => {
 				const picker = document.querySelector("session-picker") as any;
-				const button = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
-				if (!button) throw new Error("New-session button was not rendered");
-				button.click();
+				const group = picker?.shadowRoot?.querySelector(".group-header") as HTMLElement | null;
+				const cwd = group?.getAttribute("title");
+				if (!cwd) throw new Error("Session group was not rendered");
+				await picker.agent.newSession(cwd);
 			});
 			await expect.poll(async () => page.evaluate(() => {
 				const picker = document.querySelector("session-picker") as any;
@@ -47,12 +39,12 @@ test.describe("Input clear on send", () => {
 		}
 	}
 
-	test("textarea is cleared after sending a prompt with Enter", async ({ page }) => {
+	test("textarea is cleared after sending a prompt with Enter", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Got it, thanks!") },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();

@@ -2,31 +2,22 @@
  * E2E test for steering (queueing prompts while the agent is running).
  *
  * Uses the real pipane stack with a mock LLM. The test:
- * 1. Sends an initial prompt that triggers a slow bash tool call
+ * 1. Sends an initial prompt that triggers a short bash tool call
  * 2. While the tool is executing, sends steering messages
  * 3. Verifies the steering queue appears in the UI
  * 4. Verifies the remove button works
  * 5. Verifies queued steering is consumed and disappears after execution
  */
 
-import { test, expect } from "@playwright/test";
-import { startHarness, type E2EHarness } from "./harness.js";
+import type { Page } from "@playwright/test";
+import type { E2EHarness } from "./harness.js";
+import { test, expect } from "./real-stack-fixture.js";
 import { toolCallChunks, textChunks, type Scenario } from "./mock-llm-server.js";
 
 test.describe("Steering queue e2e", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
-	let harness: E2EHarness;
-
-	test.beforeAll(async () => {
-		harness = await startHarness();
-	}, 30000);
-
-	test.afterAll(async () => {
-		await harness?.close();
-	});
-
-	async function gotoFreshSession(page: import("@playwright/test").Page) {
+	async function gotoFreshSession(page: Page, harness: E2EHarness) {
 		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
@@ -38,11 +29,12 @@ test.describe("Steering queue e2e", () => {
 			return picker?.shadowRoot?.querySelectorAll(".session-item").length ?? 0;
 		});
 		if (existingSessionCount > 0) {
-			await page.evaluate(() => {
+			await page.evaluate(async () => {
 				const picker = document.querySelector("session-picker") as any;
-				const button = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
-				if (!button) throw new Error("New-session button was not rendered");
-				button.click();
+				const group = picker?.shadowRoot?.querySelector(".group-header") as HTMLElement | null;
+				const cwd = group?.getAttribute("title");
+				if (!cwd) throw new Error("Session group was not rendered");
+				await picker.agent.newSession(cwd);
 			});
 			await expect.poll(async () => page.evaluate(() => {
 				const picker = document.querySelector("session-picker") as any;
@@ -51,9 +43,9 @@ test.describe("Steering queue e2e", () => {
 		}
 	}
 
-	test("steering messages appear in queue and are consumed after execution", async ({ page }) => {
+	test("steering messages appear in queue and are consumed after execution", async ({ page, harness }) => {
 		// Scenario setup:
-		// 1. Initial prompt triggers a slow bash tool (sleep 3)
+		// 1. Initial prompt triggers a short bash tool long enough to enqueue steering
 		// 2. After tool result comes back, LLM responds with text
 		// 3. The steering message "also do cleanup" becomes a new user turn
 		//    and gets a text response from the LLM
@@ -64,7 +56,7 @@ test.describe("Steering queue e2e", () => {
 				chunks: toolCallChunks(
 					"call_slow_1",
 					"bash",
-					{ command: "sleep 3 && echo done" },
+					{ command: "sleep 1 && echo done" },
 				),
 			},
 			{
@@ -80,7 +72,7 @@ test.describe("Steering queue e2e", () => {
 			},
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -111,7 +103,7 @@ test.describe("Steering queue e2e", () => {
 		await expect(page.getByText("Cleanup is done", { exact: false }).first()).toBeVisible({ timeout: 15000 });
 	});
 
-	test("remove button removes a steering message from the queue", async ({ page }) => {
+	test("remove button removes a steering message from the queue", async ({ page, harness }) => {
 		// Use a very long sleep so the tool stays running while we manipulate the queue.
 		harness.setScenarios([
 			{
@@ -131,7 +123,7 @@ test.describe("Steering queue e2e", () => {
 			},
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -163,5 +155,9 @@ test.describe("Steering queue e2e", () => {
 		// 6. Only one chip should remain
 		await expect(page.locator(".steering-chip")).toHaveCount(1, { timeout: 5000 });
 		await expect(page.locator(".steering-chip-text").first()).toContainText("second steering message", { timeout: 5000 });
+
+		// Do not leave the deliberately long-running tool for fixture teardown.
+		await page.locator(".status-stop-button").click();
+		await expect(page.locator(".status-stop-button")).toBeHidden({ timeout: 5000 });
 	});
 });

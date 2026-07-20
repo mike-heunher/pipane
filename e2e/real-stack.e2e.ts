@@ -6,8 +6,9 @@
  * full pipeline: UI → WebSocket → pipane server → pi RPC → mock LLM → back to UI.
  */
 
-import { test, expect } from "@playwright/test";
-import { startHarness, type E2EHarness } from "./harness.js";
+import type { Page } from "@playwright/test";
+import type { E2EHarness } from "./harness.js";
+import { test, expect } from "./real-stack-fixture.js";
 import {
 	textChunks,
 	toolCallWithTextChunks,
@@ -18,18 +19,8 @@ import {
 test.describe("Real stack e2e", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
-	let harness: E2EHarness;
-
-	test.beforeAll(async () => {
-		harness = await startHarness();
-	}, 30000);
-
-	test.afterAll(async () => {
-		await harness?.close();
-	});
-
 	/** Navigate to the app and start a fresh (virtual) session for a clean test. */
-	async function gotoFreshSession(page: import("@playwright/test").Page) {
+	async function gotoFreshSession(page: Page, harness: E2EHarness) {
 		await page.goto(`http://localhost:${harness.pipanePort}`);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
@@ -43,11 +34,12 @@ test.describe("Real stack e2e", () => {
 			return picker?.shadowRoot?.querySelectorAll(".session-item").length ?? 0;
 		});
 		if (existingSessionCount > 0) {
-			await page.evaluate(() => {
+			await page.evaluate(async () => {
 				const picker = document.querySelector("session-picker") as any;
-				const button = picker?.shadowRoot?.querySelector(".group-new-btn") as HTMLButtonElement;
-				if (!button) throw new Error("New-session button was not rendered");
-				button.click();
+				const group = picker?.shadowRoot?.querySelector(".group-header") as HTMLElement | null;
+				const cwd = group?.getAttribute("title");
+				if (!cwd) throw new Error("Session group was not rendered");
+				await picker.agent.newSession(cwd);
 			});
 			await expect.poll(async () => page.evaluate(() => {
 				const picker = document.querySelector("session-picker") as any;
@@ -56,12 +48,12 @@ test.describe("Real stack e2e", () => {
 		}
 	}
 
-	test("can send a prompt and see the response", async ({ page }) => {
+	test("can send a prompt and see the response", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -81,7 +73,7 @@ test.describe("Real stack e2e", () => {
 		await expect(sessionItem.locator(".session-worktree")).toHaveText("root", { timeout: 10000 });
 	});
 
-	test("keeps hash-dependent sync deltas ordered during burst streaming", async ({ page }) => {
+	test("keeps hash-dependent sync deltas ordered during burst streaming", async ({ page, harness }) => {
 		const syncFailures: string[] = [];
 		page.on("console", (message) => {
 			const text = message.text();
@@ -102,7 +94,7 @@ test.describe("Real stack e2e", () => {
 			{ match: "sync-burst-e2e", chunks: textChunks(response) },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 		const textarea = page.locator("message-editor").locator("textarea").first();
 		await textarea.fill("sync-burst-e2e");
 		await textarea.press("Enter");
@@ -116,12 +108,12 @@ test.describe("Real stack e2e", () => {
 		expect(syncFailures, "session sync should not enter full-sync recovery").toEqual([]);
 	});
 
-	test("preserves, clamps, executes, and restores effective thinking across model changes", async ({ page }) => {
+	test("preserves, clamps, executes, and restores effective thinking across model changes", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: "thinking-state-e2e", chunks: textChunks("Thinking state persisted.") },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 		const thinkingButton = page.locator(".thinking-icon-btn");
 		await expect(thinkingButton).toBeVisible();
 		await expect(thinkingButton.locator(".thinking-level-label")).toHaveText("medium");
@@ -152,7 +144,7 @@ test.describe("Real stack e2e", () => {
 		await expect(page.locator(".thinking-icon-btn .thinking-level-label")).toHaveText("max");
 	});
 
-	test("can execute a tool call and see the result", async ({ page }) => {
+	test("can execute a tool call and see the result", async ({ page, harness }) => {
 		harness.setScenarios([
 			{
 				match: "read the config",
@@ -172,7 +164,7 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -189,7 +181,7 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("config file contains port 3000", { exact: false }).first()).toBeVisible({ timeout: 10000 });
 	});
 
-	test("tool renderers display correctly for read", async ({ page }) => {
+	test("tool renderers display correctly for read", async ({ page, harness }) => {
 		harness.setScenarios([
 			{
 				match: "read",
@@ -201,7 +193,7 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -216,12 +208,12 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("read(config.ts)", { exact: false }).first()).toBeVisible({ timeout: 10000 });
 	});
 
-	test("clicking chat messages jumps to the corresponding JSONL line", async ({ page }) => {
+	test("clicking chat messages jumps to the corresponding JSONL line", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		// Open JSONL viewer via burger menu
 		await page.locator("session-picker").getByTitle("Menu").click();
@@ -245,7 +237,7 @@ test.describe("Real stack e2e", () => {
 		await expect(page.locator(".jsonl-entry-focused .jsonl-line-label")).toContainText("message (assistant)", { timeout: 5000 });
 	});
 
-	test("bash streaming output is visible during execution", async ({ page }) => {
+	test("bash streaming output is visible during execution", async ({ page, harness }) => {
 		harness.setScenarios([
 			{
 				match: "run the loop",
@@ -253,7 +245,7 @@ test.describe("Real stack e2e", () => {
 				chunks: toolCallChunks(
 					"call_bash_1",
 					"bash",
-					{ command: "for i in 1 2 3; do echo \"dot_$i\"; sleep 0.3; done" },
+					{ command: "for i in 1 2 3; do echo \"dot_$i\"; sleep 0.1; done" },
 				),
 			},
 			{
@@ -264,7 +256,7 @@ test.describe("Real stack e2e", () => {
 			},
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
@@ -285,12 +277,12 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("dot_3", { exact: false }).first()).toBeVisible({ timeout: 10000 });
 	});
 
-	test("session appears in picker after prompt", async ({ page }) => {
+	test("session appears in picker after prompt", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Sure, I'll help with that.") },
 		]);
 
-		await gotoFreshSession(page);
+		await gotoFreshSession(page, harness);
 
 		const editor = page.locator("message-editor");
 		const textarea = editor.locator("textarea").first();
