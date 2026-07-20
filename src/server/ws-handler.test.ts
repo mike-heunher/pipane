@@ -235,8 +235,7 @@ describe("WsHandler actor orchestration", () => {
 		const proc = { id: 5 } as any;
 		const { actor } = attachActor(registry, "/tmp/events.jsonl", proc);
 		const generation = actor.beginTurn();
-		const { ws } = makeWs();
-		const observer = handler.setupTurnEventForwarding(actor, proc, generation, ws, "turn_1");
+		const observer = handler.setupTurnEventForwarding(actor, proc, generation, "turn_1");
 
 		emitProcessEvent(proc, { type: "agent_start" });
 		await observer.started;

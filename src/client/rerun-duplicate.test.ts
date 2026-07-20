@@ -137,8 +137,6 @@ describe("Flat state model (no duplicate rendering)", () => {
 
 		expect(adapter.state.messages).toHaveLength(2);
 		expect(adapter.state.isStreaming).toBe(true);
-		// streamMessage is always null in the new model — everything is in messages
-		expect(adapter.state.streamMessage).toBeNull();
 	});
 
 	it("session_sync with pending tool calls and partial results", async () => {
@@ -213,7 +211,7 @@ describe("Flat state model (no duplicate rendering)", () => {
 		expect(adapter.state.isStreaming).toBe(false);
 	});
 
-	it("session_detached clears streaming state", async () => {
+	it("a settled session_sync clears streaming state", async () => {
 		const { adapter, simulateServerMessage } = setupAdapter();
 
 		// Start streaming
@@ -227,8 +225,15 @@ describe("Flat state model (no duplicate rendering)", () => {
 		});
 		expect(adapter.state.isStreaming).toBe(true);
 
-		// Session detached
-		simulateServerMessage({ type: "session_detached", sessionPath: SESSION_PATH });
+		// The final authoritative snapshot marks the session idle.
+		await pushSessionSync(adapter, simulateServerMessage, {
+			messages: [{ role: "user", content: "hello", timestamp: 1000 }],
+			isStreaming: false,
+			pendingToolCalls: [],
+			model: null,
+			thinkingLevel: "off",
+			steeringQueue: [],
+		});
 		expect(adapter.state.isStreaming).toBe(false);
 		expect(adapter.sessionStatus).toBe("detached");
 	});

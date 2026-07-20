@@ -676,7 +676,6 @@ export class SessionPicker extends LitElement {
 	@state() private expandedGroups = new Set<string>();
 	@state() private pinnedSessions = loadPinnedSessions();
 	@state() private burgerMenuOpen = false;
-	@state() private themeSubmenuOpen = false;
 	@state() private burgerMenuPos = { top: 0, left: 0 };
 
 	// Folder picker state
@@ -1112,7 +1111,6 @@ export class SessionPicker extends LitElement {
 
 	private closeBurgerMenu() {
 		this.burgerMenuOpen = false;
-		this.themeSubmenuOpen = false;
 		this._removeBurgerPortal();
 	}
 
@@ -1249,7 +1247,6 @@ export class SessionPicker extends LitElement {
 									this.burgerMenuPos = { top: rect.bottom + 4, left: rect.left };
 								}
 								this.burgerMenuOpen = !this.burgerMenuOpen;
-								this.themeSubmenuOpen = false;
 							}}
 							title="Menu"
 						>

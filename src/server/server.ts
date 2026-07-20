@@ -29,7 +29,6 @@ import { registerRestApi } from "./rest-api.js";
 import { SessionRegistry } from "./session-registry.js";
 import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
-import { LoadTraceStore } from "./load-trace-store.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { fetchLatestVersion, compareSemver } from "./update-check.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
@@ -43,8 +42,6 @@ const PI_CWD = process.env.PI_CWD || process.cwd();
 const VERBOSE = process.argv.includes("--verbose") || process.env.PIPANE_VERBOSE === "1";
 if (!VERBOSE) {
 	const origLog = console.log;
-	const origError = console.error;
-	const origWarn = console.warn;
 	// Suppress all console output; we'll use _log for the few lines we want
 	console.log = () => {};
 	console.error = () => {};
@@ -179,31 +176,8 @@ app.get("/api/debug/health", (_req, res) => {
 	res.json({ ok: true, instanceId: INSTANCE_ID, pid: process.pid });
 });
 
-const traceStore = new LoadTraceStore();
 const localSettingsStore = new LocalSettingsStore();
 const registry = new SessionRegistry();
-
-app.use((req: Request, res: Response, next: NextFunction) => {
-	const traceId = typeof req.headers["x-pi-trace-id"] === "string" ? req.headers["x-pi-trace-id"] : "";
-	if (!traceId) {
-		next();
-		return;
-	}
-	const start = performance.now();
-	res.on("finish", () => {
-		traceStore.record(traceId, {
-			ts: new Date().toISOString(),
-			source: "backend",
-			kind: "span",
-			name: `http ${req.method} ${req.path}`,
-			durationMs: Number((performance.now() - start).toFixed(2)),
-			attrs: {
-				statusCode: res.statusCode,
-			},
-		});
-	});
-	next();
-});
 
 // Serve static files in production
 const clientDist = path.resolve(__dirname, "../../client");
@@ -211,7 +185,6 @@ app.use(express.static(clientDist));
 
 // Register REST endpoints
 registerRestApi(app, {
-	traceStore,
 	localSettingsStore,
 	runSessionMutation: (sessionPath, operation, mutation) => {
 		const actor = registry.get(sessionPath);
@@ -279,7 +252,6 @@ const wsHandler = new WsHandler({
 		}
 	},
 	isRequestAuthorized: (req) => isAuthorizedRequest(req),
-	traceStore,
 });
 
 // Register WS handler
@@ -366,8 +338,7 @@ function startSessionsWatcher(): FSWatcher | null {
 		debounceTimer = setTimeout(() => {
 			const fullPath = path.join(SESSIONS_DIR, lastChangedFile!);
 
-			// Notify the message cache — it will re-read from disk if changed
-			// and push session_messages to the subscribed client if needed.
+			// Re-read detached session state and push it to active subscribers.
 			wsHandler.notifySessionFileChanged(fullPath);
 
 			// Also notify all WS clients about the file change (for sidebar refresh)

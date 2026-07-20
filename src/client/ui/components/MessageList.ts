@@ -58,8 +58,6 @@ export class PiMessageList extends LitElement {
 		let index = 0;
 
 		for (const msg of this.messages) {
-			// Skip artifact messages — they're for session persistence only
-			if ((msg as any).role === "artifact") continue;
 			// Skip standalone toolResult — rendered inline via assistant-message
 			if ((msg as any).role === "toolResult") continue;
 
@@ -71,7 +69,7 @@ export class PiMessageList extends LitElement {
 				continue;
 			}
 
-			if (msg.role === "user" || (msg as any).role === "user-with-attachments") {
+			if (msg.role === "user") {
 				items.push({
 					key: `msg:${index}`,
 					template: html`<user-message .message=${msg}></user-message>`,
@@ -87,12 +85,9 @@ export class PiMessageList extends LitElement {
 					key: `msg:${index}`,
 					template: html`<assistant-message
 						.message=${msg}
-						.tools=${[]}
 						.isStreaming=${isThisMessageStreaming}
 						.pendingToolCalls=${this.pendingToolCalls}
 						.toolResultsById=${toolResultsById}
-						.hideToolCalls=${false}
-						.hidePendingToolCalls=${false}
 					></assistant-message>`,
 					messageIndex: index,
 				});

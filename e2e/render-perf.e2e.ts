@@ -7,13 +7,9 @@
  */
 
 import { expect, test, type Page } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import express from "express";
 import fs from "node:fs";
 import path from "node:path";
-import { WebSocket, WebSocketServer } from "ws";
-
-const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
+import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 const FIXTURE_PATH = path.resolve(import.meta.dirname, "fixtures/large-session-messages.json");
 if (!fs.existsSync(FIXTURE_PATH)) {
 	const { execSync } = await import("node:child_process");
@@ -38,88 +34,20 @@ const sessions = [{
 	firstMessage: "Performance test session",
 }];
 
-interface PerfMockServer {
-	server: Server;
-	wss: WebSocketServer;
-	port: number;
-	revealSession(): void;
-	hideSession(): void;
-	close(): Promise<void>;
-}
-
-function createMockServer(): Promise<PerfMockServer> {
-	return new Promise((resolve) => {
-		const app = express();
-		const server = createServer(app);
-		const wss = new WebSocketServer({ server, path: "/ws" });
-		let sessionsVisible = false;
-
-		app.use(express.static(CLIENT_DIST));
-		app.get("/api/sessions", (_req, res) => res.json(sessionsVisible ? sessions : []));
-		app.get("/api/sessions/messages", (_req, res) => res.json({ messages: largeSessionMessages }));
-		app.get("/api/browse", (_req, res) => res.json({
+function createMockServer(): Promise<MockPipaneServer> {
+	return startMockPipaneServer({
+		sessions: [],
+		states: { [SESSION_PATH]: largeSessionMessages },
+		browse: {
 			path: "/Users/dev",
 			dirs: [{ name: "project", path: "/Users/dev/project" }],
-		}));
-		app.post("/api/debug/load-trace/event", express.json(), (_req, res) => res.json({}));
-
-		wss.on("connection", (ws) => {
-			ws.send(JSON.stringify({ type: "init", sessionStatuses: {} }));
-			ws.on("message", (raw) => {
-				const command = JSON.parse(raw.toString());
-				if (!command.id) return;
-				const respond = (data: any) => ws.send(JSON.stringify({
-					type: "response",
-					id: command.id,
-					success: true,
-					data,
-				}));
-				if (command.type === "get_default_model") {
-					respond({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
-				} else if (command.type === "get_available_models") {
-					respond({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
-				} else if (command.type === "subscribe_session") {
-					ws.send(JSON.stringify({
-						type: "session_messages",
-						sessionPath: command.sessionPath,
-						messages: largeSessionMessages,
-						model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
-						thinkingLevel: "off",
-					}));
-					respond({});
-				} else {
-					respond({});
-				}
-			});
-		});
-
-		server.listen(0, () => {
-			const port = (server.address() as { port: number }).port;
-			resolve({
-				server,
-				wss,
-				port,
-				revealSession: () => {
-					sessionsVisible = true;
-					for (const client of wss.clients) {
-						if (client.readyState === WebSocket.OPEN) {
-							client.send(JSON.stringify({ type: "sessions_changed", file: SESSION_PATH }));
-						}
-					}
-				},
-				hideSession: () => { sessionsVisible = false; },
-				close: async () => {
-					for (const client of wss.clients) client.terminate();
-					await new Promise<void>((done) => wss.close(() => done()));
-					await new Promise<void>((done) => server.close(() => done()));
-				},
-			});
-		});
+		},
 	});
 }
 
-async function revealSession(page: Page, mock: PerfMockServer): Promise<void> {
-	mock.revealSession();
+async function revealSession(page: Page, mock: MockPipaneServer): Promise<void> {
+	mock.setSessions(sessions);
+	mock.send({ type: "sessions_changed", file: SESSION_PATH });
 	await page.waitForFunction(() => {
 		const picker = document.querySelector("session-picker") as any;
 		return (picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0) === 1;
@@ -158,13 +86,13 @@ async function waitForExactFixture(page: Page): Promise<void> {
 
 test.describe("Render performance", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
-	let mock: PerfMockServer;
+	let mock: MockPipaneServer;
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
 	test.afterAll(async () => { await mock.close(); });
 
 	test.beforeEach(async ({ page }) => {
-		mock.hideSession();
+		mock.setSessions([]);
 		await page.goto(`http://127.0.0.1:${mock.port}`);
 		await expect(page.locator("message-editor")).toBeVisible({ timeout: 10_000 });
 		await revealSession(page, mock);

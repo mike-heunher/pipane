@@ -60,12 +60,6 @@ hljs.registerLanguage("swift", swift);
 hljs.registerLanguage("kotlin", kotlin);
 hljs.registerLanguage("scss", scss);
 
-// Intentionally a no-op: we currently want full, untruncated tool content in the UI.
-// Keep `_max` in the signature so call sites remain stable if we re-enable truncation later.
-function truncate(s: string, _max: number): string {
-	return s;
-}
-
 /**
  * Auto-scroll pinning for streaming tool output containers.
  */
@@ -327,7 +321,7 @@ class ReadRenderer implements ToolRenderer {
 			? html`<span class="inline-block text-foreground animate-spin">${icon(Loader, "sm")}</span>`
 			: "";
 
-		const content = output ? truncate(output, 4000) : "";
+		const content = output;
 		const language = getLanguageFromPath(path);
 		const highlighted = content && !isError && !isStreaming ? highlightCode(content, language) : "";
 		const hasBody = !!content;
@@ -377,7 +371,7 @@ class WriteRenderer implements ToolRenderer {
 
 		let headerLabel = filename ? `write(${filename})` : "write";
 		if (state === "error" && output) {
-			headerLabel += ` — ${truncate(output, 80)}`;
+			headerLabel += ` — ${output}`;
 		} else if (state === "complete" && contentBytes > 0) {
 			headerLabel += ` — ${contentBytes.toLocaleString()} bytes`;
 		}
@@ -388,7 +382,7 @@ class WriteRenderer implements ToolRenderer {
 			: "";
 
 		const language = getLanguageFromPath(path);
-		const displayContent = fileContent ? truncate(fileContent, 4000) : "";
+		const displayContent = fileContent;
 		const highlighted = displayContent && !isError && !isStreaming ? highlightCode(displayContent, language) : "";
 		const hasBody = !!displayContent;
 
@@ -483,7 +477,7 @@ class EditRenderer implements ToolRenderer {
 			</div>`;
 		} else if (output && isError) {
 			diffBody = html`<div class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-				<pre class="m-0 tool-body-code text-destructive font-mono whitespace-pre-wrap">${truncate(output, 4000)}</pre>
+				<pre class="m-0 tool-body-code text-destructive font-mono whitespace-pre-wrap">${output}</pre>
 			</div>`;
 		}
 

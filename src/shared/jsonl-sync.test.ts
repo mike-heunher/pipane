@@ -13,7 +13,6 @@ import {
 	computeSyncOp,
 	applySyncOp,
 	applySyncOps,
-	type Patch,
 } from "./jsonl-sync.js";
 
 /** Synchronous SHA-256 hash for tests (uses node:crypto directly). */

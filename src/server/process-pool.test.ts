@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProcessPool, type RpcProcess, type SpawnConfig } from "./process-pool.js";
 
 // We can't easily spawn real pi processes in tests, so we test the

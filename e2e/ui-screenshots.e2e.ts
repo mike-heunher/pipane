@@ -1,12 +1,7 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import express from "express";
-import path from "node:path";
-import { WebSocketServer, WebSocket } from "ws";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import fs from "node:fs";
-import { computeHash } from "../src/shared/jsonl-sync.js";
-
-const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
+import path from "node:path";
+import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 const LATEST_DIR = path.resolve(import.meta.dirname, "latest");
 
 fs.mkdirSync(LATEST_DIR, { recursive: true });
@@ -144,54 +139,22 @@ const toolMessages = [
 	},
 ];
 
-function createMockServer(): Promise<{ server: Server; port: number; ws: () => WebSocket | null }> {
-	return new Promise((resolve) => {
-		const app = express();
-		const server = createServer(app);
-		const wss = new WebSocketServer({ server, path: "/ws" });
-
-		app.use(express.static(CLIENT_DIST));
-		app.get("/api/sessions", (_, res) => res.json(sessions));
-		app.get("/api/sessions/messages", (_, res) => res.json({ messages: toolMessages }));
-		app.get("/api/settings/local", (_, res) => res.json({
-			settings: {
-				appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
-			},
-		}));
-		app.get("/api/browse", (_, res) => res.json({
+function createMockServer(): Promise<MockPipaneServer> {
+	return startMockPipaneServer({
+		sessions,
+		states: Object.fromEntries(sessions.map((session) => [session.path, toolMessages])),
+		model: MOCK_MODEL,
+		sessionStatuses: { [SESSION_PATH_2]: "running" },
+		settings: {
+			appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
+		},
+		browse: {
 			path: "/Users/dev",
 			dirs: [
 				{ name: "my-project", path: "/Users/dev/my-project" },
 				{ name: "other-project", path: "/Users/dev/other-project" },
 			],
-		}));
-
-		let clientWs: WebSocket | null = null;
-		wss.on("connection", (ws) => {
-			clientWs = ws;
-			ws.send(JSON.stringify({ type: "init", sessionStatuses: { [SESSION_PATH_2]: "running" } }));
-			ws.on("message", (raw) => {
-				const d = JSON.parse(raw.toString());
-				if (!d.id) return;
-				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
-				if (d.type === "get_default_model") resp({ model: MOCK_MODEL, thinkingLevel: "off" });
-				else if (d.type === "get_available_models") resp({ models: [MOCK_MODEL] });
-				else if (d.type === "subscribe_session") {
-					// Mirror real server: push session_messages before the response
-					ws.send(JSON.stringify({
-						type: "session_messages",
-						sessionPath: d.sessionPath,
-						messages: toolMessages,
-						model: MOCK_MODEL,
-						thinkingLevel: "off",
-					}));
-					resp({});
-				}
-				else resp({});
-			});
-		});
-
-		server.listen(0, () => resolve({ server, port: (server.address() as any).port, ws: () => clientWs }));
+		},
 	});
 }
 
@@ -226,7 +189,7 @@ test.describe("UI visual goldens", () => {
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
-	test.afterAll(async () => { await new Promise<void>((r) => mock.server.close(() => r())); });
+	test.afterAll(async () => { await mock.close(); });
 	test.beforeEach(async ({ page }) => {
 		// Visual snapshots must not depend on browser/system theme defaults or
 		// localStorage left by unrelated tests. Apply the canonical light Gruvbox
@@ -287,14 +250,14 @@ test.describe("UI visual goldens", () => {
 		await openMainSession(page);
 
 		for (const sessionPath of [SESSION_PATH, SESSION_PATH_2, SESSION_PATH_3]) {
-			mock.ws()!.send(JSON.stringify({
+			mock.send({
 				type: "extension_status",
 				sessionPath,
 				statuses: { "provider-usage": "claude 18% 5h 42% wk" },
-			}));
+			});
 		}
-		mock.ws()!.send(JSON.stringify({ type: "session_attached", sessionPath: SESSION_PATH }));
-		mock.ws()!.send(JSON.stringify({ type: "agent_start", sessionPath: SESSION_PATH }));
+		mock.sendSessionStatus(SESSION_PATH, "running");
+		mock.sendSessionState(SESSION_PATH, { isStreaming: true });
 
 		const quota = page.locator(".status-quota");
 		await expect(quota.locator(".status-quota-percent")).toHaveText("18% used / 5h");
@@ -363,24 +326,10 @@ test.describe("UI visual goldens", () => {
 		await page.goto(`http://localhost:${mock.port}`);
 		await openMainSession(page);
 
-		const ws = mock.ws()!;
-		const send = (msg: any) => ws.send(JSON.stringify(msg));
-		send({ type: "session_attached", sessionPath: SESSION_PATH });
-		send({ type: "agent_start", sessionPath: SESSION_PATH });
-		send({ type: "message_start", sessionPath: SESSION_PATH, message: { role: "assistant", content: [{ type: "thinking", thinking: "" }] } });
-		send({ type: "message_update", sessionPath: SESSION_PATH, message: { role: "assistant", content: [{ type: "text", text: "Working..." }] } });
-		send({ type: "steering_queue_update", sessionPath: SESSION_PATH, queue: ["Also update error handling", "Add retry logic"] });
-
-		// force queue refresh in UI (main.ts re-reads steeringQueue on session switch)
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 1) items[1].click();
-		});
-		await page.evaluate(() => {
-			const picker = document.querySelector("session-picker") as any;
-			const items = picker.shadowRoot.querySelectorAll(".session-item");
-			if (items.length > 0) items[0].click();
+		mock.sendSessionStatus(SESSION_PATH, "running");
+		mock.sendSessionState(SESSION_PATH, {
+			isStreaming: true,
+			steeringQueue: ["Also update error handling", "Add retry logic"],
 		});
 
 		const queue = page.locator(".steering-queue");
@@ -393,9 +342,9 @@ test.describe("UI visual goldens", () => {
 		await page.goto(`http://localhost:${mock.port}`);
 		await openMainSession(page);
 
-		const ws = mock.ws()!;
 		const assistantMsg = { role: "assistant", content: [{ type: "toolCall", id: "t-progress", name: "Bash", arguments: { command: "npm run build" } }], usage: usage(500, 40, 0.005), timestamp: 3001, stopReason: "tool_use" };
-		const stateJson = JSON.stringify({
+		mock.sendSessionStatus(SESSION_PATH, "running");
+		mock.sendSessionState(SESSION_PATH, {
 			messages: [
 				...toolMessages,
 				{ role: "user", content: [{ type: "text", text: "run build" }], timestamp: 3000 },
@@ -403,17 +352,8 @@ test.describe("UI visual goldens", () => {
 			],
 			isStreaming: true,
 			pendingToolCalls: ["t-progress"],
-			model: MOCK_MODEL,
-			thinkingLevel: "off",
 			steeringQueue: [],
 		});
-		ws.send(JSON.stringify({
-			type: "session_sync",
-			sessionPath: SESSION_PATH,
-			op: "full",
-			data: stateJson,
-			hash: await computeHash(stateJson),
-		}));
 
 		await expect.poll(async () => page.evaluate(() => {
 			const picker = document.querySelector("session-picker") as any;

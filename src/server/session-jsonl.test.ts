@@ -90,26 +90,6 @@ function writeSession(
 	return filePath;
 }
 
-/** Helper: get the last message of a given role from the flat array */
-function lastMessageOfRole(state: SessionState, role: string): any {
-	for (let i = state.messages.length - 1; i >= 0; i--) {
-		if ((state.messages[i] as any).role === role) return state.messages[i];
-	}
-	return null;
-}
-
-/** Helper: get all messages of a given role */
-function messagesOfRole(state: SessionState, role: string): any[] {
-	return state.messages.filter((m: any) => m.role === role);
-}
-
-/** Helper: count committed messages (excluding the in-flight stream message at the end) */
-function committedMessageCount(state: SessionState): number {
-	// The stream message (if any) is the last entry. We identify committed messages
-	// by looking at everything up to and including all message_end-delivered entries.
-	return state.messages.length;
-}
-
 /**
  * Simulate a client receiving sync ops from a SessionJsonl.
  */

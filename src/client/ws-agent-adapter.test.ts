@@ -10,7 +10,7 @@
  * - steer() method also respects per-session running state
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 
@@ -64,8 +64,6 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 		fetch: options.fetch ?? (async (input) => {
 			throw new Error(`Unexpected adapter HTTP request: ${String(input)}`);
 		}),
-		startTrace: () => () => {},
-		getTraceId: () => "test-trace",
 	});
 
 	return { adapter, sent, mockWs, simulateServerMessage: (msg: any) => messageHandler?.({ data: JSON.stringify(msg) }) };
@@ -88,6 +86,31 @@ function setupWithSession(sessionPath: string) {
 	return { adapter, sent, mockWs, simulateServerMessage };
 }
 
+async function pushSessionState(
+	adapter: WsAgentAdapter,
+	state: Record<string, any>,
+	sessionPath = adapter.sessionFile!,
+): Promise<void> {
+	const data = JSON.stringify({
+		messages: [],
+		isStreaming: false,
+		pendingToolCalls: [],
+		model: null,
+		thinkingLevel: "off",
+		steeringQueue: [],
+		...state,
+	});
+	await (adapter as any).applySessionSyncBatch([{
+		type: "session_sync",
+		sessionPath,
+		op: "full",
+		data,
+		hash: await computeHash(data),
+		__sessionPath: sessionPath,
+		__sessionNonce: (adapter as any)._sessionNonce,
+	}]);
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("WsAgentAdapter transport injection", () => {
@@ -99,7 +122,7 @@ describe("WsAgentAdapter transport injection", () => {
 		const { adapter } = createTestAdapter({ fetch: fetchMock });
 
 		await expect(adapter.listSessions()).resolves.toEqual([]);
-		expect(fetchMock).toHaveBeenCalledWith("/api/sessions", {}, "frontend_fetch_sessions");
+		expect(fetchMock).toHaveBeenCalledWith("/api/sessions");
 	});
 });
 
@@ -146,7 +169,7 @@ describe("WsAgentAdapter prompt routing", () => {
 
 		it("sends a prompt command when session status is 'done'", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter, sent, simulateServerMessage } = setupWithSession(sessionPath);
+			const { adapter, sent } = setupWithSession(sessionPath);
 
 			// Mark session as "done" (previously ran, now finished)
 			(adapter as any)._globalSessionStatus.set(sessionPath, "done");
@@ -546,20 +569,16 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("server-pushed session_messages replaces state", () => {
-		it("session_messages push replaces messages completely", () => {
+	describe("server-pushed session_sync replaces state", () => {
+		it("replaces messages completely", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			const { adapter } = setupWithSession(sessionPath);
 
-			// Start with some messages
 			(adapter as any)._state.messages = [
 				{ role: "user", content: "old message", timestamp: 999 },
 			];
 
-			// Server pushes new message state
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
+			await pushSessionState(adapter, {
 				messages: [
 					{ role: "user", content: "hello", timestamp: 1000 },
 					{ role: "assistant", content: [{ type: "text", text: "hi" }], timestamp: 1001 },
@@ -569,48 +588,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.messages).toHaveLength(2);
 			expect(adapter.state.messages[0].role).toBe("user");
 			expect(adapter.state.messages[1].role).toBe("assistant");
-		});
-
-		it("message_end is no longer processed by updateState (state comes from session_sync)", () => {
-			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter } = setupWithSession(sessionPath);
-
-			(adapter as any)._state.messages = [
-				{ role: "user", content: "test", timestamp: 999 },
-			];
-
-			// updateState no longer handles message_end — state comes from session_sync
-			(adapter as any).updateState({
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "tool_use", id: "new_tool_456", name: "bash", input: { command: "ls" } }],
-					timestamp: 2000,
-				},
-			});
-
-			// Message NOT appended — updateState only handles agent_start/end/turn_end
-			expect(adapter.state.messages).toHaveLength(1);
-		});
-
-		it("turn_end does NOT append tool results (they arrive via message_end)", () => {
-			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter } = setupWithSession(sessionPath);
-
-			(adapter as any)._state.messages = [
-				{ role: "user", content: "test", timestamp: 999 },
-			];
-
-			(adapter as any).updateState({
-				type: "turn_end",
-				message: { role: "assistant", content: [], timestamp: 1000 },
-				toolResults: [
-					{ role: "tool", tool_use_id: "tool_1", content: [{ type: "text", text: "output" }], timestamp: 1001 },
-				],
-			});
-
-			// turn_end should NOT add tool results — only message_end does
-			expect(adapter.state.messages).toHaveLength(1);
 		});
 
 		it("sets sessionStatus to attached when switching to a running session", async () => {
@@ -631,8 +608,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			const sessionB = "/tmp/sessions/session-b.jsonl";
 			const { adapter } = setupWithSession(sessionA);
 
-			// Session A starts streaming
-			(adapter as any).updateState({ type: "agent_start" });
+			// Session A starts streaming.
+			(adapter as any)._state.isStreaming = true;
 			expect(adapter.state.isStreaming).toBe(true);
 
 			// Switch to idle session B — isStreaming should be false
@@ -640,8 +617,6 @@ describe("WsAgentAdapter prompt routing", () => {
 			(adapter as any)._sessionId = "session-b";
 			(adapter as any)._sessionStatus = "detached";
 			(adapter as any)._state.isStreaming = false;
-			(adapter as any)._state.streamMessage = null;
-			(adapter as any)._state.pendingToolCalls = new Set();
 
 			expect(adapter.state.isStreaming).toBe(false);
 
@@ -683,6 +658,23 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// isStreaming should be true so the stop button shows
 			expect(adapter.state.isStreaming).toBe(true);
+		});
+
+		it("notifies session listeners when a virtual session receives its real path", async () => {
+			const { adapter, simulateServerMessage } = createTestAdapter();
+			await adapter.newSession("/tmp");
+			(adapter as any)._pendingNewPrompt = true;
+			const listener = vi.fn();
+			adapter.onSessionChange(listener);
+
+			simulateServerMessage({
+				type: "session_attached",
+				sessionPath: "/tmp/sessions/new-session.jsonl",
+				cwd: "/tmp",
+			});
+
+			expect(adapter.sessionFile).toBe("/tmp/sessions/new-session.jsonl");
+			expect(listener).toHaveBeenCalledOnce();
 		});
 
 		it("emits statusChange when isStreaming changes on switchSession", async () => {
@@ -757,13 +749,10 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
-		it("rolls a failed sent control revision back to the last authoritative state", () => {
+		it("rolls a failed sent control revision back to the last authoritative state", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			const { adapter } = setupWithSession(sessionPath);
+			await pushSessionState(adapter, {
 				model: { provider: "anthropic", modelId: "claude-authoritative" },
 				thinkingLevel: "high",
 			});
@@ -796,19 +785,16 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
-	describe("model persistence across session messages", () => {
-		it("does not overwrite a locally selected model when server pushes session_messages", () => {
+	describe("model persistence across session sync", () => {
+		it("does not overwrite a locally selected model when an older snapshot arrives", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			const { adapter } = setupWithSession(sessionPath);
 
 			const localModel = { provider: "openai", id: "gpt-5" };
 			adapter.setModel(localModel as any);
 
 			// A local revision is pending, so an older snapshot must not overwrite it.
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
 				thinkingLevel: "off",
 			});
@@ -817,9 +803,9 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.model).toEqual(localModel);
 		});
 
-		it("restores persisted model when switching sessions via session_messages", async () => {
+		it("restores persisted model when switching sessions via session_sync", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
-			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
+			const { adapter } = setupWithSession(sessionPath);
 
 			(adapter as any)._state.model = { provider: "openai", id: "gpt-5" };
 
@@ -830,11 +816,7 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			await adapter.switchSession(sessionPath);
 
-			// Server pushes session_messages (this is what subscribe_session triggers)
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
 				thinkingLevel: "high",
 			});
@@ -844,10 +826,7 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			// A subsequent local selection remains optimistic until acknowledged.
 			adapter.setModel({ provider: "openai", id: "gpt-5" } as any);
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
 				thinkingLevel: "off",
 			});
@@ -856,17 +835,14 @@ describe("WsAgentAdapter prompt routing", () => {
 
 		it("restores a compact model ref without a catalog instead of retaining another session's model", async () => {
 			const sessionPath = "/tmp/sessions/session-b.jsonl";
-			const { adapter, simulateServerMessage } = setupWithSession("/tmp/sessions/session-a.jsonl");
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
 			(adapter as any)._state.model = { provider: "openai", id: "wrong-model" };
 
 			await adapter.switchSession(sessionPath);
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "anthropic", modelId: "claude-session-model" },
 				thinkingLevel: "high",
-			});
+			}, sessionPath);
 
 			expect(adapter.state.model).toMatchObject({
 				provider: "anthropic",
@@ -875,7 +851,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.thinkingLevel).toBe("high");
 		});
 
-		it("applies a matching effective control acknowledgement and waits for its snapshot", () => {
+		it("applies a matching effective control acknowledgement and waits for its snapshot", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 			(adapter as any)._state.model = { provider: "deepseek", id: "deepseek-v4", reasoning: true };
@@ -883,10 +859,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			const revision = (adapter as any)._pendingControl.revision;
 
 			// Older queued session state cannot erase the local choice.
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "deepseek", modelId: "deepseek-v4" },
 				thinkingLevel: "off",
 			});
@@ -903,10 +876,7 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.thinkingLevel).toBe("high");
 			expect((adapter as any)._pendingControl.phase).toBe("acknowledged");
 
-			simulateServerMessage({
-				type: "session_messages",
-				sessionPath,
-				messages: [],
+			await pushSessionState(adapter, {
 				model: { provider: "deepseek", modelId: "deepseek-v4" },
 				thinkingLevel: "high",
 			});
@@ -1043,13 +1013,13 @@ describe("WsAgentAdapter prompt routing", () => {
 			a._sessionNonce = 10;
 			a._state.messages = [{ role: "user", content: "B" }];
 
-			const applying = a.applySessionSync({
+			const applying = a.applySessionSyncBatch([{
 				op: "full",
 				data: stateA,
 				hash: hashA,
 				__sessionPath: sessionA,
 				__sessionNonce: 10,
-			});
+			}]);
 			a._sessionPath = "/tmp/b.jsonl";
 			a._sessionNonce = 11;
 			a._syncJson = "";
@@ -1175,9 +1145,7 @@ describe("WsAgentAdapter extension statuses", () => {
 		const sessionPath = "/tmp/sessions/session-a.jsonl";
 		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 		const statusListener = vi.fn();
-		const agentListener = vi.fn();
 		adapter.onExtensionStatusChange(statusListener);
-		adapter.subscribe(agentListener);
 
 		simulateServerMessage({
 			type: "extension_status",
@@ -1196,7 +1164,6 @@ describe("WsAgentAdapter extension statuses", () => {
 		});
 		expect(Object.fromEntries(adapter.extensionStatuses)).toEqual({ usage: "codex 26% 5h" });
 		expect(statusListener).toHaveBeenCalledTimes(2);
-		expect(agentListener).not.toHaveBeenCalled();
 	});
 
 	it("ignores another session and clears immediately when switching", async () => {
@@ -1264,7 +1231,7 @@ describe("WsAgentAdapter extension statuses", () => {
 		expect(listener).toHaveBeenCalledOnce();
 	});
 
-	it("clears session statuses for a virtual session but retains the last snapshot on detach", async () => {
+	it("clears session statuses for a virtual session but retains them when a turn finishes", async () => {
 		const sessionPath = "/tmp/sessions/session-a.jsonl";
 		const { adapter, simulateServerMessage } = setupWithSession(sessionPath);
 		simulateServerMessage({
@@ -1272,7 +1239,7 @@ describe("WsAgentAdapter extension statuses", () => {
 			sessionPath,
 			statuses: { usage: "codex 25% 5h" },
 		});
-		simulateServerMessage({ type: "session_detached", sessionPath });
+		simulateServerMessage({ type: "session_status_change", sessionPath, status: "done" });
 		expect(adapter.extensionStatuses.get("usage")).toBe("codex 25% 5h");
 
 		await adapter.newSession("/tmp");

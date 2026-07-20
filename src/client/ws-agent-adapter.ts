@@ -13,8 +13,7 @@
  */
 
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
-import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
-import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import {
@@ -36,14 +35,10 @@ function usageProviderForModel(model: any): string | undefined {
 export type SessionStatus = "virtual" | "detached" | "attached";
 
 export interface AdapterState {
-	systemPrompt: string;
 	model: any;
 	thinkingLevel: ThinkingLevelValue;
-	tools: AgentTool<any>[];
 	messages: AgentMessage[];
 	isStreaming: boolean;
-	streamMessage: AgentMessage | null;
-	pendingToolCalls: Set<string>;
 	error?: string;
 }
 
@@ -82,26 +77,19 @@ export interface WsAgentAdapterOptions {
 	/** Existing socket for deterministic tests; production normally uses createWebSocket. */
 	socket?: AdapterSocket;
 	createWebSocket?: (url: string) => AdapterSocket;
-	fetch?: typeof tracedFetch;
-	startTrace?: typeof traceSpanStart;
-	getTraceId?: typeof getLoadTraceId;
+	fetch?: typeof globalThis.fetch;
 	requestFrame?: (callback: FrameRequestCallback) => number;
 }
 
 export class WsAgentAdapter {
 	private ws: AdapterSocket | null = null;
 	private readonly createWebSocket: (url: string) => AdapterSocket;
-	private readonly fetch: typeof tracedFetch;
-	private readonly startTrace: typeof traceSpanStart;
-	private readonly getTraceId: typeof getLoadTraceId;
+	private readonly fetch: typeof globalThis.fetch;
 	private readonly requestFrame: (callback: FrameRequestCallback) => number;
-	private listeners = new Set<(e: AgentEvent) => void>();
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
-	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void; endSpan?: () => void }>();
+	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>();
 	private requestId = 0;
-	private _runningPromise: Promise<void> | undefined;
-	private _resolveRunning: (() => void) | undefined;
 
 	// ── Auto-reconnect state ───────────────────────────────────────────────
 	private _wsUrl: string | undefined;
@@ -110,19 +98,11 @@ export class WsAgentAdapter {
 	private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private _connectionListeners = new Set<(connected: boolean) => void>();
 
-	// Dummy fields that AgentInterface checks but we don't need
-	streamFn: any = () => {};
-	getApiKey: any = undefined;
-
 	private _state: AdapterState = {
-		systemPrompt: "",
 		model: undefined as any,
 		thinkingLevel: "off",
-		tools: [],
 		messages: [],
 		isStreaming: false,
-		streamMessage: null,
-		pendingToolCalls: new Set<string>(),
 		error: undefined,
 	};
 
@@ -218,9 +198,7 @@ export class WsAgentAdapter {
 
 	constructor(options: WsAgentAdapterOptions = {}) {
 		this.createWebSocket = options.createWebSocket ?? ((url) => new WebSocket(url));
-		this.fetch = options.fetch ?? tracedFetch;
-		this.startTrace = options.startTrace ?? traceSpanStart;
-		this.getTraceId = options.getTraceId ?? getLoadTraceId;
+		this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
 		this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
 		if (options.socket) {
 			this.ws = options.socket;
@@ -343,7 +321,7 @@ export class WsAgentAdapter {
 
 	/**
 	 * Optimistically enqueue a steering message for a session.
-	 * The server remains authoritative and can overwrite via steering_queue_update.
+	 * The server remains authoritative and can overwrite it via session_sync.
 	 */
 	private enqueueSteering(sessionPath: string, message: string) {
 		const queue = this._steeringQueues.get(sessionPath) ?? [];
@@ -389,13 +367,6 @@ export class WsAgentAdapter {
 		for (const fn of this.piInstallRequiredListeners) fn(info);
 	}
 
-	subscribe(fn: (e: AgentEvent) => void): () => void {
-		this.listeners.add(fn);
-		return () => this.listeners.delete(fn);
-	}
-	private emit(e: AgentEvent) {
-		for (const fn of this.listeners) fn(e);
-	}
 
 	private toErrorMessage(err: unknown): string {
 		if (err instanceof Error) return err.message;
@@ -472,8 +443,7 @@ export class WsAgentAdapter {
 				}
 
 				// Reject all pending requests — they'll never get a response
-				for (const [id, pending] of this.pendingRequests) {
-					pending.endSpan?.();
+				for (const pending of this.pendingRequests.values()) {
 					pending.reject(new Error("WebSocket disconnected"));
 				}
 				this.pendingRequests.clear();
@@ -555,11 +525,7 @@ export class WsAgentAdapter {
 			// think we're streaming — clear the stale state.
 			console.log("[ws-adapter] Tab regained focus: clearing stale streaming state");
 			this._state.isStreaming = false;
-			this._state.streamMessage = null;
-			this._state.pendingToolCalls = new Set();
-			this._resolveRunning?.();
-			this._runningPromise = undefined;
-			this._resolveRunning = undefined;
+			this._pendingToolCallIds.clear();
 			this.emitStatusChange();
 		}
 	}
@@ -593,7 +559,6 @@ export class WsAgentAdapter {
 		if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
 			const pending = this.pendingRequests.get(data.id)!;
 			this.pendingRequests.delete(data.id);
-			pending.endSpan?.();
 			if (data.success) {
 				pending.resolve(data.data);
 			} else {
@@ -679,32 +644,7 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Backward compatibility: old steering queue event
-		if (data.type === "steering_queue_update") {
-			const sp = data.sessionPath as string;
-			if (sp) {
-				if (data.queue && data.queue.length > 0) {
-					this._steeringQueues.set(sp, [...data.queue]);
-				} else {
-					this._steeringQueues.delete(sp);
-				}
-				this.emitSteeringQueueChange();
-			}
-			return;
-		}
-
-		// Backward compatibility: old full snapshot event
-		if (data.type === "session_messages") {
-			const sp = data.sessionPath as string;
-			if (sp === this._sessionPath) {
-				this._state.messages = data.messages ?? [];
-				this.applyAuthoritativeControlState(data.model, data.thinkingLevel);
-				this.emitContentChange();
-			}
-			return;
-		}
-
-		// Session attached/detached notifications — track globally for ALL sessions
+		// A newly created or forked session is announced before its turn settles.
 		if (data.type === "session_attached") {
 			if (data.sessionPath) {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
@@ -718,7 +658,8 @@ export class WsAgentAdapter {
 			const shouldAdopt = data.sessionPath === this._sessionPath
 				|| (this._sessionStatus === "virtual" && this._pendingNewPrompt);
 			if (shouldAdopt) {
-				if (this._sessionStatus === "virtual" && data.sessionPath) {
+				const adoptedVirtualSession = this._sessionStatus === "virtual" && !!data.sessionPath;
+				if (adoptedVirtualSession) {
 					this._sessionPath = data.sessionPath;
 					const filename = path.basename(data.sessionPath, ".jsonl");
 					const parts = filename.split("_");
@@ -730,6 +671,7 @@ export class WsAgentAdapter {
 				if (data.sessionPath) {
 					this.subscribeToSession(data.sessionPath);
 				}
+				if (adoptedVirtualSession) this.emitSessionChange();
 				this.emitStatusChange();
 			}
 			if (data.sessionPath) {
@@ -755,28 +697,6 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		if (data.type === "session_detached") {
-			if (data.sessionPath) {
-				this.setGlobalSessionStatus(data.sessionPath, "done");
-			}
-			if (data.sessionPath === this._sessionPath) {
-				this._sessionStatus = "detached";
-				// Definitively clear streaming state — the turn is over.
-				// This is the authoritative signal, even if agent_end was missed
-				// (e.g. tab was backgrounded, events filtered, or race condition).
-				this._state.isStreaming = false;
-				this._state.streamMessage = null;
-				this._state.pendingToolCalls = new Set();
-				this._pendingToolCallIds.clear();
-				this._resolveRunning?.();
-				this._runningPromise = undefined;
-				this._resolveRunning = undefined;
-				this.emitStatusChange();
-				// Server pushes final session_sync automatically after detach —
-				// no need to fetch from disk.
-			}
-			return;
-		}
 
 		// Sessions directory change notification
 		if (data.type === "sessions_changed") {
@@ -785,19 +705,6 @@ export class WsAgentAdapter {
 			return;
 		}
 
-		// Side-channel raw event from server (used by UI hooks like canvas/jsonl)
-		if (data.type === "agent_event") {
-			if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
-			const event = data.event as AgentEvent;
-			this.emit(event);
-			return;
-		}
-
-		// Legacy: raw agent event stream
-		if (data.sessionPath && data.sessionPath !== this._sessionPath) return;
-		const event = data as AgentEvent;
-		this.updateState(event);
-		this.emit(event);
 	}
 
 	/**
@@ -847,11 +754,6 @@ export class WsAgentAdapter {
 		}
 	}
 
-	/** Single-operation wrapper retained for focused tests and recovery paths. */
-	private async applySessionSync(syncMsg: any) {
-		const changes = await this.applySessionSyncBatch([syncMsg]);
-		if (changes) this.emitSessionSyncChanges(changes);
-	}
 
 	private emitSessionSyncChanges(changes: SessionSyncChanges) {
 		if (changes.steering) this.emitSteeringQueueChange();
@@ -919,11 +821,6 @@ export class WsAgentAdapter {
 			this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
 		}
 		this._pendingToolCallIds = new Set(state.pendingToolCalls ?? []);
-		this._state.pendingToolCalls = this._pendingToolCallIds;
-
-		// Keep streamMessage null — we don't use the two-zone split anymore.
-		// Everything is in the flat messages array.
-		this._state.streamMessage = null;
 
 		this.applyAuthoritativeControlState(state.model, state.thinkingLevel);
 		if (Array.isArray(state.steeringQueue)) {
@@ -943,40 +840,6 @@ export class WsAgentAdapter {
 		};
 	}
 
-	/**
-	 * Legacy event handler — only used for backward-compat agent_event side-channel.
-	 * The primary state path is session_sync, which delivers the full flat state.
-	 * This only handles agent_start/agent_end for streaming status and running promise.
-	 */
-	private updateState(event: AgentEvent) {
-		switch (event.type) {
-			case "agent_start":
-				this._state.isStreaming = true;
-				this._state.error = undefined;
-				this._runningPromise = new Promise((resolve) => {
-					this._resolveRunning = resolve;
-				});
-				this.emitStatusChange();
-				break;
-
-			case "agent_end":
-				this._state.isStreaming = false;
-				this._state.streamMessage = null;
-				this._state.pendingToolCalls = new Set();
-				this._pendingToolCallIds.clear();
-				this._resolveRunning?.();
-				this._runningPromise = undefined;
-				this._resolveRunning = undefined;
-				this.emitStatusChange();
-				break;
-
-			case "turn_end":
-				if (event.message.role === "assistant" && (event.message as any).errorMessage) {
-					this._state.error = (event.message as any).errorMessage;
-				}
-				break;
-		}
-	}
 
 	private send(command: WsCommand | any): Promise<any> {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -984,7 +847,6 @@ export class WsAgentAdapter {
 		}
 
 		const id = `req_${++this.requestId}`;
-		const endSpan = this.startTrace(`frontend_ws_command ${command.type}`);
 		return new Promise((resolve, reject) => {
 			const timeoutMs = command.type === "compact"
 				? COMPACT_CLIENT_TIMEOUT_MS
@@ -993,23 +855,15 @@ export class WsAgentAdapter {
 					: 30000;
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
-				endSpan();
 				reject(new Error(`Timeout waiting for response to ${command.type}`));
 			}, timeoutMs);
 
 			this.pendingRequests.set(id, {
 				resolve: (data) => { clearTimeout(timeout); resolve(data); },
 				reject: (err) => { clearTimeout(timeout); reject(err); },
-				endSpan,
 			});
 
-			this.ws!.send(JSON.stringify({
-				...command,
-				id,
-				__trace: {
-					traceId: this.getTraceId(),
-				},
-			}));
+			this.ws!.send(JSON.stringify({ ...command, id }));
 		});
 	}
 
@@ -1528,16 +1382,13 @@ export class WsAgentAdapter {
 		this.emitContentChange();
 	}
 
-	setSystemPrompt(v: string) { this._state.systemPrompt = v; }
-	setTools(t: AgentTool<any>[]) { this._state.tools = t; }
-
 
 	// ── Fork ───────────────────────────────────────────────────────────────
 
 	/** Get user messages from the current session for the fork selector. */
 	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
 		if (!this._sessionPath) return [];
-		const res = await this.fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`, {}, "frontend_fetch_fork_messages");
+		const res = await this.fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`);
 		if (!res.ok) throw new Error(`Failed to get fork messages: ${res.statusText}`);
 		const data = await res.json();
 		return data.messages ?? [];
@@ -1611,7 +1462,7 @@ export class WsAgentAdapter {
 	// ── Session management ─────────────────────────────────────────────────
 
 	async listSessions(): Promise<SessionInfoDTO[]> {
-		const res = await this.fetch("/api/sessions", {}, "frontend_fetch_sessions");
+		const res = await this.fetch("/api/sessions");
 		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
 		const sessions: SessionInfoDTO[] = await res.json();
 
@@ -1678,8 +1529,6 @@ export class WsAgentAdapter {
 		// Clear current state — including isStreaming since a detached session is never streaming
 		this._state.messages = [];
 		this._state.isStreaming = false;
-		this._state.streamMessage = null;
-		this._state.pendingToolCalls = new Set();
 		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";
@@ -1729,8 +1578,6 @@ export class WsAgentAdapter {
 
 		this._state.messages = [];
 		this._state.isStreaming = false;
-		this._state.streamMessage = null;
-		this._state.pendingToolCalls = new Set();
 		this._pendingToolCallIds.clear();
 		this._syncJson = "";
 		this._syncHash = "";

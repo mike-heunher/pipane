@@ -1,23 +1,9 @@
 /**
- * E2E regression test: "rerun renders twice" bug.
- *
- * Root cause: After message_end, the assistant message appears in BOTH
- * state.messages (rendered by message-list) AND the streaming-message-container
- * (which still holds the old streamMessage from message_update). The upstream
- * AgentInterface only clears the streaming container on agent_end, not on
- * message_end, causing duplicate rendering between message_end and agent_end.
- *
- * Run: node node_modules/@playwright/test/cli.js test -c playwright.config.ts
+ * E2E regression test: authoritative rerun snapshots must not duplicate tools.
  */
 
-import { test, expect } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import express from "express";
-import path from "node:path";
-import { WebSocketServer, WebSocket } from "ws";
-import { computeHash } from "../src/shared/jsonl-sync.js";
-
-const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
+import { expect, test } from "@playwright/test";
+import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 const SESSION_PATH = "/tmp/mock-sessions/test-session.jsonl";
 
 const usage = (input: number, output: number, total: number) => ({
@@ -43,48 +29,16 @@ const messages = [
 	},
 ];
 
-function createMockServer(): Promise<{ server: Server; port: number; ws: () => WebSocket | null }> {
-	return new Promise((resolve) => {
-		const app = express();
-		const server = createServer(app);
-		const wss = new WebSocketServer({ server, path: "/ws" });
-
-		app.use(express.static(CLIENT_DIST));
-		app.get("/api/sessions", (_, res) => res.json([{
+function createMockServer(): Promise<MockPipaneServer> {
+	const now = new Date().toISOString();
+	return startMockPipaneServer({
+		sessions: [{
 			id: "s1", path: SESSION_PATH, cwd: "/tmp",
-			created: new Date().toISOString(), modified: new Date().toISOString(),
+			created: now, modified: now,
 			messageCount: 3, firstMessage: "sleep 200",
-		}]));
-		app.get("/api/sessions/messages", (_, res) => res.json({ messages }));
-
-		let clientWs: WebSocket | null = null;
-		wss.on("connection", (ws) => {
-			clientWs = ws;
-			ws.send(JSON.stringify({ type: "init", sessionStatuses: {} }));
-			ws.on("message", (raw) => {
-				const d = JSON.parse(raw.toString());
-				if (!d.id) return;
-				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
-				if (d.type === "get_default_model") resp({ model: { provider: "anthropic", id: "sonnet" }, thinkingLevel: "off" });
-				else if (d.type === "get_available_models") resp({ models: [{ provider: "anthropic", id: "sonnet" }] });
-				else if (d.type === "subscribe_session") {
-					ws.send(JSON.stringify({
-						type: "session_messages",
-						sessionPath: d.sessionPath,
-						messages,
-						model: { provider: "anthropic", id: "sonnet" },
-						thinkingLevel: "off",
-					}));
-					resp({});
-				}
-				else resp({});
-			});
-		});
-
-		server.listen(0, () => {
-			const port = (server.address() as any).port;
-			resolve({ server, port, ws: () => clientWs });
-		});
+		}],
+		states: { [SESSION_PATH]: messages },
+		model: { provider: "anthropic", id: "sonnet" },
 	});
 }
 
@@ -92,7 +46,7 @@ test.describe("Rerun duplicate rendering regression", () => {
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
-	test.afterAll(async () => { await new Promise<void>((r) => mock.server.close(() => r())); });
+	test.afterAll(async () => { await mock.close(); });
 
 	test("message_end should not cause duplicate tool blocks", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
@@ -118,9 +72,8 @@ test.describe("Rerun duplicate rendering regression", () => {
 		let toolCount = await page.evaluate(() => document.querySelectorAll("tool-message").length);
 		expect(toolCount).toBe(1);
 
-		// Simulate rerun
-		const ws = mock.ws()!;
-		const send = (msg: any) => ws.send(JSON.stringify(msg));
+		// Simulate rerun with authoritative flat-state snapshots.
+		mock.sendSessionStatus(SESSION_PATH, "running");
 		const newAssistant = {
 			role: "assistant",
 			content: [
@@ -138,20 +91,10 @@ test.describe("Rerun duplicate rendering regression", () => {
 			newAssistant,
 		];
 		const pushState = async (pendingToolCalls: string[]) => {
-			const data = JSON.stringify({
+			mock.sendSessionState(SESSION_PATH, {
 				messages: rerunMessages,
 				isStreaming: true,
 				pendingToolCalls,
-				model: { provider: "anthropic", modelId: "sonnet" },
-				thinkingLevel: "off",
-				steeringQueue: [],
-			});
-			send({
-				type: "session_sync",
-				sessionPath: SESSION_PATH,
-				op: "full",
-				data,
-				hash: await computeHash(data),
 			});
 			await page.evaluate(() => new Promise<void>((resolve) => {
 				requestAnimationFrame(() => requestAnimationFrame(() => resolve()));

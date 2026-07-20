@@ -4,6 +4,8 @@
 		"module": "ES2022",
 		"moduleResolution": "bundler",
 		"strict": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
 		"skipLibCheck": true,
 		"esModuleInterop": true,
 		"allowSyntheticDefaultImports": true,

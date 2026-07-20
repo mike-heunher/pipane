@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { MockAgent, createSession, resetSessionCounter, type SessionOptions } from "../test/mock-agent.js";
+import { MockAgent, createSession, resetSessionCounter } from "../test/mock-agent.js";
 import "./session-picker.js";
 import type { SessionPicker } from "./session-picker.js";
 

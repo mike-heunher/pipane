@@ -6,12 +6,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { createServer, type Server } from "node:http";
-import express from "express";
-import path from "node:path";
-import { WebSocketServer, WebSocket } from "ws";
-
-const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
+import { startMockPipaneServer, type MockPipaneServer } from "./mock-pipane-server.js";
 
 const SESSION_PATH = "/tmp/mock-sessions/wide-test.jsonl";
 
@@ -38,40 +33,11 @@ const messages = [
 	},
 ];
 
-function createMockServer(): Promise<{ server: Server; port: number }> {
-	return new Promise((resolve) => {
-		const app = express();
-		const server = createServer(app);
-		const wss = new WebSocketServer({ server, path: "/ws" });
-
-		app.use(express.static(CLIENT_DIST));
-		app.get("/api/sessions", (_, res) => res.json(sessions));
-		app.get("/api/sessions/messages", (_, res) => res.json({ messages }));
-		app.get("/api/browse", (_, res) => res.json({ path: "/Users/dev", dirs: [] }));
-
-		wss.on("connection", (ws) => {
-			ws.send(JSON.stringify({ type: "init", sessionStatuses: {} }));
-			ws.on("message", (raw) => {
-				const d = JSON.parse(raw.toString());
-				if (!d.id) return;
-				const resp = (data: any) => ws.send(JSON.stringify({ type: "response", id: d.id, success: true, data }));
-				if (d.type === "get_default_model") resp({ model: { provider: "anthropic", id: "claude-sonnet-4-20250514" }, thinkingLevel: "off" });
-				else if (d.type === "get_available_models") resp({ models: [{ provider: "anthropic", id: "claude-sonnet-4-20250514" }] });
-				else if (d.type === "subscribe_session") {
-					ws.send(JSON.stringify({
-						type: "session_messages",
-						sessionPath: d.sessionPath,
-						messages,
-						model: { provider: "anthropic", id: "claude-sonnet-4-20250514" },
-						thinkingLevel: "off",
-					}));
-					resp({});
-				}
-				else resp({});
-			});
-		});
-
-		server.listen(0, () => resolve({ server, port: (server.address() as any).port }));
+function createMockServer(): Promise<MockPipaneServer> {
+	return startMockPipaneServer({
+		sessions,
+		states: { [SESSION_PATH]: messages },
+		browse: { path: "/Users/dev", dirs: [] },
 	});
 }
 
@@ -82,7 +48,7 @@ test.describe("Wide viewport layout", () => {
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
 
 	test.beforeAll(async () => { mock = await createMockServer(); });
-	test.afterAll(async () => { await new Promise<void>((r) => mock.server.close(() => r())); });
+	test.afterAll(async () => { await mock.close(); });
 
 	test("conversation elements span full width, not capped at max-w-3xl (48rem)", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);

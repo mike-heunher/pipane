@@ -14,7 +14,7 @@ import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
-import { initCanvas, isCanvasVisible, showCanvas, restoreCanvasFromMessages, canvasKey, markCanvasOpened } from "./canvas-panel.js";
+import { initCanvas, isCanvasVisible, restoreCanvasFromMessages } from "./canvas-panel.js";
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
@@ -26,7 +26,6 @@ import {
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
 
-import { getLoadTraceId, sendNavigationTiming, traceInstant, traceSpanStart } from "./load-trace.js";
 initThemes();
 
 let agent: WsAgentAdapter;
@@ -58,7 +57,6 @@ let sessionsPerProject = 5;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
-traceInstant("frontend_bootstrap_loaded", { url: window.location.pathname });
 
 // Token usage visibility — backed by settings.json via theme-selector
 function isTokenUsageHidden(): boolean {
@@ -665,8 +663,6 @@ async function handleForkAndPrompt(input: string, attachments?: any[]) {
 }
 
 async function initApp() {
-	traceInstant("init_app_start");
-	sendNavigationTiming();
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
@@ -700,14 +696,11 @@ async function initApp() {
 	// Connect WebSocket
 	agent = new WsAgentAdapter();
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-	const wsUrl = `${wsProtocol}//${window.location.host}/ws?traceId=${encodeURIComponent(getLoadTraceId())}`;
+	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
 
-	const endWsConnectSpan = traceSpanStart("frontend_ws_connect");
 	try {
 		await agent.connect(wsUrl);
-		endWsConnectSpan();
 	} catch (err) {
-		endWsConnectSpan();
 		clearTimeout(connectingOverlayTimer);
 		render(
 			html`
@@ -728,34 +721,6 @@ async function initApp() {
 	});
 
 	installChatJsonlJumpListener();
-
-	// Canvas tool: show side panel when tool_execution_end fires for "canvas"
-	agent.subscribe((ev) => {
-		if (ev.type === "agent_start" || ev.type === "agent_end") {
-			setJsonlSessionPath(agent.sessionFile);
-			refreshJsonlPanel();
-		}
-		if (ev.type === "message_end") {
-			refreshJsonlPanel();
-		}
-
-		if (canvasFeatureEnabled && ev.type === "tool_execution_end" && (ev as any).toolName === "canvas") {
-			const details = (ev as any).result?.details;
-			if (details?.markdown) {
-				showCanvas(details.title || "Canvas", details.markdown);
-				if (agent.sessionFile) {
-					const msgs = agent.state.messages;
-					for (let i = msgs.length - 1; i >= 0; i--) {
-						const m = msgs[i] as any;
-						if (m.role === "toolResult" && m.toolName === "canvas") {
-							markCanvasOpened(canvasKey(agent.sessionFile, i));
-							break;
-						}
-					}
-				}
-			}
-		}
-	});
 
 	// Re-fetch feature flags and appearance when local settings change
 	agent.onSessionsChanged(async (file) => {
@@ -811,7 +776,7 @@ async function initApp() {
 	});
 
 	// Connection change — show/hide reconnection banner
-	agent.onConnectionChange((connected) => {
+	agent.onConnectionChange(() => {
 		renderApp();
 	});
 
@@ -875,18 +840,15 @@ async function initApp() {
 
 	// Load the full model catalog before restoring a session. Persisted sessions
 	// contain only provider/modelId refs, so restoration needs this metadata.
-	const endLoadModelSpan = traceSpanStart("frontend_load_default_model");
 	try {
 		await agent.fetchAvailableModels();
 	} catch (err) {
 		console.warn("Failed to preload available models; using compact session metadata", err);
 	}
 	await agent.loadDefaultModel();
-	endLoadModelSpan();
 
 	prefetchedSessions = (await sessionsPrefetch) ?? undefined;
 
-	const endNewSessionSpan = traceSpanStart("frontend_new_session");
 	if (prefetchedSessions && prefetchedSessions.length > 0) {
 		const mostRecent = prefetchedSessions.reduce((best, s) => {
 			const bestTime = best.lastUserPromptTime ? new Date(best.lastUserPromptTime).getTime() : new Date(best.modified).getTime();
@@ -897,15 +859,11 @@ async function initApp() {
 	} else {
 		await agent.newSession();
 	}
-	endNewSessionSpan();
 
 	renderApp();
 
 	prefetchedSessions = undefined;
 
-	traceInstant("frontend_first_render_complete", {
-		sessionStatus: agent.sessionStatus,
-	});
 }
 
 initApp();

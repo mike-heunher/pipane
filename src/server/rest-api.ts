@@ -8,13 +8,11 @@ import type { Express } from "express";
 import { existsSync, readFileSync, readdirSync, watchFile } from "node:fs";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
-import { buildSessionContext, parseSessionEntries } from "@earendil-works/pi-coding-agent";
-import type { LoadTraceStore } from "./load-trace-store.js";
+import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { SessionIndex } from "./session-index.js";
 import { LocalSettingsStore } from "./local-settings.js";
 
 interface RegisterRestApiOptions {
-	traceStore?: LoadTraceStore;
 	localSettingsStore?: LocalSettingsStore;
 	onLocalSettingsReloaded?: () => void;
 	runSessionMutation?: (
@@ -54,63 +52,11 @@ async function readJsonBody(req: any): Promise<any> {
 }
 
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}) {
-	const traceStore = options.traceStore;
 	localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
 	sessionIndex = new SessionIndex({
 		cwdDisplayFormatter: (cwd) => localSettingsStore.formatCwdTitle(cwd),
 	});
 	startLocalSettingsWatcher(options.onLocalSettingsReloaded);
-
-	app.post("/api/debug/load-trace/event", async (req, res) => {
-		try {
-			if (!traceStore) {
-				res.status(404).json({ error: "Tracing disabled" });
-				return;
-			}
-			const chunks: Buffer[] = [];
-			for await (const chunk of req) chunks.push(chunk);
-			const body = JSON.parse(Buffer.concat(chunks).toString() || "{}");
-
-			const traceId = String(body.traceId || req.headers["x-pi-trace-id"] || "");
-			if (!traceId) {
-				res.status(400).json({ error: "Missing traceId" });
-				return;
-			}
-
-			traceStore.record(traceId, {
-				ts: new Date().toISOString(),
-				source: "frontend",
-				kind: body.durationMs != null ? "span" : "instant",
-				name: String(body.name || "frontend_event"),
-				durationMs: typeof body.durationMs === "number" ? body.durationMs : undefined,
-				attrs: body.attrs && typeof body.attrs === "object" ? body.attrs : undefined,
-			});
-			res.json({ ok: true });
-		} catch (err: any) {
-			res.status(500).json({ error: err.message });
-		}
-	});
-
-	app.get("/api/debug/load-trace/latest", (_req, res) => {
-		if (!traceStore) {
-			res.status(404).json({ error: "Tracing disabled" });
-			return;
-		}
-		res.json({ traces: traceStore.getLatest() });
-	});
-
-	app.get("/api/debug/load-trace/:traceId", (req, res) => {
-		if (!traceStore) {
-			res.status(404).json({ error: "Tracing disabled" });
-			return;
-		}
-		const trace = traceStore.get(req.params.traceId);
-		if (!trace) {
-			res.status(404).json({ error: "Trace not found" });
-			return;
-		}
-		res.json(trace);
-	});
 
 	app.get("/api/sessions", async (_req, res) => {
 		try {
@@ -207,32 +153,6 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				await remove();
 			}
 			res.json({ success: true });
-		} catch (err: any) {
-			res.status(500).json({ error: err.message });
-		}
-	});
-
-	app.get("/api/sessions/messages", (req, res) => {
-		try {
-			const sessionPath = req.query.path as string;
-			if (!sessionPath || !sessionPath.endsWith(".jsonl")) {
-				res.status(400).json({ error: "Missing or invalid session path" });
-				return;
-			}
-			if (!existsSync(sessionPath)) {
-				res.status(404).json({ error: "Session file not found" });
-				return;
-			}
-
-			const content = readFileSync(sessionPath, "utf8");
-			const entries = parseSessionEntries(content);
-			const context = buildSessionContext(entries as any);
-
-			res.json({
-				messages: context.messages,
-				model: context.model,
-				thinkingLevel: context.thinkingLevel,
-			});
 		} catch (err: any) {
 			res.status(500).json({ error: err.message });
 		}

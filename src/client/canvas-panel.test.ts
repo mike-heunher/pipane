@@ -11,8 +11,6 @@ import {
 	showCanvas,
 	isCanvasVisible,
 	restoreCanvasFromMessages,
-	canvasKey,
-	markCanvasOpened,
 	resetCanvasTracking,
 	initCanvas,
 } from "./canvas-panel.js";
@@ -97,7 +95,7 @@ describe("canvas-panel", () => {
 		// 3. Simulate session switch — tracking is NOT reset (fix: main.ts
 		//    no longer calls resetCanvasTracking on session change)
 
-		// 4. User switches back — server pushes session_messages, triggering
+		// 4. User switches back — server pushes session_sync, triggering
 		//    restoreCanvasFromMessages via onContentChange
 		restoreCanvasFromMessages(messages, sessionFile);
 
