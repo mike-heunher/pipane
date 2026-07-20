@@ -19,6 +19,7 @@ import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionP
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
+import { contextUsageTone } from "./status-usage.js";
 import {
 	clampThinkingLevel,
 	getSupportedThinkingLevels,
@@ -214,6 +215,7 @@ type ProviderStatus = {
 	providerLabel: string;
 	percent?: number;
 	percentLabel?: string;
+	windowLabel?: string;
 	usageTooltip: string;
 };
 
@@ -263,6 +265,7 @@ function getProviderStatuses(): ProviderStatus[] {
 				providerLabel,
 				percent: Number.isFinite(percent) ? percent : undefined,
 				percentLabel: match ? `${match[1]}%` : undefined,
+				windowLabel: match?.[2]?.replace(/\s+/g, ""),
 				usageTooltip: usageSummary
 					? `${providerLabel} quota used: ${usageSummary}.`
 					: `${providerLabel} status: ${text}`,
@@ -270,47 +273,91 @@ function getProviderStatuses(): ProviderStatus[] {
 		});
 }
 
-function renderProviderQuota(status: ProviderStatus | undefined) {
+function renderProviderQuota(
+	status: ProviderStatus | undefined,
+	statuses: ProviderStatus[],
+	usage: TokenUsageSummary | undefined,
+) {
 	if (!status || status.percent == null || !status.percentLabel) return "";
-	return html`
-		<span class="status-quota" title=${status.usageTooltip} aria-label=${status.usageTooltip}>
+	const title = `${status.usageTooltip} Click for session details.`;
+	return renderStatusMetric("quota", title, html`
+		<span class="status-quota">
 			<span class="status-quota-track" aria-hidden="true">
 				<span class="status-quota-fill" style=${`width: ${status.percent}%`}></span>
 			</span>
-			<span class="status-quota-percent">${status.percentLabel} used</span>
+			<span class="status-quota-percent">
+				${status.percentLabel} used${status.windowLabel ? html` <span aria-hidden="true">/</span> ${status.windowLabel}` : ""}
+			</span>
 		</span>
+	`, statuses, usage);
+}
+
+function renderContextUsage(
+	usage: TokenUsageSummary | undefined,
+	statuses: ProviderStatus[],
+) {
+	if (usage?.contextPercent == null || !usage.contextWindowLabel) return "";
+	const percent = Math.max(0, usage.contextPercent);
+	const fillPercent = Math.min(100, percent);
+	const tone = contextUsageTone(percent);
+	const description = `Context window: ${percent}% used of ${usage.contextWindowLabel}`;
+	return renderStatusMetric("context", `${description}. Click for session details.`, html`
+		<span class="status-context is-${tone}">
+			<span class="status-context-label">context</span>
+			<span class="status-context-track" aria-hidden="true">
+				<span class="status-context-fill" style=${`width: ${fillPercent}%`}></span>
+			</span>
+			<span class="status-context-percent">${percent}%</span>
+		</span>
+	`, statuses, usage);
+}
+
+function renderStatusDetailsCard(statuses: ProviderStatus[], usage: TokenUsageSummary | undefined) {
+	return html`
+		<div class="status-details-popover">
+			<div class="status-details-title">Session details</div>
+			${statuses.map((status) => html`
+				<div class="status-detail-row">
+					<span>${status.providerLabel} quota (used)</span>
+					<span class="extension-status-value" data-status-key=${status.key} title=${status.usageTooltip}>${status.text}</span>
+				</div>
+			`)}
+			${usage ? html`
+				<div class="status-detail-row"><span>Input tokens</span><span>${usage.input.toLocaleString()}</span></div>
+				<div class="status-detail-row"><span>Output tokens</span><span>${usage.output.toLocaleString()}</span></div>
+				${usage.contextPercent != null && usage.contextWindowLabel
+					? html`<div class="status-detail-row"><span>Context</span><span>${usage.contextPercent}% / ${usage.contextWindowLabel}</span></div>`
+					: ""}
+				<div class="status-detail-row"><span>Session cost</span><span>${usage.costLabel}</span></div>
+			` : ""}
+		</div>
 	`;
 }
 
-function renderStatusDetails(statuses: ProviderStatus[], usage: TokenUsageSummary | undefined) {
-	if (statuses.length === 0 && !usage) return "";
+function renderStatusMetric(
+	kind: "quota" | "context" | "cost",
+	title: string,
+	content: ReturnType<typeof html>,
+	statuses: ProviderStatus[],
+	usage: TokenUsageSummary | undefined,
+) {
 	return html`
-		<details class="status-details">
-			<summary title="Show session details" aria-label="Show session details">
-				<span>Details</span>
-				<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-					<path d="m9 18 6-6-6-6"></path>
-				</svg>
-			</summary>
-			<div class="status-details-popover">
-				<div class="status-details-title">Session details</div>
-				${statuses.map((status) => html`
-					<div class="status-detail-row">
-						<span>${status.providerLabel} quota (used)</span>
-						<span class="extension-status-value" data-status-key=${status.key} title=${status.usageTooltip}>${status.text}</span>
-					</div>
-				`)}
-				${usage ? html`
-					<div class="status-detail-row"><span>Input tokens</span><span>${usage.input.toLocaleString()}</span></div>
-					<div class="status-detail-row"><span>Output tokens</span><span>${usage.output.toLocaleString()}</span></div>
-					${usage.contextPercent != null && usage.contextWindowLabel
-						? html`<div class="status-detail-row"><span>Context</span><span>${usage.contextPercent}% / ${usage.contextWindowLabel}</span></div>`
-						: ""}
-					<div class="status-detail-row"><span>Session cost</span><span>${usage.costLabel}</span></div>
-				` : ""}
-			</div>
+		<details class="status-metric-details is-${kind}" name="conversation-status-details">
+			<summary title=${title} aria-label=${title}>${content}</summary>
+			${renderStatusDetailsCard(statuses, usage)}
 		</details>
 	`;
+}
+
+function renderSessionCost(
+	usage: TokenUsageSummary | undefined,
+	statuses: ProviderStatus[],
+) {
+	if (!usage?.cost) return "";
+	const title = `Session cost: ${usage.costLabel}. Click for session details.`;
+	return renderStatusMetric("cost", title, html`
+		<span class="status-cost">${usage.costLabel}</span>
+	`, statuses, usage);
 }
 
 function renderToolbarExtras() {
@@ -318,12 +365,10 @@ function renderToolbarExtras() {
 	const usage = getShowTokenUsage() ? getTokenUsageSummary() : undefined;
 	return html`
 		${renderThinkingButton()}
+		${renderProviderQuota(statuses.find((status) => status.percent != null), statuses, usage)}
 		<span class="status-toolbar-spacer" aria-hidden="true"></span>
-		${renderProviderQuota(statuses.find((status) => status.percent != null))}
-		${usage?.cost ? html`
-			<span class="status-cost" title=${`Session cost: ${usage.costLabel}`} aria-label=${`Session cost: ${usage.costLabel}`}>${usage.costLabel}</span>
-		` : ""}
-		${renderStatusDetails(statuses, usage)}
+		${renderContextUsage(usage, statuses)}
+		${renderSessionCost(usage, statuses)}
 	`;
 }
 

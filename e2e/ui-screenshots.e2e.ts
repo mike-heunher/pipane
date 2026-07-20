@@ -13,8 +13,8 @@ for (const f of fs.readdirSync(LATEST_DIR)) {
 	if (f.endsWith(".png")) fs.unlinkSync(path.join(LATEST_DIR, f));
 }
 
-const usage = (input: number, output: number, total: number) => ({
-	input, output, cacheRead: 0, cacheWrite: 0,
+const usage = (input: number, output: number, total: number, totalTokens?: number) => ({
+	input, output, cacheRead: 0, cacheWrite: 0, totalTokens,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total },
 });
 
@@ -137,7 +137,7 @@ const toolMessages = [
 	{
 		role: "assistant",
 		content: [{ type: "text", text: "Done." }],
-		usage: usage(3600, 100, 0.02),
+		usage: usage(3600, 100, 0.02, 152_000),
 		timestamp: 1013,
 		stopReason: "end_turn",
 	},
@@ -289,18 +289,29 @@ test.describe("UI visual goldens", () => {
 		mock.ws()!.send(JSON.stringify({ type: "agent_start", sessionPath: SESSION_PATH }));
 
 		const quota = page.locator(".status-quota");
-		await expect(quota.locator(".status-quota-percent")).toHaveText("18% used");
-		await expect(quota).toHaveAttribute(
+		await expect(quota.locator(".status-quota-percent")).toHaveText("18% used / 5h");
+		const quotaDetails = page.locator(".status-metric-details.is-quota");
+		await expect(quotaDetails.locator(":scope > summary")).toHaveAttribute(
 			"title",
-			"Claude quota used: 18% in the 5-hour window; 42% in the weekly window.",
+			"Claude quota used: 18% in the 5-hour window; 42% in the weekly window. Click for session details.",
 		);
+		const context = page.locator(".status-context");
+		await expect(context).toHaveClass(/is-warning/);
+		await expect(context.locator(".status-context-percent")).toHaveText("76%");
+		const contextDetails = page.locator(".status-metric-details.is-context");
+		await expect(contextDetails.locator(":scope > summary"))
+			.toHaveAttribute("title", "Context window: 76% used of 200k. Click for session details.");
+		const quotaIsLeftOfSpacer = await quota.evaluate((element) => {
+			const spacer = document.querySelector(".status-toolbar-spacer");
+			return !!spacer && !!(element.compareDocumentPosition(spacer) & Node.DOCUMENT_POSITION_FOLLOWING);
+		});
+		expect(quotaIsLeftOfSpacer).toBe(true);
 		await expect(page.locator(".status-model-button"))
 			.toHaveAttribute("title", "Change model (currently claude-sonnet-4-20250514)");
-		await expect(page.locator(".status-cost")).toHaveAttribute("title", "Session cost: $0.116");
-		await expect(page.locator(".status-details > summary"))
-			.toHaveAttribute("title", "Show session details");
-		await expect(page.locator(".status-escape-hint"))
-			.toHaveAttribute("title", "Press Esc to stop generation");
+		const costDetails = page.locator(".status-metric-details.is-cost");
+		await expect(costDetails.locator(":scope > summary"))
+			.toHaveAttribute("title", "Session cost: $0.116. Click for session details.");
+		await expect(page.locator(".status-escape-hint")).toHaveCount(0);
 		await expect(page.locator(".status-stop-button"))
 			.toHaveAttribute("title", "Stop generation (Esc)");
 		const thinking = page.locator(".thinking-icon-btn");
@@ -314,18 +325,30 @@ test.describe("UI visual goldens", () => {
 		await page.evaluate(() => document.documentElement.classList.add("dark"));
 		await captureAndCompare(page.locator("message-editor"), "status-calm-default-dark.png");
 
-		await page.locator(".status-details > summary").click();
-		const fullStatus = page.locator(".extension-status-value");
-		await expect(fullStatus).toHaveText("claude 18% 5h 42% wk");
-		await page.locator(".status-details > summary").click();
+		for (const details of [quotaDetails, contextDetails, costDetails]) {
+			const summary = details.locator(":scope > summary");
+			await summary.click();
+			await expect(details.locator(".status-details-popover")).toBeVisible();
+			await expect(details.locator(".extension-status-value")).toHaveText("claude 18% 5h 42% wk");
+			await summary.click();
+		}
 
 		await page.setViewportSize({ width: 390, height: 844 });
+		await expect(page.locator(".mobile-sidebar-btn")).toBeVisible();
 		await expect(quota).toBeVisible();
-		const fitsViewport = await quota.evaluate((element) => {
-			const rect = element.getBoundingClientRect();
-			return rect.left >= 0 && rect.right <= window.innerWidth;
-		});
-		expect(fitsViewport).toBe(true);
+		await expect(context).toBeVisible();
+		const statusMetrics = await page.locator(".conversation-status-bar").evaluate((element) => ({
+			scrollWidth: element.scrollWidth,
+			clientWidth: element.clientWidth,
+			right: Math.round(element.getBoundingClientRect().right),
+			viewportWidth: window.innerWidth,
+			children: Array.from(element.children).map((child) => ({
+				className: child.className,
+				width: Math.round(child.getBoundingClientRect().width),
+			})),
+		}));
+		expect(statusMetrics.scrollWidth, JSON.stringify(statusMetrics)).toBeLessThanOrEqual(statusMetrics.clientWidth);
+		expect(statusMetrics.right).toBeLessThanOrEqual(statusMetrics.viewportWidth);
 	});
 
 	test("steering queue", async ({ page }) => {

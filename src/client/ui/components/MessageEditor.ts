@@ -383,7 +383,6 @@ export class MessageEditor extends LitElement {
 					${this.extraToolbarButtons?.() ?? ""}
 					${this.isStreaming
 						? html`
-							<span class="status-escape-hint" title="Press Esc to stop generation" aria-hidden="true">esc</span>
 							<button
 								class="status-stop-button"
 								@click=${this.onAbort}

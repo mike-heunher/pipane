@@ -247,7 +247,57 @@ message-editor > div {
 	background: var(--primary, #2563eb);
 }
 
+.status-context {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4rem;
+	font-variant-numeric: tabular-nums;
+}
+
+.status-context-label {
+	color: color-mix(in srgb, var(--muted-foreground, #6b7280) 82%, transparent);
+	font-size: 0.56rem;
+	font-weight: 600;
+	letter-spacing: 0.055em;
+	text-transform: uppercase;
+}
+
+.status-context-track {
+	display: block;
+	width: 3.85rem;
+	height: 0.24rem;
+	overflow: hidden;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--muted-foreground, #6b7280) 28%, transparent);
+}
+
+.status-context-fill {
+	display: block;
+	height: 100%;
+	min-width: 0.18rem;
+	border-radius: inherit;
+	background: var(--primary, #2563eb);
+	transition: width 0.2s, background 0.2s;
+}
+
+.status-context.is-warning .status-context-fill {
+	background: var(--chart-5, #f59e0b);
+}
+
+.status-context.is-warning .status-context-percent {
+	color: var(--chart-5, #f59e0b);
+}
+
+.status-context.is-critical .status-context-fill {
+	background: var(--destructive, #ef4444);
+}
+
+.status-context.is-critical .status-context-percent {
+	color: var(--destructive, #ef4444);
+}
+
 .status-quota-percent,
+.status-context-percent,
 .status-cost {
 	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	font-size: 0.66rem;
@@ -259,37 +309,31 @@ message-editor > div {
 	color: color-mix(in srgb, var(--foreground, #111) 76%, var(--muted-foreground, #6b7280));
 }
 
-.status-details {
+.status-metric-details {
 	position: relative;
 	flex: 0 0 auto;
 }
 
-.status-details > summary {
+.status-metric-details > summary {
 	display: inline-flex;
 	align-items: center;
-	gap: 0.2rem;
-	padding: 0.25rem 0;
+	padding: 0.28rem 0.3rem;
+	margin: 0 -0.3rem;
+	border-radius: 0.35rem;
 	list-style: none;
-	color: var(--muted-foreground, #6b7280);
+	color: inherit;
 	cursor: pointer;
-	transition: color 0.15s;
+	transition: background 0.15s, color 0.15s;
 }
 
-.status-details > summary::-webkit-details-marker {
+.status-metric-details > summary::-webkit-details-marker {
 	display: none;
 }
 
-.status-details > summary:hover,
-.status-details[open] > summary {
+.status-metric-details > summary:hover,
+.status-metric-details[open] > summary {
+	background: color-mix(in srgb, var(--accent, #e5e7eb) 55%, transparent);
 	color: var(--foreground, #111);
-}
-
-.status-details > summary svg {
-	transition: transform 0.15s;
-}
-
-.status-details[open] > summary svg {
-	transform: rotate(90deg);
 }
 
 .status-details-popover {
@@ -320,6 +364,16 @@ message-editor > div {
 	transform: rotate(45deg);
 }
 
+.status-metric-details.is-quota .status-details-popover {
+	left: -0.4rem;
+	right: auto;
+}
+
+.status-metric-details.is-quota .status-details-popover::after {
+	left: 1rem;
+	right: auto;
+}
+
 .status-details-title {
 	margin-bottom: 0.35rem;
 	padding: 0 0.15rem 0.45rem;
@@ -347,22 +401,6 @@ message-editor > div {
 	text-align: right;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-}
-
-.status-escape-hint {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	height: 1.2rem;
-	padding: 0 0.3rem;
-	border: 1px solid color-mix(in srgb, var(--border, #d1d5db) 85%, transparent);
-	border-bottom-color: color-mix(in srgb, var(--border, #d1d5db) 60%, var(--foreground, #111));
-	border-radius: 0.3rem;
-	background: color-mix(in srgb, var(--background, #fff) 45%, transparent);
-	color: var(--muted-foreground, #6b7280);
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	font-size: 0.56rem;
-	line-height: 1;
 }
 
 .status-stop-button {
@@ -735,16 +773,19 @@ markdown-block pre code {
 /* ── Mobile: sidebar overlay + side panels full-width ──────────── */
 
 @media (max-width: 768px) {
+	.conversation-status-bar {
+		margin-inline: -0.1rem;
+	}
+
 	.status-model-button {
 		max-width: 11rem;
 	}
 
-	.status-details > summary span {
-		display: none;
+	.status-metric-details:not(.is-quota) .status-details-popover {
+		right: -2.4rem;
 	}
 
 	.status-details-popover {
-		right: -2.4rem;
 		width: min(18rem, calc(100vw - 1.25rem));
 	}
 
@@ -792,26 +833,50 @@ markdown-block pre code {
 
 @media (max-width: 520px) {
 	.conversation-status-bar {
-		gap: 0.4rem;
-		padding-inline: 0.65rem;
+		gap: 0.32rem;
+		padding-inline: 0.55rem;
 	}
 
 	.status-model-button {
-		max-width: 7rem;
+		max-width: 5.75rem;
 	}
 
-	.status-quota-track {
+	.status-quota,
+	.status-context {
+		gap: 0.25rem;
+	}
+
+	.status-quota-track,
+	.status-context-track {
+		width: 2rem;
+	}
+
+	.status-context-label {
 		display: none;
 	}
 
+	.status-quota-percent,
+	.status-context-percent {
+		font-size: 0.6rem;
+	}
+
 	.status-toolbar-spacer {
-		min-width: 0.15rem;
+		min-width: 0.1rem;
 	}
 }
 
 @media (max-width: 430px) {
-	.status-escape-hint {
-		display: none;
+	.conversation-status-bar {
+		gap: 0.25rem;
+	}
+
+	.status-model-button {
+		max-width: 2.75rem;
+	}
+
+	.status-quota-track,
+	.status-context-track {
+		width: 1.75rem;
 	}
 
 	.status-cost {
