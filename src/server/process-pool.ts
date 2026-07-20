@@ -279,7 +279,7 @@ export class ProcessPool {
 		}
 		this.leases.delete(proc);
 		lease.markReleased();
-		if (this.decommissioning.has(proc) && proc.process.exitCode === null) {
+		if (this.decommissioning.has(proc) && proc.process.exitCode === null && !proc.process.killed) {
 			// Keep the marker until the exit event removes the process. Otherwise a
 			// concurrent acquisition could lease the dying process before SIGTERM lands.
 			console.log(`[pool] Decommissioning pi#${proc.id} after completed operation`);
@@ -306,6 +306,13 @@ export class ProcessPool {
 			return victim;
 		}
 		return null;
+	}
+
+	/** Immediately kill one process while keeping it unavailable until exit. */
+	forceKill(proc: RpcProcess): boolean {
+		if (proc.process.exitCode !== null) return false;
+		this.decommissioning.add(proc);
+		return proc.process.kill("SIGKILL");
 	}
 
 	/** Kill idle processes now and mark leased processes for kill on release. */

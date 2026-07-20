@@ -30,6 +30,9 @@ export interface LocalSettings {
 	toolCollapse?: {
 		keepOpen: number;
 	};
+	messages?: {
+		initialCount: number;
+	};
 }
 
 export interface LocalSettingsValidationResult {
@@ -419,6 +422,19 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 		}
 	}
 
+	// Validate messages (optional)
+	let messagesConfig: { initialCount: number } | undefined;
+	if (value.messages !== undefined) {
+		const mc = value.messages;
+		if (!mc || typeof mc !== "object" || Array.isArray(mc)) {
+			errors.push("messages must be an object");
+		} else if (typeof mc.initialCount !== "number" || !Number.isFinite(mc.initialCount) || mc.initialCount < 0 || Math.floor(mc.initialCount) !== mc.initialCount) {
+			errors.push("messages.initialCount must be a non-negative integer");
+		} else {
+			messagesConfig = { initialCount: mc.initialCount };
+		}
+	}
+
 	if (errors.length > 0) return null;
 
 	return {
@@ -438,6 +454,7 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 			showTokenUsage,
 		},
 		...(toolCollapse ? { toolCollapse } : {}),
+		...(messagesConfig ? { messages: messagesConfig } : {}),
 	};
 }
 

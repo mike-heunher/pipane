@@ -27,10 +27,19 @@ function createPoolWithMocks(options?: { maxProcesses?: number }) {
 	const poolsMap = (pool as any).pools as Map<string, RpcProcess[]>;
 
 	function injectProc(cwd: string, id: number, alive = true): RpcProcess {
+		const process = {
+			exitCode: alive ? null : 1,
+			killed: false,
+			stdin: { write: vi.fn() },
+			kill: vi.fn(function (this: { killed: boolean }) {
+				this.killed = true;
+				return true;
+			}),
+		};
 		const proc = {
 			id,
 			cwd,
-			process: { exitCode: alive ? null : 1, stdin: { write: vi.fn() }, kill: vi.fn(() => true) } as any,
+			process: process as any,
 			rl: {} as any,
 			pendingRequests: new Map(),
 			requestId: 0,
@@ -332,6 +341,19 @@ describe("ProcessPool", () => {
 			expect(proc.process.kill).not.toHaveBeenCalled();
 			lease.release();
 			expect(proc.process.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(pool.acquireAny()).toBeNull();
+		});
+
+		it("force-kills a leased process without making it available", () => {
+			const { pool, injectProc } = createPoolWithMocks();
+			const proc = injectProc("/project-a", 1);
+			const lease = pool.acquire("/project-a")!;
+
+			expect(pool.forceKill(proc)).toBe(true);
+			expect(proc.process.kill).toHaveBeenCalledWith("SIGKILL");
+			expect(pool.isDecommissioning(proc)).toBe(true);
+			lease.release();
+			expect(proc.process.kill).toHaveBeenCalledTimes(1);
 			expect(pool.acquireAny()).toBeNull();
 		});
 	});

@@ -8,6 +8,7 @@ if ("serviceWorker" in navigator) {
 import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import "./session-picker.js";
 import "./ui/index.js";
 import type { MessageEditor } from "./ui/components/MessageEditor.js";
@@ -54,6 +55,8 @@ let lastScrollTop = 0;
 let ignoreScrollEvents = false;
 let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
+let messagesInitialCount = 50;
+let pendingHardKillOfferFor: string | null = null;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -93,6 +96,26 @@ async function handleModelSelect(): Promise<void> {
 	} catch (err) {
 		console.error("Failed to open model picker:", err);
 	}
+}
+
+function clearPendingHardKillOffer(): void {
+	pendingHardKillOfferFor = null;
+}
+
+function handleStopClick(): void {
+	if (!agent?.sessionFile) return;
+	const sessionPath = agent.sessionFile;
+	const isStillRunning = agent.getSessionStatus(sessionPath) === "running";
+
+	if (pendingHardKillOfferFor === sessionPath && isStillRunning) {
+		const confirmed = window.confirm("The agent still appears to be running.\n\nHard kill the connected pi process? A new one will be spawned automatically for future prompts.");
+		if (confirmed) agent.hardKill();
+		clearPendingHardKillOffer();
+		return;
+	}
+
+	pendingHardKillOfferFor = sessionPath;
+	agent.abort();
 }
 
 function handleSend(input: string, attachments?: any[]) {
@@ -215,15 +238,6 @@ type ProviderStatus = {
 	percentLabel?: string;
 	windowLabel?: string;
 	usageTooltip: string;
-};
-
-type TokenUsageSummary = {
-	input: number;
-	output: number;
-	cost: number;
-	costLabel: string;
-	contextPercent?: number;
-	contextWindowLabel?: string;
 };
 
 function providerDisplayName(provider: string): string {
@@ -387,58 +401,16 @@ async function openLocalSettingsModal() {
 	}
 }
 
-function fmtTok(n: number): string {
-	if (n < 1000) return String(n);
-	if (n < 10000) return `${(n / 1000).toFixed(1)}k`;
-	return `${Math.round(n / 1000)}k`;
-}
-
 // Cache the last summary to avoid flicker while a session switch briefly clears messages.
 let lastTokenUsageSummary: TokenUsageSummary | undefined;
 
 function getTokenUsageSummary(): TokenUsageSummary | undefined {
 	if (!agent) return undefined;
 	const state = agent.state;
-	const totals = state.messages
-		.filter((m: any) => m.role === "assistant")
-		.reduce((acc: any, msg: any) => {
-			const usage = msg.usage;
-			if (usage) {
-				acc.input += usage.input ?? usage.inputTokens ?? 0;
-				acc.output += usage.output ?? usage.outputTokens ?? 0;
-				acc.cacheRead += usage.cacheRead ?? 0;
-				acc.cacheWrite += usage.cacheWrite ?? 0;
-				acc.cost += usage.cost?.total ?? usage.totalCost ?? 0;
-			}
-			return acc;
-		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
-
-	const hasTotals = totals.input || totals.output || totals.cacheRead || totals.cacheWrite;
-	if (!hasTotals) {
-		if (state.messages.length === 0) return lastTokenUsageSummary;
-		lastTokenUsageSummary = undefined;
-		return undefined;
-	}
-
-	try {
-		const assistantMessages = state.messages.filter((m: any) => m.role === "assistant" && m.usage) as any[];
-		const lastUsage = assistantMessages.at(-1)?.usage;
-		const lastTotal = lastUsage?.totalTokens ?? 0;
-		const contextWindow = state.model?.contextWindow;
-		const costLabel = `$${totals.cost < 0.01 ? totals.cost.toFixed(4) : totals.cost < 1 ? totals.cost.toFixed(3) : totals.cost.toFixed(2)}`;
-
-		lastTokenUsageSummary = {
-			input: totals.input,
-			output: totals.output,
-			cost: totals.cost,
-			costLabel,
-			contextPercent: lastTotal && contextWindow ? Math.round((lastTotal / contextWindow) * 100) : undefined,
-			contextWindowLabel: contextWindow ? fmtTok(contextWindow) : undefined,
-		};
-		return lastTokenUsageSummary;
-	} catch {
-		return undefined;
-	}
+	const summary = computeTokenUsageSummary(state.messages, state.model?.contextWindow);
+	if (summary === null) return lastTokenUsageSummary;
+	lastTokenUsageSummary = summary;
+	return summary;
 }
 
 function handleScroll(e: Event) {
@@ -569,6 +541,8 @@ const renderApp = () => {
 										.messages=${messages}
 										.isStreaming=${isStreaming}
 										.pendingToolCalls=${agent?.pendingToolCallIds ?? new Set()}
+										.sessionPath=${agent?.sessionFile ?? ""}
+										.initialCount=${messagesInitialCount}
 									></pi-message-list>
 								</div>
 							</div>
@@ -586,7 +560,7 @@ const renderApp = () => {
 										.showModelSelector=${true}
 										.showThinkingSelector=${false}
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
-										.onAbort=${() => agent?.abort()}
+										.onAbort=${handleStopClick}
 										.onModelSelect=${handleModelSelect}
 										.onKeyDown=${handleEditorKeyDown}
 										.onThinkingChange=${(level: any) => agent?.setThinkingLevel(level)}
@@ -688,6 +662,9 @@ async function initApp() {
 			if (typeof settingsData.settings?.sidebar?.sessionsPerProject === "number") {
 				sessionsPerProject = settingsData.settings.sidebar.sessionsPerProject;
 			}
+			if (typeof settingsData.settings?.messages?.initialCount === "number") {
+				messagesInitialCount = settingsData.settings.messages.initialCount;
+			}
 		}
 	} catch {
 		// Ignore — canvas stays disabled by default
@@ -733,6 +710,9 @@ async function initApp() {
 				if (typeof data.settings?.sidebar?.sessionsPerProject === "number") {
 					sessionsPerProject = data.settings.sidebar.sessionsPerProject;
 				}
+				if (typeof data.settings?.messages?.initialCount === "number") {
+					messagesInitialCount = data.settings.messages.initialCount;
+				}
 			}
 		} catch { /* ignore */ }
 		await resyncAppearanceFromServer();
@@ -741,6 +721,7 @@ async function initApp() {
 
 	// Session switch
 	agent.onSessionChange(async () => {
+		clearPendingHardKillOffer();
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
@@ -768,6 +749,9 @@ async function initApp() {
 
 	// Status change
 	agent.onStatusChange(() => {
+		if (!agent.sessionFile || agent.getSessionStatus(agent.sessionFile) !== "running") {
+			clearPendingHardKillOffer();
+		}
 		renderApp();
 	});
 

@@ -3,6 +3,7 @@ import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import { html } from "lit";
 import { Check, ChevronRight, Loader, Shrink } from "lucide";
 import { registerMessageRenderer } from "./message-registry.js";
+import { escapeStrikethrough } from "./utils/markdown.js";
 
 function formatTokenCount(tokens: number): string {
 	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
@@ -71,7 +72,7 @@ registerMessageRenderer("compactionSummary" as any, {
 					</summary>
 					<div class="compaction-summary-body">
 						<div class="compaction-summary-label">Compaction summary</div>
-						<markdown-block .content=${summary}></markdown-block>
+						<markdown-block .content=${escapeStrikethrough(summary)}></markdown-block>
 					</div>
 				</details>
 			</div>

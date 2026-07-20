@@ -282,6 +282,9 @@ export class WsHandler {
 			now: new Date().toISOString(),
 			totalProcesses: this.pool.totalProcesses,
 			attachedSessionCount: this.registry.attachedCount,
+			attachedSessionPaths: processes
+				.map((process) => process.attachedSession)
+				.filter((sessionPath): sessionPath is string => sessionPath !== null),
 			sessionStatuses: this.registry.getAllStatuses(),
 			connectedWsOpen: Array.from(this.clients.keys()).filter((ws) => ws.readyState === WebSocket.OPEN).length,
 			processes,
@@ -384,6 +387,9 @@ export class WsHandler {
 					break;
 				case "abort":
 					await this.handleAbort(ws, id, command);
+					break;
+				case "hard_kill":
+					await this.handleHardKill(ws, id, command);
 					break;
 				case "compact":
 					await this.handleCompact(ws, id, command);
@@ -633,6 +639,36 @@ export class WsHandler {
 			});
 		}
 		ws.send(JSON.stringify({ id, type: "response", command: "abort", success: true }));
+	}
+
+	private async handleHardKill(ws: WebSocket, id: string, command: any): Promise<void> {
+		const sessionPath = command.sessionPath as string;
+		if (!sessionPath) throw new Error("Missing sessionPath");
+
+		const actor = this.registry.find(sessionPath);
+		let hadProcess = false;
+		let killed = false;
+		if (actor) {
+			await actor.enqueue("hard kill", () => {
+				const proc = actor.process;
+				if (!proc) return;
+				hadProcess = true;
+				killed = this.pool.forceKill(proc);
+				actor.markFailed();
+				this.releaseActor(actor, false);
+			});
+		}
+
+		if (hadProcess) this.ensurePool();
+		ws.send(JSON.stringify({
+			id,
+			type: "response",
+			command: "hard_kill",
+			success: true,
+			data: killed
+				? { killed: true }
+				: { killed: false, reason: hadProcess ? "signal_failed" : "not_attached" },
+		}));
 	}
 
 	private async handleCompact(ws: WebSocket, id: string, command: any): Promise<void> {

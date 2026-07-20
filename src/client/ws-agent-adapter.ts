@@ -52,6 +52,7 @@ type WsCommand =
 	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevelValue; controlRevision?: number; images?: ImageContent[] }
 	| { type: "steer"; sessionPath: string; message: string }
 	| { type: "abort"; sessionPath: string }
+	| { type: "hard_kill"; sessionPath: string }
 	| { type: "compact"; sessionPath: string; customInstructions?: string }
 	| { type: "get_available_models" }
 	| { type: "get_commands" }
@@ -671,7 +672,6 @@ export class WsAgentAdapter {
 				if (data.sessionPath) {
 					this.subscribeToSession(data.sessionPath);
 				}
-				if (adoptedVirtualSession) this.emitSessionChange();
 				this.emitStatusChange();
 			}
 			if (data.sessionPath) {
@@ -693,6 +693,12 @@ export class WsAgentAdapter {
 						firstMessage: data.firstMessage || "(new session)",
 					});
 				}
+			}
+			// Emit session change AFTER optimistic session is created, so the
+			// picker can immediately remove the __virtual__ entry and show the
+			// real session — preventing the duplicate-session visual glitch.
+			if (shouldAdopt) {
+				this.emitSessionChange();
 			}
 			return;
 		}
@@ -1342,6 +1348,12 @@ export class WsAgentAdapter {
 	abort() {
 		if (this._sessionPath) {
 			this.send({ type: "abort", sessionPath: this._sessionPath }).catch(() => {});
+		}
+	}
+
+	hardKill() {
+		if (this._sessionPath) {
+			this.send({ type: "hard_kill", sessionPath: this._sessionPath }).catch(() => {});
 		}
 	}
 

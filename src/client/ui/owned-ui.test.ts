@@ -6,6 +6,7 @@ import { MessageEditor } from "./components/MessageEditor.js";
 import { PiMessageList } from "./components/MessageList.js";
 import { ThinkingBlock } from "./components/ThinkingBlock.js";
 import { getToolRenderer, renderTool } from "./tool-registry.js";
+import { escapeStrikethrough } from "./utils/markdown.js";
 
 async function settle(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
@@ -146,9 +147,44 @@ describe("owned message and tool rendering", () => {
 		expect(list.querySelector("tool-message")?.getAttribute("data-tool-call-id")).toBe("call-1");
 	});
 
+	it("expands truncated history and resets only when the session changes", async () => {
+		const makeMessages = (count: number) => Array.from({ length: count }, (_, index) => ({
+			role: "user",
+			content: `message ${index + 1}`,
+			timestamp: index + 1,
+		})) as any;
+		const list = new PiMessageList();
+		list.sessionPath = "/tmp/a.jsonl";
+		list.initialCount = 2;
+		list.messages = makeMessages(5);
+		document.body.appendChild(list);
+		await list.updateComplete;
+
+		expect(list.querySelectorAll("user-message")).toHaveLength(2);
+		expect(list.querySelector(".show-earlier-btn")?.textContent).toContain("3 hidden");
+		(list.querySelector(".show-earlier-btn") as HTMLButtonElement).click();
+		await list.updateComplete;
+		expect(list.querySelectorAll("user-message")).toHaveLength(4);
+
+		// Session snapshots contain fresh object identities and must not collapse
+		// history that the user already expanded.
+		list.messages = makeMessages(6);
+		await list.updateComplete;
+		expect(list.querySelectorAll("user-message")).toHaveLength(4);
+
+		list.sessionPath = "/tmp/b.jsonl";
+		await list.updateComplete;
+		expect(list.querySelectorAll("user-message")).toHaveLength(2);
+	});
+
 	it("normalizes tool names and owns the generic fallback", () => {
 		expect(getToolRenderer("BASH")).toBe(getToolRenderer("bash"));
 		expect(renderTool("unknown_extension_tool", { value: 1 }, undefined, true).isCustom).toBe(true);
+	});
+
+	it("renders approximation tildes literally while preserving code", () => {
+		expect(escapeStrikethrough("about ~500~ and ~~old~~, but `~code~`"))
+			.toBe("about \\~500\\~ and \\~\\~old\\~\\~, but `~code~`");
 	});
 
 	it("renders thinking token estimates without mutating a prototype", async () => {

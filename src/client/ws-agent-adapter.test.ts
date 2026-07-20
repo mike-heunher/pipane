@@ -128,6 +128,17 @@ describe("WsAgentAdapter transport injection", () => {
 
 describe("WsAgentAdapter prompt routing", () => {
 	describe("prompt to idle session sends 'prompt' command", () => {
+		it("sends a hard_kill command when hardKill() is called", () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			adapter.hardKill();
+
+			const hardKillMsgs = sent.filter((m) => m.type === "hard_kill");
+			expect(hardKillMsgs).toHaveLength(1);
+			expect(hardKillMsgs[0].sessionPath).toBe(sessionPath);
+		});
+
 		it("sends a prompt command when session is not running", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, sent } = setupWithSession(sessionPath);

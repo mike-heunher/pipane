@@ -8,9 +8,11 @@
  *
  * This is the only conversation renderer. It composes pipane-owned user,
  * assistant, thinking, and tool components without a second streaming zone.
+ * Long conversations initially show their most recent renderable messages and
+ * can be expanded in fixed-size batches.
  */
 
-import { html, LitElement, type TemplateResult } from "lit";
+import { html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -22,6 +24,11 @@ export class PiMessageList extends LitElement {
 	@property({ type: Array }) messages: AgentMessage[] = [];
 	@property({ type: Boolean }) isStreaming = false;
 	@property({ type: Object }) pendingToolCalls: ReadonlySet<string> = new Set();
+	@property({ type: String }) sessionPath = "";
+	/** 0 disables truncation. */
+	@property({ type: Number }) initialCount = 0;
+
+	private visibleCount = 0;
 
 	createRenderRoot() {
 		return this; // light DOM for shared styles
@@ -30,6 +37,12 @@ export class PiMessageList extends LitElement {
 	connectedCallback() {
 		super.connectedCallback();
 		this.style.display = "block";
+	}
+
+	protected override willUpdate(changedProperties: PropertyValues<this>): void {
+		if (changedProperties.has("sessionPath") || changedProperties.has("initialCount")) {
+			this.visibleCount = this.initialCount;
+		}
 	}
 
 	render() {
@@ -42,15 +55,31 @@ export class PiMessageList extends LitElement {
 		}
 
 		const items = this.buildRenderItems(toolResultsById);
+		const visibleLimit = this.initialCount > 0 ? this.visibleCount || this.initialCount : items.length;
+		const hiddenCount = this.initialCount > 0 ? Math.max(0, items.length - visibleLimit) : 0;
+		const visibleItems = hiddenCount > 0 ? items.slice(hiddenCount) : items;
+		const nextBatchSize = Math.min(hiddenCount, this.initialCount);
 
 		return html`<div class="flex flex-col gap-3">
+			${hiddenCount > 0
+				? html`<button
+					type="button"
+					class="show-earlier-btn"
+					@click=${this.showEarlierMessages}
+				>Show ${nextBatchSize} earlier messages (${hiddenCount} hidden)</button>`
+				: ""}
 			${repeat(
-				items,
+				visibleItems,
 				(it) => it.key,
 				(it) => html`<div data-message-index=${String(it.messageIndex)} style="display: contents;">${it.template}</div>`,
 			)}
 			${this.isStreaming ? html`<span class="mx-4 inline-block w-2 h-4 bg-muted-foreground animate-pulse"></span>` : ""}
 		</div>`;
+	}
+
+	private showEarlierMessages(): void {
+		this.visibleCount = (this.visibleCount || this.initialCount) + this.initialCount;
+		this.requestUpdate();
 	}
 
 	private buildRenderItems(toolResultsById: Map<string, any>): Array<{ key: string; template: TemplateResult; messageIndex: number }> {

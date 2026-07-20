@@ -16,6 +16,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		totalProcesses: 0,
 		isLeased: vi.fn(() => false),
 		isDecommissioning: vi.fn(() => false),
+		forceKill: vi.fn(() => true),
 		decommissionAll: vi.fn(() => ({ killed: 0, draining: 0 })),
 		acquireAny: vi.fn(() => null),
 		acquire: vi.fn(() => null),
@@ -27,12 +28,13 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		}),
 		...overrides,
 	} as any;
+	const ensurePool = vi.fn();
 	const handler = new WsHandler({
 		registry,
 		pool,
 		defaultCwd: "/tmp",
 		piLaunch: { command: "pi", baseArgs: [] },
-		ensurePool: vi.fn(),
+		ensurePool,
 		isRequestAuthorized: () => true,
 	}) as any;
 	handler.piAvailable = true;
@@ -40,6 +42,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		handler,
 		registry,
 		pool,
+		ensurePool,
 		emitProcessEvent: (proc: any, event: any) => {
 			for (const listener of poolEventListeners) listener(proc, event);
 		},
@@ -162,6 +165,46 @@ describe("WsHandler actor orchestration", () => {
 		expect(sendRpc.mock.calls.filter((call: any[]) => call[1].type === "prompt")).toHaveLength(1);
 		expect(sendRpc).toHaveBeenCalledWith(proc, { type: "steer", message: "second prompt" });
 		expect(second.sent).toContainEqual(expect.objectContaining({ command: "steer", success: true }));
+	});
+
+	it("hard-kills and releases the actor-owned process", async () => {
+		const forceKill = vi.fn(() => true);
+		const { handler, registry, ensurePool } = makeHandler({ forceKill });
+		const proc = { id: 23 };
+		const { actor, release } = attachActor(registry, "/tmp/hard-kill.jsonl", proc);
+		actor.beginTurn();
+		const { ws, sent } = makeWs();
+
+		await handler.handleHardKill(ws, "req_kill", { sessionPath: actor.sessionPath });
+
+		expect(forceKill).toHaveBeenCalledWith(proc);
+		expect(actor.phase).toBe("detached");
+		expect(release).toHaveBeenCalledOnce();
+		expect(ensurePool).toHaveBeenCalledOnce();
+		expect(sent).toContainEqual(expect.objectContaining({
+			id: "req_kill",
+			command: "hard_kill",
+			data: { killed: true },
+		}));
+	});
+
+	it("reports attached session paths in debug state", () => {
+		const proc = {
+			id: 24,
+			cwd: "/tmp",
+			process: { pid: 42, exitCode: null },
+			pendingRequests: new Map(),
+		};
+		const { handler, registry } = makeHandler({
+			getAllProcesses: vi.fn(() => [proc]),
+			totalProcesses: 1,
+		});
+		attachActor(registry, "/tmp/debug.jsonl", proc);
+
+		expect(handler.getDebugState()).toMatchObject({
+			attachedSessionCount: 1,
+			attachedSessionPaths: ["/tmp/debug.jsonl"],
+		});
 	});
 
 	it("rejects compact while a turn is active", async () => {

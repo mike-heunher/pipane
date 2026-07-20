@@ -38,6 +38,8 @@ function createMockServer(): Promise<MockPipaneServer> {
 	return startMockPipaneServer({
 		sessions: [],
 		states: { [SESSION_PATH]: largeSessionMessages },
+		// Render the complete fixture; truncation would invalidate DOM/perf counts.
+		settings: { messages: { initialCount: 0 } },
 		browse: {
 			path: "/Users/dev",
 			dirs: [{ name: "project", path: "/Users/dev/project" }],

@@ -330,6 +330,45 @@ describe("local-settings", () => {
 		});
 	});
 
+	describe("message truncation setting", () => {
+		it("accepts and persists a non-negative initial count", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const saved = store.save(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				messages: { initialCount: 50 },
+			}));
+			expect(saved.valid).toBe(true);
+			expect(new LocalSettingsStore({ homeDir: tmpDir, settingsPath }).settings.messages)
+				.toEqual({ initialCount: 50 });
+		});
+
+		it("allows zero to disable truncation", () => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				messages: { initialCount: 0 },
+			}));
+			expect(result.settings?.messages).toEqual({ initialCount: 0 });
+		});
+
+		it.each([
+			["a non-object", "invalid"],
+			["a negative count", { initialCount: -1 }],
+			["a fractional count", { initialCount: 2.5 }],
+		])("rejects %s", (_label, messages) => {
+			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
+			const result = store.validate(JSON.stringify({
+				version: 1,
+				sidebar: { cwdTitle: { filters: [] } },
+				messages,
+			}));
+			expect(result.valid).toBe(false);
+			expect(result.errors.join("\n")).toContain("messages");
+		});
+	});
+
 	describe("toolCollapse setting", () => {
 		it("accepts valid toolCollapse with keepOpen", () => {
 			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });

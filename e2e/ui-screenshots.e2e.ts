@@ -147,6 +147,7 @@ function createMockServer(): Promise<MockPipaneServer> {
 		sessionStatuses: { [SESSION_PATH_2]: "running" },
 		settings: {
 			appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
+			messages: { initialCount: 50 },
 		},
 		browse: {
 			path: "/Users/dev",

@@ -13,6 +13,7 @@ import { customElement, property } from "lit/decorators.js";
 import { renderTool } from "../tool-registry.js";
 import { formatUsage } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
+import { escapeStrikethrough } from "../utils/markdown.js";
 import "./ThinkingBlock.js";
 
 function openImageFullscreen(image: HTMLImageElement): void {
@@ -63,7 +64,7 @@ export class UserMessage extends LitElement {
 		return html`
 			<div class="flex justify-start mx-4">
 				<div class="user-message-container py-2 px-4 rounded-xl">
-					<markdown-block .content=${content}></markdown-block>
+					<markdown-block .content=${escapeStrikethrough(content)}></markdown-block>
 					${inlineImages.length > 0
 						? html`<div class="mt-3 flex flex-wrap gap-2">
 							${inlineImages.map((image) => html`<img
@@ -102,7 +103,7 @@ export class AssistantMessage extends LitElement {
 
 		for (const chunk of this.message.content) {
 			if (chunk.type === "text" && chunk.text.trim() !== "") {
-				orderedParts.push(html`<markdown-block .content=${chunk.text}></markdown-block>`);
+				orderedParts.push(html`<markdown-block .content=${escapeStrikethrough(chunk.text)}></markdown-block>`);
 			} else if (chunk.type === "thinking" && chunk.thinking.trim() !== "") {
 				orderedParts.push(
 					html`<thinking-block .content=${chunk.thinking} .isStreaming=${this.isStreaming}></thinking-block>`,
