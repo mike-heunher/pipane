@@ -372,4 +372,50 @@ test.describe("UI visual goldens", () => {
 		await expect(page.getByText("npm run build", { exact: false }).last()).toBeVisible();
 		await captureAndCompare(page, "tool-bash-in-progress.png");
 	});
+
+	test("completed compaction", async ({ page }) => {
+		// Reset the shared mock before loading so the regular session-open helper
+		// can observe the initial tool tree.
+		mock.sendSessionState(SESSION_PATH, {
+			messages: toolMessages,
+			isStreaming: false,
+			pendingToolCalls: [],
+			steeringQueue: [],
+		});
+		await page.goto(`http://localhost:${mock.port}`);
+		await openMainSession(page);
+		const canvasCloseBtn = page.locator("button.canvas-close");
+		if (await canvasCloseBtn.count() > 0) await canvasCloseBtn.click();
+
+		mock.sendSessionState(SESSION_PATH, {
+			messages: [
+				{ role: "user", content: "Keep the auth migration constraints", timestamp: 4000 },
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "I’ll retain the decisions made so far." }],
+					timestamp: 4001,
+				},
+				{
+					role: "compactionSummary",
+					summary: "## Goal\nFinish the auth migration.\n\n## Decisions\n- Use short-lived JWT access tokens\n- Keep refresh-token rotation\n- Run the full test suite before release",
+					tokensBefore: 187701,
+					timestamp: 4002,
+				},
+			],
+			isStreaming: false,
+			pendingToolCalls: [],
+			steeringQueue: [],
+		});
+
+		const compaction = page.locator(".compaction-event.is-complete");
+		await expect(compaction).toBeVisible();
+		await expect(compaction.locator(".compaction-title")).toHaveText("Conversation compacted");
+		await expect(compaction.locator(".compaction-meta")).toHaveText("188k tokens summarized");
+		await captureAndCompare(compaction, "compaction-collapsed.png");
+
+		await compaction.locator("summary").click();
+		await expect(compaction.locator("details")).toHaveAttribute("open", "");
+		await expect(compaction.locator("markdown-block")).toContainText("Finish the auth migration");
+		await captureAndCompare(compaction, "compaction-expanded.png");
+	});
 });

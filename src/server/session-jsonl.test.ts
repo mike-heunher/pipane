@@ -755,6 +755,48 @@ describe("readSessionFromDisk (jsonl version)", () => {
 		expect(result.hash).toBe(expectedHash);
 	});
 
+	it("places a completed compaction at its chronological timeline position", () => {
+		const sessionPath = path.join(tmpDir, "compacted.jsonl");
+		const entries = [
+			{ type: "session", version: 3, id: "root", cwd: "/tmp/project", timestamp: "2026-01-01T00:00:00.000Z" },
+			{
+				type: "message", id: "old", parentId: "root", timestamp: "2026-01-01T00:00:01.000Z",
+				message: { role: "user", content: "summarized away", timestamp: 1 },
+			},
+			{
+				type: "message", id: "kept-user", parentId: "old", timestamp: "2026-01-01T00:00:02.000Z",
+				message: { role: "user", content: "retained question", timestamp: 2 },
+			},
+			{
+				type: "message", id: "kept-assistant", parentId: "kept-user", timestamp: "2026-01-01T00:00:03.000Z",
+				message: { role: "assistant", content: [{ type: "text", text: "retained answer" }], timestamp: 3 },
+			},
+			{
+				type: "compaction", id: "compact", parentId: "kept-assistant", timestamp: "2026-01-01T00:00:04.000Z",
+				summary: "## Compaction result\nImportant context", firstKeptEntryId: "kept-user", tokensBefore: 187701,
+			},
+			{
+				type: "message", id: "after", parentId: "compact", timestamp: "2026-01-01T00:00:05.000Z",
+				message: { role: "user", content: "after compaction", timestamp: 5 },
+			},
+		];
+		writeFileSync(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+		const { state } = readSessionFromDisk(sessionPath);
+
+		expect(state.messages.map((message) => message.role)).toEqual([
+			"user",
+			"assistant",
+			"compactionSummary",
+			"user",
+		]);
+		expect(state.messages).not.toContainEqual(expect.objectContaining({ content: "summarized away" }));
+		expect(state.messages[2]).toEqual(expect.objectContaining({
+			summary: "## Compaction result\nImportant context",
+			tokensBefore: 187701,
+		}));
+	});
+
 	it("handles missing file gracefully", () => {
 		const result = readSessionFromDisk("/nonexistent/path.jsonl");
 		const state = JSON.parse(result.json);

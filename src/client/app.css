@@ -566,6 +566,161 @@ html, body {
 	color: var(--foreground, #111);
 }
 
+/* ── Compaction timeline event ──────────────────────────────────────────── */
+
+.compaction-event {
+	margin: 0.25rem 1rem;
+	overflow: hidden;
+	border: 1px solid color-mix(in srgb, var(--primary, #83a598) 30%, var(--border, #d5c4a1));
+	border-radius: 0.55rem;
+	background: color-mix(in srgb, var(--primary, #83a598) 7%, var(--background, #fbf1c7));
+	color: var(--foreground, #3c3836);
+}
+
+.compaction-event.is-running {
+	border-color: color-mix(in srgb, var(--primary, #83a598) 48%, var(--border, #d5c4a1));
+	background: color-mix(in srgb, var(--primary, #83a598) 10%, var(--background, #fbf1c7));
+}
+
+.compaction-header {
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	min-height: 3.15rem;
+	padding: 0.55rem 0.75rem;
+	box-sizing: border-box;
+}
+
+.compaction-details > summary {
+	list-style: none;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.compaction-details > summary::-webkit-details-marker {
+	display: none;
+}
+
+.compaction-details > summary:hover,
+.compaction-details > summary:focus-visible,
+.compaction-details[open] > summary {
+	background: color-mix(in srgb, var(--primary, #83a598) 10%, transparent);
+}
+
+.compaction-details > summary:focus-visible {
+	outline: 2px solid color-mix(in srgb, var(--primary, #83a598) 70%, transparent);
+	outline-offset: -2px;
+}
+
+.compaction-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 1.8rem;
+	height: 1.8rem;
+	border-radius: 50%;
+	background: color-mix(in srgb, var(--primary, #83a598) 16%, transparent);
+	color: var(--primary, #83a598);
+}
+
+.compaction-icon.is-spinning svg {
+	animation: compaction-spin 1s linear infinite;
+}
+
+@keyframes compaction-spin {
+	to { transform: rotate(360deg); }
+}
+
+.compaction-copy {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	flex-direction: column;
+	gap: 0.08rem;
+}
+
+.compaction-title {
+	font-size: 0.78rem;
+	font-weight: 650;
+	line-height: 1.3;
+	letter-spacing: -0.01em;
+}
+
+.compaction-meta {
+	color: var(--muted-foreground, #7c6f64);
+	font-size: 0.68rem;
+	line-height: 1.35;
+}
+
+.compaction-action {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2rem;
+	flex: 0 0 auto;
+	color: var(--primary, #83a598);
+	font-size: 0.68rem;
+	font-weight: 650;
+}
+
+.compaction-action-expanded {
+	display: none;
+}
+
+.compaction-chevron {
+	display: inline-flex;
+	transition: transform 0.15s ease;
+}
+
+.compaction-details[open] .compaction-action-collapsed {
+	display: none;
+}
+
+.compaction-details[open] .compaction-action-expanded {
+	display: inline;
+}
+
+.compaction-details[open] .compaction-chevron {
+	transform: rotate(90deg);
+}
+
+.compaction-summary-body {
+	max-height: 24rem;
+	overflow: auto;
+	padding: 0.75rem 0.85rem 0.9rem 3.2rem;
+	border-top: 1px solid color-mix(in srgb, var(--primary, #83a598) 22%, var(--border, #d5c4a1));
+	background: color-mix(in srgb, var(--background, #fbf1c7) 70%, transparent);
+}
+
+.compaction-summary-label {
+	margin-bottom: 0.45rem;
+	color: var(--muted-foreground, #7c6f64);
+	font-size: 0.62rem;
+	font-weight: 700;
+	letter-spacing: 0.055em;
+	text-transform: uppercase;
+}
+
+.compaction-summary-body markdown-block {
+	font-size: 0.8rem;
+	line-height: 1.45;
+}
+
+@media (max-width: 520px) {
+	.compaction-event {
+		margin-inline: 0.35rem;
+	}
+
+	.compaction-action-collapsed,
+	.compaction-action-expanded {
+		display: none !important;
+	}
+
+	.compaction-summary-body {
+		padding-left: 0.85rem;
+	}
+}
+
 /* ── Ultra-dense tool blocks ────────────────────────────────────────────── */
 
 .tool-header-label {

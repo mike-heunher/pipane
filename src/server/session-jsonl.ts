@@ -14,8 +14,11 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import {
-	parseSessionEntries,
+	buildContextEntries,
 	buildSessionContext,
+	parseSessionEntries,
+	sessionEntryToContextMessages,
+	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createHash } from "node:crypto";
@@ -305,6 +308,25 @@ export class SessionJsonl {
 // ── Disk reader ────────────────────────────────────────────────────────────
 
 /**
+ * Build the messages in chronological display order.
+ *
+ * Pi's LLM context intentionally puts the latest compaction summary before the
+ * retained pre-compaction messages. In the conversation timeline, however, the
+ * compaction happened after those retained messages. Restoring append order
+ * keeps the completed marker where the user ran /compact while still omitting
+ * the older messages replaced by the summary.
+ */
+export function buildSessionDisplayMessages(
+	entries: ReturnType<typeof parseSessionEntries>,
+): AgentMessage[] {
+	const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+	const entryOrder = new Map(sessionEntries.map((entry, index) => [entry, index]));
+	return [...buildContextEntries(sessionEntries)]
+		.sort((left, right) => (entryOrder.get(left) ?? 0) - (entryOrder.get(right) ?? 0))
+		.flatMap(sessionEntryToContextMessages);
+}
+
+/**
  * Read a session from disk and return a serialized SessionState JSON + hash.
  */
 export function readSessionFromDisk(sessionPath: string): { json: string; hash: string; state: SessionState } {
@@ -316,8 +338,9 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 		if (existsSync(sessionPath)) {
 			const content = readFileSync(sessionPath, "utf8");
 			const entries = parseSessionEntries(content);
-			const context = buildSessionContext(entries as any);
-			messages = context.messages ?? [];
+			const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+			const context = buildSessionContext(sessionEntries);
+			messages = buildSessionDisplayMessages(entries);
 			model = context.model ?? null;
 			thinkingLevel = context.thinkingLevel ?? "off";
 		}
