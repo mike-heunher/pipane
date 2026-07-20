@@ -311,10 +311,14 @@ test.describe("UI visual goldens", () => {
 
 		for (const details of [quotaDetails, contextDetails, costDetails]) {
 			const summary = details.locator(":scope > summary");
+			const popover = details.locator(".status-details-popover");
 			await summary.click();
-			await expect(details.locator(".status-details-popover")).toBeVisible();
+			await expect(popover).toBeVisible();
 			await expect(details.locator(".extension-status-value")).toHaveText("claude 18% 5h 42% wk");
-			await summary.click();
+			await details.locator(".status-details-title").click();
+			await expect(popover).toBeVisible();
+			await page.evaluate(() => document.body.click());
+			await expect(details).not.toHaveAttribute("open", "");
 		}
 
 		await page.setViewportSize({ width: 390, height: 844 });

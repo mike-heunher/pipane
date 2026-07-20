@@ -20,7 +20,7 @@ import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionP
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
-import { contextUsageTone } from "./status-usage.js";
+import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
 import type { UpdateNotice, UpdateRunResponse, UpdateTarget } from "../shared/updates.js";
 import {
 	updateConfirmationMessage,
@@ -34,6 +34,7 @@ import {
 } from "../shared/thinking-levels.js";
 
 initThemes();
+document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
 
 let agent: WsAgentAdapter;
 const isMobile = () => window.innerWidth <= 768;
