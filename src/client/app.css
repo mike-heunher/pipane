@@ -539,6 +539,121 @@ html, body {
 	padding-right: 0.15rem !important;
 }
 
+/* ── Actionable update notifications ─────────────────────────────── */
+
+.update-notifications {
+	flex: 0 0 auto;
+	border-bottom: 1px solid color-mix(in srgb, var(--warning, #d79921) 32%, var(--border, #d1d5db));
+	background: color-mix(in srgb, var(--warning, #d79921) 8%, var(--background, #fff));
+}
+
+.update-notice {
+	appearance: none;
+	width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 0.65rem;
+	padding: 0.48rem 0.9rem;
+	border: 0;
+	border-top: 1px solid color-mix(in srgb, var(--warning, #d79921) 20%, transparent);
+	background: transparent;
+	color: var(--foreground, #111);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition: background 0.15s ease;
+}
+
+.update-notice:first-child {
+	border-top: 0;
+}
+
+.update-notice:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--warning, #d79921) 12%, transparent);
+}
+
+.update-notice:focus-visible {
+	outline: 2px solid var(--primary, #2563eb);
+	outline-offset: -2px;
+}
+
+.update-notice:disabled {
+	cursor: progress;
+	opacity: 0.72;
+}
+
+.update-notice-icon {
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: color-mix(in srgb, var(--warning, #d79921) 78%, var(--foreground, #111));
+}
+
+.update-notice-copy {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	align-items: baseline;
+	gap: 0.55rem;
+}
+
+.update-notice-copy strong {
+	font-size: 0.78rem;
+	font-weight: 650;
+}
+
+.update-notice-copy small {
+	overflow: hidden;
+	color: var(--muted-foreground, #6b7280);
+	font-size: 0.7rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.update-notice-action {
+	flex: 0 0 auto;
+	color: var(--primary, #2563eb);
+	font-size: 0.72rem;
+	font-weight: 700;
+}
+
+.update-feedback {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.48rem 0.9rem;
+	font-size: 0.75rem;
+}
+
+.update-feedback.is-success {
+	background: color-mix(in srgb, var(--success, #98971a) 12%, var(--background, #fff));
+	color: color-mix(in srgb, var(--success, #98971a) 78%, var(--foreground, #111));
+}
+
+.update-feedback.is-error {
+	background: color-mix(in srgb, var(--destructive, #cc241d) 12%, var(--background, #fff));
+	color: var(--destructive, #cc241d);
+}
+
+.update-feedback button {
+	appearance: none;
+	border: 0;
+	background: transparent;
+	color: currentColor;
+	font: inherit;
+	font-size: 1rem;
+	line-height: 1;
+	cursor: pointer;
+}
+
+@media (max-width: 640px) {
+	.update-notice-copy {
+		align-items: flex-start;
+		flex-direction: column;
+		gap: 0.08rem;
+	}
+}
+
 /* ── Mobile sidebar open button (hamburger, shown only on mobile) ──── */
 
 .mobile-sidebar-btn {

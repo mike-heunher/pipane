@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
+import type { UpdateNotice, UpdateTarget } from "../src/shared/updates.js";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
 
@@ -24,6 +25,7 @@ export interface MockPipaneServerOptions {
 	sessionStatuses?: Record<string, "running" | "done">;
 	settings?: any;
 	browse?: { path: string; dirs: Array<{ name: string; path: string }> };
+	updates?: UpdateNotice[];
 }
 
 function hashState(data: string): string {
@@ -58,6 +60,8 @@ export class MockPipaneServer {
 	private readonly states: Map<string, MockSessionState>;
 	private readonly model: any;
 	private readonly sessionStatuses: Record<string, "running" | "done">;
+	private updateNotices: UpdateNotice[];
+	private readonly updateRequests: UpdateTarget[] = [];
 	private client: WebSocket | null = null;
 
 	private constructor(
@@ -72,6 +76,10 @@ export class MockPipaneServer {
 		this.sessions = [...options.sessions];
 		this.model = options.model ?? { provider: "anthropic", id: "claude-sonnet-4-20250514" };
 		this.sessionStatuses = { ...(options.sessionStatuses ?? {}) };
+		this.updateNotices = (options.updates ?? []).map((notice) => ({
+			...notice,
+			...(notice.packages ? { packages: [...notice.packages] } : {}),
+		}));
 		this.states = new Map(
 			Object.entries(options.states).map(([sessionPath, state]) => [
 				sessionPath,
@@ -94,6 +102,22 @@ export class MockPipaneServer {
 			},
 		}));
 		app.get("/api/browse", (_req, res) => res.json(options.browse ?? { path: "/tmp", dirs: [] }));
+		app.get("/api/updates", (_req, res) => res.json({
+			checkedAt: new Date().toISOString(),
+			notices: mock?.getUpdateNotices() ?? [],
+		}));
+		app.post("/api/updates/:target", (req, res) => {
+			if (req.get("X-Pipane-Action") !== "update") {
+				res.status(400).json({ error: "Missing update action header." });
+				return;
+			}
+			const result = mock?.runUpdate(req.params.target as UpdateTarget);
+			if (!result) {
+				res.status(409).json({ error: `No ${req.params.target} update is currently available.` });
+				return;
+			}
+			res.json({ result, snapshot: { checkedAt: new Date().toISOString(), notices: mock!.getUpdateNotices() } });
+		});
 
 		const port = await new Promise<number>((resolve, reject) => {
 			server.listen(0, () => {
@@ -158,6 +182,28 @@ export class MockPipaneServer {
 
 	setSessions(sessions: any[]): void {
 		this.sessions = [...sessions];
+	}
+
+	getUpdateNotices(): UpdateNotice[] {
+		return this.updateNotices.map((notice) => ({
+			...notice,
+			...(notice.packages ? { packages: [...notice.packages] } : {}),
+		}));
+	}
+
+	getUpdateRequests(): UpdateTarget[] {
+		return [...this.updateRequests];
+	}
+
+	runUpdate(target: UpdateTarget): { target: UpdateTarget; message: string; restartRequired: boolean } | null {
+		if (!this.updateNotices.some((notice) => notice.target === target)) return null;
+		this.updateRequests.push(target);
+		this.updateNotices = this.updateNotices.filter((notice) => notice.target !== target);
+		return {
+			target,
+			message: `${target} update completed.`,
+			restartRequired: target === "pipane",
+		};
 	}
 
 	getSessionState(sessionPath: string): MockSessionState {

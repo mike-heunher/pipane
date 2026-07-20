@@ -21,6 +21,12 @@ import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone } from "./status-usage.js";
+import type { UpdateNotice, UpdateRunResponse, UpdateTarget } from "../shared/updates.js";
+import {
+	updateConfirmationMessage,
+	updateNoticeDetail,
+	updateNoticeTitle,
+} from "./update-notifications.js";
 import {
 	clampThinkingLevel,
 	getSupportedThinkingLevels,
@@ -57,6 +63,9 @@ let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
 let messagesInitialCount = 50;
 let pendingHardKillOfferFor: string | null = null;
+let updateNotices: UpdateNotice[] = [];
+let updatingTarget: UpdateTarget | null = null;
+let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -450,6 +459,85 @@ function scrollToBottomIfNeeded() {
 	});
 }
 
+async function refreshUpdateNotices(): Promise<void> {
+	try {
+		const response = await fetch("/api/updates", { cache: "no-store" });
+		if (!response.ok) return;
+		const snapshot = await response.json() as { notices?: UpdateNotice[] };
+		updateNotices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
+		renderApp();
+	} catch {
+		// Update checks are optional and must never interfere with the chat UI.
+	}
+}
+
+async function handleUpdateClick(notice: UpdateNotice): Promise<void> {
+	if (updatingTarget) return;
+	if (!window.confirm(updateConfirmationMessage(notice))) return;
+
+	updatingTarget = notice.target;
+	updateFeedback = null;
+	renderApp();
+	try {
+		const response = await fetch(`/api/updates/${notice.target}`, {
+			method: "POST",
+			headers: { "X-Pipane-Action": "update" },
+		});
+		const payload = await response.json().catch(() => ({})) as Partial<UpdateRunResponse> & { error?: string };
+		if (!response.ok || !payload.result || !payload.snapshot) {
+			throw new Error(payload.error || `Update failed (${response.status})`);
+		}
+		updateNotices = payload.snapshot.notices;
+		updateFeedback = { kind: "success", message: payload.result.message };
+	} catch (error) {
+		updateFeedback = {
+			kind: "error",
+			message: error instanceof Error ? error.message : String(error),
+		};
+	} finally {
+		updatingTarget = null;
+		renderApp();
+	}
+}
+
+function renderUpdateNotifications() {
+	if (updateNotices.length === 0 && !updateFeedback) return "";
+	return html`
+		<div class="update-notifications" aria-live="polite">
+			${updateNotices.map((notice) => html`
+				<button
+					type="button"
+					class="update-notice"
+					data-update-target=${notice.target}
+					?disabled=${updatingTarget !== null}
+					@click=${() => { void handleUpdateClick(notice); }}
+				>
+					<span class="update-notice-icon" aria-hidden="true">
+						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+							<path d="M12 3v12"></path>
+							<path d="m7 10 5 5 5-5"></path>
+							<path d="M5 21h14"></path>
+						</svg>
+					</span>
+					<span class="update-notice-copy">
+						<strong>${updateNoticeTitle(notice)}</strong>
+						<small title=${updateNoticeDetail(notice)}>${updateNoticeDetail(notice)}</small>
+					</span>
+					<span class="update-notice-action">
+						${updatingTarget === notice.target ? "Updating…" : "Update"}
+					</span>
+				</button>
+			`)}
+			${updateFeedback ? html`
+				<div class="update-feedback is-${updateFeedback.kind}" role=${updateFeedback.kind === "error" ? "alert" : "status"}>
+					<span>${updateFeedback.message}</span>
+					<button type="button" @click=${() => { updateFeedback = null; renderApp(); }} aria-label="Dismiss update message">×</button>
+				</div>
+			` : ""}
+		</div>
+	`;
+}
+
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
@@ -510,6 +598,7 @@ const renderApp = () => {
 							</div>
 						`
 						: ""}
+					${renderUpdateNotifications()}
 					${state?.error
 						? html`
 							<div class="flex items-center gap-2 px-4 py-1.5 bg-red-500/15 border-b border-red-500/30 text-sm text-red-700 dark:text-red-400" title=${state.error}>
@@ -846,6 +935,7 @@ async function initApp() {
 	}
 
 	renderApp();
+	void refreshUpdateNotices();
 
 	prefetchedSessions = undefined;
 

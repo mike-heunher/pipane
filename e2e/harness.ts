@@ -242,6 +242,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 			...sanitizedEnv,
 			PORT: "0",
 			PIPANE_INSTANCE_ID: instanceId,
+			PIPANE_SKIP_UPDATE_CHECK: "1",
 			PI_CWD: projectDir,
 			PI_CODING_AGENT_DIR: agentDir,
 			PI_CLI: path.resolve(import.meta.dirname, "../node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),

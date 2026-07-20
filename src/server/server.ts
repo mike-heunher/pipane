@@ -30,8 +30,9 @@ import { SessionRegistry } from "./session-registry.js";
 import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
 import { LocalSettingsStore } from "./local-settings.js";
-import { fetchLatestVersion, compareSemver } from "./update-check.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
+import { UpdateManager } from "./update-manager.js";
+import { registerUpdateApi } from "./update-api.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -257,6 +258,18 @@ const wsHandler = new WsHandler({
 // Register WS handler
 wsHandler.register(wss);
 
+const updateManager = new UpdateManager({
+	pipaneVersion: PKG_VERSION,
+	pipanePackageName: PKG_NAME,
+	piLaunch: PI_LAUNCH,
+	cwd: PI_CWD,
+	onPiRuntimeChanged: async () => {
+		pool.decommissionAll();
+		if (wsHandler.isPiAvailable) await pool.prewarm(PI_CWD);
+	},
+});
+registerUpdateApi(app, updateManager);
+
 // ============================================================================
 // Debug endpoints
 // ============================================================================
@@ -370,7 +383,7 @@ if (PI_AVAILABLE) {
 	console.log(`[pi] ${makePiNotFoundMessage(PI_LAUNCH.command)}`);
 }
 
-server.listen(REQUESTED_PORT, async () => {
+server.listen(REQUESTED_PORT, () => {
 	const address = server.address();
 	const port = address && typeof address !== "string" ? address.port : REQUESTED_PORT;
 	const authUrl = `http://${PUBLIC_HOSTNAME}:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
@@ -391,11 +404,22 @@ server.listen(REQUESTED_PORT, async () => {
 	}
 	log("");
 
-	// Non-blocking update check
-	const latest = await fetchLatestVersion(PKG_NAME);
-	if (latest && compareSemver(PKG_VERSION, latest) < 0) {
-		log(`  Update available: v${PKG_VERSION} → v${latest}`);
-		log(`  Run \`npm install -g ${PKG_NAME}\` to upgrade.`);
-		log("");
-	}
+	// The same asynchronous check feeds the web UI and preserves terminal hints.
+	void updateManager.check().then(({ notices }) => {
+		for (const notice of notices) {
+			if (notice.target === "pipane") {
+				log(`  Update available: v${notice.currentVersion} → v${notice.latestVersion}`);
+				log(`  Open pipane in the browser to install it, or run \`npm install -g ${PKG_NAME}\`.`);
+			} else if (notice.target === "pi") {
+				log(`  Pi update available: v${notice.currentVersion} → v${notice.latestVersion}`);
+				log("  Open pipane in the browser to install it, or run `pi update --self`.");
+			} else if (notice.packages?.length) {
+				log(`  Pi package updates available: ${notice.packages.join(", ")}`);
+				log("  Open pipane in the browser to install them, or run `pi update --extensions`.");
+			}
+			log("");
+		}
+	}).catch((error) => {
+		console.warn("[updates] Update check failed:", error);
+	});
 });
