@@ -332,13 +332,22 @@ test.use({
 test.skip(!process.env.RUN_WALKTHROUGH, "Skipped unless RUN_WALKTHROUGH=1 is set");
 
 let server: RealServer;
+let activeRecorder: ScreenRecorder | undefined;
 
 test.beforeAll(async () => {
+	// Fail before starting a real model run if media encoding is unavailable.
+	execSync("ffmpeg -version", { stdio: "ignore" });
 	server = await startRealServer();
 }, 60000);
 
 test.afterAll(async () => {
 	await server?.close();
+});
+
+test.afterEach(async () => {
+	await activeRecorder?.stop();
+	activeRecorder?.cleanup();
+	activeRecorder = undefined;
 });
 
 test("walkthrough — build todo app + parallel bash counter", async ({ page }) => {
@@ -349,6 +358,7 @@ test("walkthrough — build todo app + parallel bash counter", async ({ page }) 
 
 	const framesDir = path.join("/tmp", `pi-walkthrough-frames-${Date.now()}`);
 	const recorder = new ScreenRecorder(page, framesDir);
+	activeRecorder = recorder;
 
 	// Force dark + gruvbox theme
 	await page.addInitScript(() => {
@@ -363,13 +373,24 @@ test("walkthrough — build todo app + parallel bash counter", async ({ page }) 
 	await expect(editor).toBeVisible({ timeout: 15000 });
 	await expect(editor.locator("textarea").first()).toBeEnabled({ timeout: 10000 });
 
-	// The page may auto-load a seeded session — create a fresh one
-	await page.waitForTimeout(500);
-	await page.evaluate(() => {
+	// Wait for initial seeded-session restoration to finish before replacing it.
+	// Otherwise the late auto-load can race and overwrite the virtual session.
+	await page.waitForFunction(() => {
 		const picker = document.querySelector("session-picker") as any;
-		if (picker?.agent) picker.agent.newSession();
+		const itemCount = picker?.shadowRoot?.querySelectorAll(".session-item")?.length ?? 0;
+		return itemCount > 0 && !!picker?.agent?.sessionFile;
 	});
-	await page.waitForTimeout(500);
+	await page.evaluate(async (cwd) => {
+		const picker = document.querySelector("session-picker") as any;
+		await picker.agent.newSession(cwd);
+	}, server.projectDir);
+	await page.waitForFunction((cwd) => {
+		const agent = (document.querySelector("session-picker") as any)?.agent;
+		return agent?.sessionStatus === "virtual"
+			&& agent?.cwd === cwd
+			&& !agent?.sessionFile
+			&& agent?.state?.messages?.length === 0;
+	}, server.projectDir);
 
 	/** Type text character by character with a natural delay. */
 	async function typeNaturally(text: string, delayMs = 40) {
@@ -382,15 +403,24 @@ test("walkthrough — build todo app + parallel bash counter", async ({ page }) 
 	// Pause — let viewer see the empty state
 	await page.waitForTimeout(2000);
 
-	// ── Session 1: Build a React Todo App ─────────────────────────
-	await typeNaturally("Check out https://github.com/badlogic/pi-mono/tree/main into cwd and change the input box in pi-web to also have a stop button.");
+	// ── Session 1: Build a Todo App ───────────────────────────────
+	await typeNaturally("Build a polished single-page todo app in the current directory using index.html, styles.css, and app.js. Use tools to create the files, then briefly summarize what you built. Do not start a server.");
 	await page.waitForTimeout(800);
 	await editor.locator("textarea").first().press("Enter");
 
-	// Wait for assistant to start responding (tool calls or text)
-	await expect(page.locator("assistant-message, tool-message").first()).toBeVisible({ timeout: 30000 });
+	await page.waitForFunction((cwd) => {
+		const agent = (document.querySelector("session-picker") as any)?.agent;
+		return agent?.sessionStatus !== "virtual" && agent?.cwd === cwd && !!agent?.sessionFile;
+	}, server.projectDir, { timeout: 30_000 });
+	const sessionOnePath = await page.evaluate(() =>
+		(document.querySelector("session-picker") as any).agent.sessionFile as string,
+	);
 
-	// Wait for some tool use or code to appear — give the model time to work
+	// This task must visibly exercise tools; an error-only response is not media.
+	await expect(page.locator("tool-message").first()).toBeVisible({ timeout: 60_000 });
+	await expect.poll(() => page.evaluate(() =>
+		(document.querySelector("session-picker") as any)?.agent?.state?.error,
+	)).toBeFalsy();
 	await page.waitForTimeout(8000);
 
 	// ── Hero screenshot ───────────────────────────────────────────
@@ -402,54 +432,61 @@ test("walkthrough — build todo app + parallel bash counter", async ({ page }) 
 	await page.waitForTimeout(5000);
 
 	// ── Session 2: Parallel bash counter ──────────────────────────
-	await page.evaluate(() => {
+	await page.evaluate(async (cwd) => {
 		const picker = document.querySelector("session-picker") as any;
-		if (picker?.agent) picker.agent.newSession();
-	});
-	await page.waitForTimeout(800);
+		await picker.agent.newSession(cwd);
+	}, server.projectDir);
+	await page.waitForFunction((cwd) => {
+		const agent = (document.querySelector("session-picker") as any)?.agent;
+		return agent?.sessionStatus === "virtual" && agent?.cwd === cwd && !agent?.sessionFile;
+	}, server.projectDir);
 
 	await expect(editor.locator("textarea").first()).toBeEnabled({ timeout: 5000 });
 	await typeNaturally("Count from 1 to 100 in bash, with a small sleep between each number");
 	await page.waitForTimeout(800);
 	await editor.locator("textarea").first().press("Enter");
-
-	// Watch session 2 work for a bit
-	await page.waitForTimeout(5000);
-
-	// ── Switch back to Session 1 ──────────────────────────────────
-	await page.evaluate(() => {
-		const picker = document.querySelector("session-picker") as any;
-		const items = picker?.shadowRoot?.querySelectorAll(".session-item");
-		if (items?.length > 0) items[0].click();
-	});
-	await page.waitForTimeout(4000);
-
-	// ── Switch to Session 2 ───────────────────────────────────────
-	await page.evaluate(() => {
-		const picker = document.querySelector("session-picker") as any;
-		const items = picker?.shadowRoot?.querySelectorAll(".session-item");
-		if (items?.length > 1) items[1].click();
-	});
-	await page.waitForTimeout(4000);
-
-	// ── Switch back to Session 1 ──────────────────────────────────
-	await page.evaluate(() => {
-		const picker = document.querySelector("session-picker") as any;
-		const items = picker?.shadowRoot?.querySelectorAll(".session-item");
-		if (items?.length > 0) items[0].click();
-	});
-	await page.waitForTimeout(4000);
-
-	// ── Wait for session 1 to finish ──────────────────────────────
-	await page.waitForFunction(
-		() => {
-			const editor = document.querySelector("message-editor") as any;
-			const textarea = editor?.shadowRoot?.querySelector("textarea") ?? editor?.querySelector("textarea");
-			return textarea && !textarea.disabled;
-		},
-		null,
-		{ timeout: 120000 },
+	await page.waitForFunction(([cwd, firstPath]) => {
+		const agent = (document.querySelector("session-picker") as any)?.agent;
+		return agent?.sessionStatus !== "virtual"
+			&& agent?.cwd === cwd
+			&& !!agent?.sessionFile
+			&& agent.sessionFile !== firstPath;
+	}, [server.projectDir, sessionOnePath], { timeout: 30_000 });
+	const sessionTwoPath = await page.evaluate(() =>
+		(document.querySelector("session-picker") as any).agent.sessionFile as string,
 	);
+
+	const switchToSession = async (sessionPath: string) => {
+		await page.evaluate(async (targetPath) => {
+			const picker = document.querySelector("session-picker") as any;
+			await picker.agent.switchSession(targetPath);
+		}, sessionPath);
+		await page.waitForFunction((targetPath) => {
+			const agent = (document.querySelector("session-picker") as any)?.agent;
+			return agent?.sessionFile === targetPath && agent?.state?.messages?.length > 0;
+		}, sessionPath);
+	};
+
+	// Watch session 2 work for a bit, then demonstrate parallel navigation.
+	await page.waitForTimeout(5000);
+	await switchToSession(sessionOnePath);
+	await page.waitForTimeout(4000);
+	await switchToSession(sessionTwoPath);
+	await page.waitForTimeout(4000);
+	await switchToSession(sessionOnePath);
+	await page.waitForTimeout(4000);
+
+	// Wait for session 1 to settle and reject failed/error-only recordings.
+	await page.waitForFunction((targetPath) => {
+		const agent = (document.querySelector("session-picker") as any)?.agent;
+		return agent?.sessionFile === targetPath
+			&& agent?.getSessionStatus(targetPath) !== "running"
+			&& agent?.state?.isStreaming === false;
+	}, sessionOnePath, { timeout: 120_000 });
+	await expect.poll(() => page.evaluate(() =>
+		(document.querySelector("session-picker") as any)?.agent?.state?.error,
+	)).toBeFalsy();
+	await expect(page.getByText(/Prompt failed:/)).toHaveCount(0);
 	await page.waitForTimeout(2000);
 
 	// ── Final screenshot ──────────────────────────────────────────
@@ -468,6 +505,7 @@ test("walkthrough — build todo app + parallel bash counter", async ({ page }) 
 	console.log(`Captured ${recorder.frameCount} frames, encoding...`);
 	recorder.encode(outputPath);
 	recorder.cleanup();
+	activeRecorder = undefined;
 
 	// Convert MP4 -> GIF for README embedding
 	execSync(
