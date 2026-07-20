@@ -12,6 +12,7 @@ export interface ToolRenderer<TParams = any, TDetails = any> {
 		params: TParams | undefined,
 		result: ToolResultMessage<TDetails> | undefined,
 		isStreaming?: boolean,
+		runtime?: TemplateResult,
 	): ToolRenderResult;
 }
 
@@ -22,6 +23,7 @@ export interface FallbackToolRenderer {
 		params: any | undefined,
 		result: ToolResultMessage | undefined,
 		isStreaming?: boolean,
+		runtime?: TemplateResult,
 	): ToolRenderResult;
 }
 
@@ -49,10 +51,11 @@ export function renderTool(
 	params: any | undefined,
 	result: ToolResultMessage | undefined,
 	isStreaming?: boolean,
+	runtime?: TemplateResult,
 ): ToolRenderResult {
 	const renderer = getToolRenderer(toolName);
-	if (renderer) return renderer.render(params, result, isStreaming);
-	if (fallbackRenderer) return fallbackRenderer.render(toolName, params, result, isStreaming);
+	if (renderer) return renderer.render(params, result, isStreaming, runtime);
+	if (fallbackRenderer) return fallbackRenderer.render(toolName, params, result, isStreaming, runtime);
 
 	throw new Error(`No renderer registered for tool: ${toolName}`);
 }

@@ -601,6 +601,22 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.messages[1].role).toBe("assistant");
 		});
 
+		it("exposes server-authoritative tool timings", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+
+			await pushSessionState(adapter, {
+				toolCallTimings: {
+					"tool-1": { startedAt: 10_000, completedAt: 12_340 },
+				},
+			});
+
+			expect(adapter.toolCallTimings["tool-1"]).toEqual({
+				startedAt: 10_000,
+				completedAt: 12_340,
+			});
+		});
+
 		it("sets sessionStatus to attached when switching to a running session", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter } = setupWithSession(sessionPath);

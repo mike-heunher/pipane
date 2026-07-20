@@ -16,6 +16,7 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
+import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import {
 	clampThinkingLevel,
 	modelsMatch,
@@ -112,6 +113,7 @@ export class WsAgentAdapter {
 	 * Populated from the server's session_sync state.
 	 */
 	private _pendingToolCallIds = new Set<string>();
+	private _toolCallTimings: ToolCallTimings = {};
 
 	// ── Steering queue (per-session) ───────────────────────────────────────
 	/** Per-session steering queues keyed by session path. */
@@ -226,6 +228,10 @@ export class WsAgentAdapter {
 	/** Get pending tool call IDs */
 	get pendingToolCallIds(): ReadonlySet<string> {
 		return this._pendingToolCallIds;
+	}
+
+	get toolCallTimings(): Readonly<ToolCallTimings> {
+		return this._toolCallTimings;
 	}
 
 	get steeringQueue(): readonly string[] {
@@ -827,6 +833,7 @@ export class WsAgentAdapter {
 			this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
 		}
 		this._pendingToolCallIds = new Set(state.pendingToolCalls ?? []);
+		this._toolCallTimings = state.toolCallTimings ?? {};
 
 		this.applyAuthoritativeControlState(state.model, state.thinkingLevel);
 		if (Array.isArray(state.steeringQueue)) {
@@ -1542,6 +1549,7 @@ export class WsAgentAdapter {
 		this._state.messages = [];
 		this._state.isStreaming = false;
 		this._pendingToolCallIds.clear();
+		this._toolCallTimings = {};
 		this._syncJson = "";
 		this._syncHash = "";
 		this.clearSessionSyncQueue();
@@ -1591,6 +1599,7 @@ export class WsAgentAdapter {
 		this._state.messages = [];
 		this._state.isStreaming = false;
 		this._pendingToolCallIds.clear();
+		this._toolCallTimings = {};
 		this._syncJson = "";
 		this._syncHash = "";
 		this.clearSessionSyncQueue();

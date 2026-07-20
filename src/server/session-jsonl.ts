@@ -23,10 +23,34 @@ import {
 import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 import { createHash } from "node:crypto";
 import { computeSyncOp, type SyncOp } from "../shared/jsonl-sync.js";
+import type { ToolCallTimings } from "../shared/tool-runtime.js";
 
 /** Synchronous SHA-256 hash (server-only, uses node:crypto). */
 function computeHashSync(data: string): string {
 	return createHash("sha256").update(data, "utf8").digest("hex");
+}
+
+function messageTimestamp(message: AgentMessage): number | undefined {
+	const timestamp = (message as any).timestamp;
+	return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function inferToolCallTimings(messages: AgentMessage[]): ToolCallTimings {
+	const timings: ToolCallTimings = {};
+	for (const message of messages) {
+		if (message.role === "assistant") {
+			const startedAt = messageTimestamp(message);
+			if (startedAt === undefined) continue;
+			for (const part of message.content) {
+				if (part.type === "toolCall") timings[part.id] ??= { startedAt };
+			}
+		} else if (message.role === "toolResult") {
+			const completedAt = messageTimestamp(message);
+			const timing = timings[message.toolCallId];
+			if (timing && completedAt !== undefined) timing.completedAt = completedAt;
+		}
+	}
+	return timings;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -49,6 +73,8 @@ export interface SessionState {
 	isStreaming: boolean;
 	/** Set of tool call IDs currently executing */
 	pendingToolCalls: string[];
+	/** Server-observed execution boundaries, keyed by tool call ID. */
+	toolCallTimings: ToolCallTimings;
 	model: { provider: string; modelId: string } | null;
 	thinkingLevel: string;
 	steeringQueue: string[];
@@ -63,6 +89,7 @@ export class SessionJsonl {
 	private _streamMessage: AgentMessage | null = null;
 	private _pendingToolCalls: string[] = [];
 	private _partialToolResults: Record<string, any> = {};
+	private _toolCallTimings: ToolCallTimings;
 	private _model: { provider: string; modelId: string } | null;
 	private _thinkingLevel: string;
 	private _steeringQueue: string[] = [];
@@ -79,8 +106,10 @@ export class SessionJsonl {
 		messages: AgentMessage[];
 		model: { provider: string; modelId: string } | null;
 		thinkingLevel: string;
+		toolCallTimings?: ToolCallTimings;
 	}) {
 		this._messages = init.messages;
+		this._toolCallTimings = init.toolCallTimings ?? inferToolCallTimings(init.messages);
 		this._model = init.model;
 		this._thinkingLevel = init.thinkingLevel;
 
@@ -132,6 +161,13 @@ export class SessionJsonl {
 		this._streamMessage = null;
 		this._pendingToolCalls = [];
 		this._partialToolResults = {};
+		const inferredTimings = inferToolCallTimings(messages);
+		this._toolCallTimings = Object.fromEntries(
+			Object.keys(inferredTimings).map((id) => [
+				id,
+				{ ...inferredTimings[id], ...this._toolCallTimings[id] },
+			]),
+		);
 		this._version++;
 		this.rebuildJson();
 	}
@@ -195,6 +231,10 @@ export class SessionJsonl {
 				const toolCallId = (event as any).toolCallId as string;
 				if (toolCallId && !this._pendingToolCalls.includes(toolCallId)) {
 					this._pendingToolCalls = [...this._pendingToolCalls, toolCallId];
+					this._toolCallTimings = {
+						...this._toolCallTimings,
+						[toolCallId]: { startedAt: Date.now() },
+					};
 					this._version++;
 					this.rebuildJson();
 					return true;
@@ -218,6 +258,13 @@ export class SessionJsonl {
 				const toolCallId = (event as any).toolCallId as string;
 				if (toolCallId) {
 					this._pendingToolCalls = this._pendingToolCalls.filter(id => id !== toolCallId);
+					const timing = this._toolCallTimings[toolCallId];
+					if (timing && timing.completedAt === undefined) {
+						this._toolCallTimings = {
+							...this._toolCallTimings,
+							[toolCallId]: { ...timing, completedAt: Date.now() },
+						};
+					}
 					if (toolCallId in this._partialToolResults) {
 						const { [toolCallId]: _, ...rest } = this._partialToolResults;
 						this._partialToolResults = rest;
@@ -285,6 +332,7 @@ export class SessionJsonl {
 			messages,
 			isStreaming: true,
 			pendingToolCalls: this._pendingToolCalls,
+			toolCallTimings: this._toolCallTimings,
 			model: this._model,
 			thinkingLevel: this._thinkingLevel,
 			steeringQueue: this._steeringQueue,
@@ -316,14 +364,43 @@ export class SessionJsonl {
  * keeps the completed marker where the user ran /compact while still omitting
  * the older messages replaced by the summary.
  */
-export function buildSessionDisplayMessages(
+function buildSessionDisplayEntries(
 	entries: ReturnType<typeof parseSessionEntries>,
-): AgentMessage[] {
+): SessionEntry[] {
 	const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
 	const entryOrder = new Map(sessionEntries.map((entry, index) => [entry, index]));
 	return [...buildContextEntries(sessionEntries)]
-		.sort((left, right) => (entryOrder.get(left) ?? 0) - (entryOrder.get(right) ?? 0))
-		.flatMap(sessionEntryToContextMessages);
+		.sort((left, right) => (entryOrder.get(left) ?? 0) - (entryOrder.get(right) ?? 0));
+}
+
+export function buildSessionDisplayMessages(
+	entries: ReturnType<typeof parseSessionEntries>,
+): AgentMessage[] {
+	return buildSessionDisplayEntries(entries).flatMap(sessionEntryToContextMessages);
+}
+
+function buildSessionToolCallTimings(
+	entries: ReturnType<typeof parseSessionEntries>,
+): ToolCallTimings {
+	const timings: ToolCallTimings = {};
+	for (const entry of buildSessionDisplayEntries(entries)) {
+		if (entry.type !== "message") continue;
+		const entryTimestamp = new Date(entry.timestamp).getTime();
+		const timestamp = Number.isFinite(entryTimestamp)
+			? entryTimestamp
+			: messageTimestamp(entry.message);
+		if (timestamp === undefined) continue;
+
+		if (entry.message.role === "assistant") {
+			for (const part of entry.message.content) {
+				if (part.type === "toolCall") timings[part.id] ??= { startedAt: timestamp };
+			}
+		} else if (entry.message.role === "toolResult") {
+			const timing = timings[entry.message.toolCallId];
+			if (timing) timing.completedAt = timestamp;
+		}
+	}
+	return timings;
 }
 
 /**
@@ -333,6 +410,7 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 	let messages: AgentMessage[] = [];
 	let model: { provider: string; modelId: string } | null = null;
 	let thinkingLevel = "off";
+	let toolCallTimings: ToolCallTimings = {};
 
 	try {
 		if (existsSync(sessionPath)) {
@@ -341,6 +419,7 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 			const sessionEntries = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
 			const context = buildSessionContext(sessionEntries);
 			messages = buildSessionDisplayMessages(entries);
+			toolCallTimings = buildSessionToolCallTimings(entries);
 			model = context.model ?? null;
 			thinkingLevel = context.thinkingLevel ?? "off";
 		}
@@ -352,6 +431,7 @@ export function readSessionFromDisk(sessionPath: string): { json: string; hash: 
 		messages,
 		isStreaming: false,
 		pendingToolCalls: [],
+		toolCallTimings,
 		model,
 		thinkingLevel,
 		steeringQueue: [],

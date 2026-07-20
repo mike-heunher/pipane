@@ -10,6 +10,7 @@ export interface MockSessionState {
 	messages: any[];
 	isStreaming: boolean;
 	pendingToolCalls: string[];
+	toolCallTimings: Record<string, { startedAt: number; completedAt?: number }>;
 	model: { provider: string; modelId: string } | null;
 	thinkingLevel: string;
 	steeringQueue: string[];
@@ -41,6 +42,7 @@ function normalizeState(value: Partial<MockSessionState> | any[], model: any): M
 		messages: partial.messages ?? [],
 		isStreaming: partial.isStreaming ?? false,
 		pendingToolCalls: partial.pendingToolCalls ?? [],
+		toolCallTimings: partial.toolCallTimings ?? {},
 		model: partial.model === undefined ? compactModel(model) : partial.model,
 		thinkingLevel: partial.thinkingLevel ?? "off",
 		steeringQueue: partial.steeringQueue ?? [],

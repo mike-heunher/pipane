@@ -139,10 +139,22 @@ const toolMessages = [
 	},
 ];
 
+const completedToolCallTimings = {
+	t1: { startedAt: 10_000, completedAt: 12_340 },
+	t2: { startedAt: 20_000, completedAt: 20_860 },
+	t3: { startedAt: 30_000, completedAt: 31_250 },
+	t4: { startedAt: 40_000, completedAt: 63_400 },
+	t5: { startedAt: 70_000, completedAt: 72_180 },
+	t6: { startedAt: 80_000, completedAt: 80_640 },
+};
+
 function createMockServer(): Promise<MockPipaneServer> {
 	return startMockPipaneServer({
 		sessions,
-		states: Object.fromEntries(sessions.map((session) => [session.path, toolMessages])),
+		states: Object.fromEntries(sessions.map((session) => [session.path, {
+			messages: toolMessages,
+			toolCallTimings: completedToolCallTimings,
+		}])),
 		model: MOCK_MODEL,
 		sessionStatuses: { [SESSION_PATH_2]: "running" },
 		settings: {
@@ -353,6 +365,10 @@ test.describe("UI visual goldens", () => {
 			],
 			isStreaming: true,
 			pendingToolCalls: ["t-progress"],
+			toolCallTimings: {
+				...completedToolCallTimings,
+				"t-progress": { startedAt: Date.now() },
+			},
 			steeringQueue: [],
 		});
 
@@ -371,6 +387,9 @@ test.describe("UI visual goldens", () => {
 		const tools = page.locator("tool-message");
 		await expect(tools).toHaveCount(7);
 		await expect(page.getByText("npm run build", { exact: false }).last()).toBeVisible();
+		const runtime = tools.last().locator("tool-runtime");
+		const initialRuntime = await runtime.textContent();
+		await expect.poll(() => runtime.textContent()).not.toBe(initialRuntime);
 		await captureAndCompare(page, "tool-bash-in-progress.png");
 	});
 
@@ -381,6 +400,7 @@ test.describe("UI visual goldens", () => {
 			messages: toolMessages,
 			isStreaming: false,
 			pendingToolCalls: [],
+			toolCallTimings: completedToolCallTimings,
 			steeringQueue: [],
 		});
 		await page.goto(`http://localhost:${mock.port}`);

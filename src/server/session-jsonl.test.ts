@@ -8,7 +8,7 @@
  * @vitest-environment node
  */
 
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { SessionJsonl, readSessionFromDisk, type SessionState } from "./session-jsonl.js";
 import { applySyncOp, computeHash } from "../shared/jsonl-sync.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -204,6 +204,24 @@ describe("SessionJsonl", () => {
 			session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
 			const changed = session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
 			expect(changed).toBe(false);
+		});
+
+		it("records exact live tool execution boundaries", () => {
+			vi.useFakeTimers();
+			try {
+				vi.setSystemTime(new Date("2026-07-20T12:00:00.000Z"));
+				session.applyEvent({ type: "tool_execution_start", toolCallId: "tool_1" } as any);
+				vi.advanceTimersByTime(2_340);
+				session.applyEvent({ type: "tool_execution_end", toolCallId: "tool_1" } as any);
+
+				const timing = parse(session.json).toolCallTimings.tool_1;
+				expect(timing).toEqual({
+					startedAt: new Date("2026-07-20T12:00:00.000Z").getTime(),
+					completedAt: new Date("2026-07-20T12:00:02.340Z").getTime(),
+				});
+			} finally {
+				vi.useRealTimers();
+			}
 		});
 
 		it("tool_execution_update injects partial result as synthetic toolResult in messages", () => {
@@ -753,6 +771,31 @@ describe("readSessionFromDisk (jsonl version)", () => {
 
 		const expectedHash = await computeHash(result.json);
 		expect(result.hash).toBe(expectedHash);
+	});
+
+	it("derives persisted tool runtime from JSONL entry timestamps", () => {
+		const sessionPath = path.join(tmpDir, "tool-runtime.jsonl");
+		const entries = [
+			{ type: "session", version: 3, id: "root", cwd: "/tmp/project", timestamp: "2026-01-01T00:00:00.000Z" },
+			{
+				type: "message", id: "assistant", parentId: "root", timestamp: "2026-01-01T00:00:01.000Z",
+				message: {
+					role: "assistant", timestamp: 1,
+					content: [{ type: "toolCall", id: "tool-1", name: "Bash", arguments: { command: "sleep 2" } }],
+				},
+			},
+			{
+				type: "message", id: "result", parentId: "assistant", timestamp: "2026-01-01T00:00:03.340Z",
+				message: { role: "toolResult", toolCallId: "tool-1", toolName: "Bash", content: [], isError: false, timestamp: 2 },
+			},
+		];
+		writeFileSync(sessionPath, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+
+		const { state } = readSessionFromDisk(sessionPath);
+		expect(state.toolCallTimings["tool-1"]).toEqual({
+			startedAt: new Date("2026-01-01T00:00:01.000Z").getTime(),
+			completedAt: new Date("2026-01-01T00:00:03.340Z").getTime(),
+		});
 	});
 
 	it("places a completed compaction at its chronological timeline position", () => {

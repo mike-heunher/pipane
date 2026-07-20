@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "./index.js";
 import { MessageEditor } from "./components/MessageEditor.js";
 import { PiMessageList } from "./components/MessageList.js";
+import { formatToolRuntime, ToolRuntime } from "./components/Messages.js";
 import { ThinkingBlock } from "./components/ThinkingBlock.js";
 import { getToolRenderer, renderTool } from "./tool-registry.js";
 import { escapeStrikethrough } from "./utils/markdown.js";
@@ -175,6 +176,62 @@ describe("owned message and tool rendering", () => {
 		list.sessionPath = "/tmp/b.jsonl";
 		await list.updateComplete;
 		expect(list.querySelectorAll("user-message")).toHaveLength(2);
+	});
+
+	it("renders elapsed time in the output-card corner independently of usage", async () => {
+		const list = new PiMessageList();
+		list.messages = [
+			{
+				role: "assistant",
+				content: [{ type: "toolCall", id: "timed-call", name: "Bash", arguments: { command: "echo ok" } }],
+				timestamp: 1_000,
+				stopReason: "toolUse",
+			},
+			{
+				role: "toolResult",
+				toolCallId: "timed-call",
+				toolName: "Bash",
+				content: [{ type: "text", text: "ok" }],
+				isError: false,
+				timestamp: 3_340,
+			},
+		] as any;
+		list.toolCallTimings = {
+			"timed-call": { startedAt: 1_000, completedAt: 3_340 },
+		};
+		document.body.appendChild(list);
+		await list.updateComplete;
+		await settle();
+
+		const runtime = list.querySelector(".tool-runtime-card > tool-runtime");
+		expect(runtime?.textContent?.trim()).toBe("2.3s");
+		expect(list.querySelector(".px-4.mt-2.text-xs.text-muted-foreground")).toBeNull();
+	});
+
+	it("counts a running tool up live", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-07-20T12:00:05.000Z"));
+			const runtime = new ToolRuntime();
+			runtime.startedAt = Date.now() - 1_250;
+			runtime.running = true;
+			document.body.appendChild(runtime);
+			await runtime.updateComplete;
+			expect(runtime.textContent?.trim()).toBe("1.2s");
+
+			vi.advanceTimersByTime(200);
+			await runtime.updateComplete;
+			expect(runtime.textContent?.trim()).toBe("1.4s");
+			runtime.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("formats compact runtimes across minute and hour boundaries", () => {
+		expect(formatToolRuntime(23_499)).toBe("23.4s");
+		expect(formatToolRuntime(65_430)).toBe("1m 05.4s");
+		expect(formatToolRuntime(3_723_450)).toBe("1h 02m 03.4s");
 	});
 
 	it("normalizes tool names and owns the generic fallback", () => {

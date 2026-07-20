@@ -723,6 +723,81 @@ html, body {
 
 /* ── Ultra-dense tool blocks ────────────────────────────────────────────── */
 
+.tool-runtime-card {
+	position: relative;
+}
+
+.tool-runtime-card > tool-runtime {
+	position: absolute;
+	top: 0.48rem;
+	right: 0.55rem;
+	z-index: 1;
+	pointer-events: none;
+}
+
+.tool-runtime-card > .tool-body-scroll > pre {
+	padding-right: 4.75rem;
+}
+
+.tool-hdr > tool-runtime {
+	flex: 0 0 auto;
+	margin-left: auto;
+	padding-left: 0.5rem;
+}
+
+tool-runtime {
+	display: inline-flex;
+	align-items: center;
+	color: color-mix(in srgb, var(--muted-foreground, #7c6f64) 84%, transparent);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+	font-size: 0.625rem;
+	font-variant-numeric: tabular-nums;
+	font-weight: 500;
+	line-height: 1;
+	white-space: nowrap;
+}
+
+tool-runtime[running] {
+	color: color-mix(in srgb, var(--primary, #83a598) 76%, var(--muted-foreground, #7c6f64));
+}
+
+.tool-runtime-value {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.28rem;
+}
+
+.tool-runtime-clock {
+	position: relative;
+	display: inline-block;
+	width: 0.58rem;
+	height: 0.58rem;
+	border: 1px solid currentColor;
+	border-radius: 50%;
+	opacity: 0.9;
+}
+
+.tool-runtime-clock::before,
+.tool-runtime-clock::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 1px;
+	background: currentColor;
+	transform-origin: 50% 0;
+}
+
+.tool-runtime-clock::before {
+	height: 0.2rem;
+	transform: translate(-0.5px, -0.5px) rotate(180deg);
+}
+
+.tool-runtime-clock::after {
+	height: 0.16rem;
+	transform: translate(-0.5px, -0.5px) rotate(125deg);
+}
+
 .tool-header-label {
 	font-size: 0.6875rem; /* 11px */
 	line-height: 1.3;

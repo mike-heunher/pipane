@@ -541,6 +541,7 @@ const renderApp = () => {
 										.messages=${messages}
 										.isStreaming=${isStreaming}
 										.pendingToolCalls=${agent?.pendingToolCallIds ?? new Set()}
+										.toolCallTimings=${agent?.toolCallTimings ?? {}}
 										.sessionPath=${agent?.sessionFile ?? ""}
 										.initialCount=${messagesInitialCount}
 									></pi-message-list>

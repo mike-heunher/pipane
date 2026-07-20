@@ -1021,6 +1021,7 @@ export class WsHandler {
 			messages: state.messages,
 			model: state.model,
 			thinkingLevel: state.thinkingLevel,
+			toolCallTimings: state.toolCallTimings,
 		});
 	}
 
@@ -1091,6 +1092,7 @@ export class WsHandler {
 				disk.state.model = liveState.model;
 				disk.state.thinkingLevel = liveState.thinkingLevel;
 			}
+			disk.state.toolCallTimings = liveState.toolCallTimings;
 			disk.state.error = liveState.error;
 		}
 		const { json, hash } = serializeSessionState(disk.state);

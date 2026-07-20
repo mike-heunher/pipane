@@ -9,7 +9,7 @@ import { registerToolRenderer, setFallbackToolRenderer } from "./tool-registry.j
 import type { ToolRenderer, ToolRenderResult, FallbackToolRenderer } from "./tool-registry.js";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
-import { html } from "lit";
+import { html, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { ref } from "lit/directives/ref.js";
 import hljs from "highlight.js/lib/core";
@@ -299,7 +299,7 @@ function antiFlickerRef(el: Element | undefined) {
 class ReadRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
-	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
@@ -338,10 +338,13 @@ class ReadRenderer implements ToolRenderer {
 							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
 							<span class="tool-header-label text-muted-foreground font-mono">${headerLabel}</span>
 							${spinner}
+							${!hasBody ? runtime : ""}
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
-							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
+							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
+								</div>
 							</div>
 						</div>` : ""}
 					</div>
@@ -355,7 +358,7 @@ class ReadRenderer implements ToolRenderer {
 class WriteRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
-	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
@@ -398,10 +401,13 @@ class WriteRenderer implements ToolRenderer {
 							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
 							<span class="tool-header-label ${isError ? "text-destructive" : "text-muted-foreground"} font-mono truncate">${headerLabel}</span>
 							${spinner}
+							${!hasBody ? runtime : ""}
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
-							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-								<pre class="m-0 tool-body-code text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
+							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+									<pre class="m-0 tool-body-code text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
+								</div>
 							</div>
 						</div>` : ""}
 					</div>
@@ -443,7 +449,7 @@ function simpleDiff(oldText: string, newText: string): { lines: { type: "ctx" | 
 class EditRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
-	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
@@ -468,16 +474,20 @@ class EditRenderer implements ToolRenderer {
 		let diffBody: ReturnType<typeof html> | string = "";
 		if (hasDiff) {
 			const diff = simpleDiff(oldText, newText);
-			diffBody = html`<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-				<pre class="m-0 tool-body-code font-mono whitespace-pre-wrap">${diff.lines.map(l =>
-					l.type === "del" ? html`<span class="text-red-500 dark:text-red-400">- ${l.text}\n</span>`
-					: l.type === "add" ? html`<span class="text-green-500 dark:text-green-400">+ ${l.text}\n</span>`
-					: html`<span class="text-muted-foreground">  ${l.text}\n</span>`
-				)}</pre>
+			diffBody = html`<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+				${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+					<pre class="m-0 tool-body-code font-mono whitespace-pre-wrap">${diff.lines.map(l =>
+						l.type === "del" ? html`<span class="text-red-500 dark:text-red-400">- ${l.text}\n</span>`
+						: l.type === "add" ? html`<span class="text-green-500 dark:text-green-400">+ ${l.text}\n</span>`
+						: html`<span class="text-muted-foreground">  ${l.text}\n</span>`
+					)}</pre>
+				</div>
 			</div>`;
 		} else if (output && isError) {
-			diffBody = html`<div class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-				<pre class="m-0 tool-body-code text-destructive font-mono whitespace-pre-wrap">${output}</pre>
+			diffBody = html`<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+				${runtime}<div class="overflow-auto tool-body-scroll px-2 py-1.5">
+					<pre class="m-0 tool-body-code text-destructive font-mono whitespace-pre-wrap">${output}</pre>
+				</div>
 			</div>`;
 		}
 
@@ -495,6 +505,7 @@ class EditRenderer implements ToolRenderer {
 							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
 							<span class="tool-header-label text-muted-foreground font-mono">${headerLabel}</span>
 							${spinner}
+							${!hasBody ? runtime : ""}
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">${diffBody}</div>` : ""}
 					</div>
@@ -508,7 +519,7 @@ class EditRenderer implements ToolRenderer {
 class BashRenderer implements ToolRenderer {
 	private scrollPin = createScrollPin();
 
-	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result
 			? result.isError ? "error" : (isStreaming ? "inprogress" : "complete")
 			: "inprogress";
@@ -551,8 +562,10 @@ class BashRenderer implements ToolRenderer {
 							${spinner}
 						</div>
 						<div class="tool-body-collapsible">
-							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
+							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -564,7 +577,7 @@ class BashRenderer implements ToolRenderer {
 }
 
 class CanvasRenderer implements ToolRenderer {
-	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
@@ -575,8 +588,8 @@ class CanvasRenderer implements ToolRenderer {
 		if (pending) {
 			return {
 				content: html`
-					<div class="flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
-						<span class="inline-block animate-spin">${icon(Loader, "sm")}</span>
+					<div class="tool-runtime-card flex items-center gap-2 px-3 pr-20 py-1.5 rounded-md bg-muted text-xs text-muted-foreground">
+						${runtime}<span class="inline-block animate-spin">${icon(Loader, "sm")}</span>
 						<span>Preparing canvas…</span>
 					</div>
 				`,
@@ -588,7 +601,7 @@ class CanvasRenderer implements ToolRenderer {
 			const output = resultText(result);
 			return {
 				content: html`
-					<div class="px-3 py-1.5 text-xs text-destructive">${output || "Canvas error"}</div>
+					<div class="tool-runtime-card px-3 pr-20 py-1.5 rounded-md bg-muted text-xs text-destructive">${runtime}${output || "Canvas error"}</div>
 				`,
 				isCustom: true,
 			};
@@ -598,14 +611,16 @@ class CanvasRenderer implements ToolRenderer {
 
 		return {
 			content: html`
-				<button
-					@click=${() => { if (markdown) showCanvas(title, markdown); }}
-					class="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md border border-border bg-muted hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-					title="Show in canvas"
-				>
-					<span class="inline-flex text-muted-foreground">${icon(PanelRight, "sm")}</span>
-					<span>${title}</span>
-				</button>
+				<div class="tool-runtime-card inline-flex">
+					${runtime}<button
+						@click=${() => { if (markdown) showCanvas(title, markdown); }}
+						class="inline-flex items-center gap-1.5 px-2.5 pr-20 py-1 text-xs rounded-md border border-border bg-muted hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+						title="Show in canvas"
+					>
+						<span class="inline-flex text-muted-foreground">${icon(PanelRight, "sm")}</span>
+						<span>${title}</span>
+					</button>
+				</div>
 			`,
 			isCustom: true,
 		};
@@ -615,7 +630,7 @@ class CanvasRenderer implements ToolRenderer {
 class GenericFallbackRenderer implements FallbackToolRenderer {
 	private scrollPin = createScrollPin();
 
-	render(toolName: string, params: any, result: ToolResultMessage | undefined, isStreaming?: boolean): ToolRenderResult {
+	render(toolName: string, params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
 		this.scrollPin.streaming = state === "inprogress";
 
@@ -678,10 +693,13 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
 							<span class="tool-header-label text-muted-foreground font-mono truncate" title="${toolName}">${headerLabel}</span>
 							${spinner}
+							${!hasBody ? runtime : ""}
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
-							<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll bg-muted rounded-md mt-0.5 px-2 py-1.5">
-								<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : bodyContent}</pre>
+							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
+								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : bodyContent}</pre>
+								</div>
 							</div>
 						</div>` : ""}
 					</div>

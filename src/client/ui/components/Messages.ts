@@ -8,8 +8,9 @@ import type {
 } from "@earendil-works/pi-ai";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
-import { html, LitElement, type TemplateResult } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { html, LitElement, type PropertyValues, type TemplateResult } from "lit";
+import { customElement, property, state } from "lit/decorators.js";
+import type { ToolCallTiming, ToolCallTimings } from "../../../shared/tool-runtime.js";
 import { renderTool } from "../tool-registry.js";
 import { formatUsage } from "../utils/format.js";
 import { i18n } from "../utils/i18n.js";
@@ -81,10 +82,75 @@ export class UserMessage extends LitElement {
 	}
 }
 
+const TOOL_RUNTIME_TICK_MS = 100;
+
+export function formatToolRuntime(milliseconds: number): string {
+	const totalTenths = Math.floor(Math.max(0, milliseconds) / 100);
+	const hours = Math.floor(totalTenths / 36_000);
+	const minutes = Math.floor((totalTenths % 36_000) / 600);
+	const seconds = (totalTenths % 600) / 10;
+	if (hours > 0) return `${hours}h ${String(minutes).padStart(2, "0")}m ${seconds.toFixed(1).padStart(4, "0")}s`;
+	if (minutes > 0) return `${minutes}m ${seconds.toFixed(1).padStart(4, "0")}s`;
+	return `${seconds.toFixed(1)}s`;
+}
+
+@customElement("tool-runtime")
+export class ToolRuntime extends LitElement {
+	@property({ type: Number }) startedAt = 0;
+	@property({ type: Number }) completedAt?: number;
+	@property({ type: Boolean, reflect: true }) running = false;
+	@state() private now = Date.now();
+	private tickTimer?: number;
+
+	protected override createRenderRoot(): HTMLElement | DocumentFragment {
+		return this;
+	}
+
+	override connectedCallback(): void {
+		super.connectedCallback();
+		this.syncTimer();
+	}
+
+	protected override updated(changedProperties: PropertyValues<this>): void {
+		if (changedProperties.has("running") || changedProperties.has("startedAt")) this.syncTimer();
+	}
+
+	override disconnectedCallback(): void {
+		this.clearTimer();
+		super.disconnectedCallback();
+	}
+
+	private syncTimer(): void {
+		this.clearTimer();
+		if (this.running) {
+			this.tickTimer = window.setInterval(() => {
+				this.now = Date.now();
+			}, TOOL_RUNTIME_TICK_MS);
+		}
+	}
+
+	private clearTimer(): void {
+		if (this.tickTimer !== undefined) window.clearInterval(this.tickTimer);
+		this.tickTimer = undefined;
+	}
+
+	override render() {
+		if (!Number.isFinite(this.startedAt) || this.startedAt <= 0) return "";
+		const completedAt = Number.isFinite(this.completedAt) ? this.completedAt as number : this.now;
+		const elapsedMs = Math.max(0, (this.running ? this.now : completedAt) - this.startedAt);
+		const value = formatToolRuntime(elapsedMs);
+		const label = this.running ? `Running for ${value}` : `Completed in ${value}`;
+		return html`<span class="tool-runtime-value" aria-label=${label} title=${label}>
+			<span class="tool-runtime-clock" aria-hidden="true"></span>${value}
+		</span>`;
+	}
+}
+
 @customElement("assistant-message")
 export class AssistantMessage extends LitElement {
 	@property({ type: Object }) message!: AssistantMessageType;
 	@property({ type: Object }) pendingToolCalls?: ReadonlySet<string>;
+	@property({ type: Object }) toolCallTimings: Readonly<ToolCallTimings> = {};
 	@property({ type: Object }) toolResultsById?: Map<string, ToolResultMessageType>;
 	@property({ type: Boolean }) isStreaming: boolean = false;
 
@@ -117,6 +183,8 @@ export class AssistantMessage extends LitElement {
 						data-tool-call-id=${chunk.id}
 						.toolCall=${chunk}
 						.result=${result}
+						.timing=${this.toolCallTimings[chunk.id]}
+						.messageTimestamp=${this.message.timestamp}
 						.pending=${pending}
 						.aborted=${aborted}
 						.isStreaming=${this.isStreaming}
@@ -154,9 +222,13 @@ export class AssistantMessage extends LitElement {
 export class ToolMessage extends LitElement {
 	@property({ type: Object }) toolCall!: ToolCall;
 	@property({ type: Object }) result?: ToolResultMessageType;
+	@property({ type: Object }) timing?: ToolCallTiming;
+	@property({ type: Number }) messageTimestamp?: number;
 	@property({ type: Boolean }) pending: boolean = false;
 	@property({ type: Boolean }) aborted: boolean = false;
 	@property({ type: Boolean }) isStreaming: boolean = false;
+	private localStartedAt?: number;
+	private localCompletedAt?: number;
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -169,6 +241,31 @@ export class ToolMessage extends LitElement {
 
 	override render() {
 		const toolName = this.toolCall.name;
+		const serverStartedAt = this.timing?.startedAt;
+		if (this.pending && this.localStartedAt === undefined) this.localStartedAt = Date.now();
+		if (!this.pending && this.localStartedAt !== undefined && this.localCompletedAt === undefined) {
+			this.localCompletedAt = Date.now();
+		}
+
+		const completedMessageAt = typeof this.result?.timestamp === "number"
+			&& Number.isFinite(this.result.timestamp)
+			? this.result.timestamp
+			: undefined;
+		const historicalStartedAt = typeof this.messageTimestamp === "number"
+			&& Number.isFinite(this.messageTimestamp)
+			? this.messageTimestamp
+			: undefined;
+		const startedAt = typeof serverStartedAt === "number" && Number.isFinite(serverStartedAt)
+			? serverStartedAt
+			: this.localStartedAt ?? historicalStartedAt ?? Date.now();
+		const completedAt = typeof this.timing?.completedAt === "number" && Number.isFinite(this.timing.completedAt)
+			? this.timing.completedAt
+			: completedMessageAt ?? this.localCompletedAt;
+		const runtime = html`<tool-runtime
+			.startedAt=${startedAt}
+			.completedAt=${completedAt}
+			.running=${this.pending}
+		></tool-runtime>`;
 
 		// Render tool content (renderer handles errors and styling)
 		const result: ToolResultMessageType<any> | undefined = this.aborted
@@ -186,6 +283,7 @@ export class ToolMessage extends LitElement {
 			this.toolCall.arguments,
 			result,
 			!this.aborted && (this.isStreaming || this.pending),
+			runtime,
 		);
 
 		// Handle custom rendering (no card wrapper)
@@ -195,8 +293,8 @@ export class ToolMessage extends LitElement {
 
 		// Default: wrap in card
 		return html`
-			<div class="p-2.5 border border-border rounded-md bg-card text-card-foreground shadow-xs">
-				${renderResult.content}
+			<div class="tool-runtime-card p-2.5 pr-20 border border-border rounded-md bg-card text-card-foreground shadow-xs">
+				${runtime}${renderResult.content}
 			</div>
 		`;
 	}

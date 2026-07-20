@@ -16,6 +16,7 @@ import { html, LitElement, type PropertyValues, type TemplateResult } from "lit"
 import { customElement, property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ToolCallTimings } from "../../../shared/tool-runtime.js";
 import { renderMessage } from "../message-registry.js";
 import "./Messages.js";
 
@@ -24,6 +25,7 @@ export class PiMessageList extends LitElement {
 	@property({ type: Array }) messages: AgentMessage[] = [];
 	@property({ type: Boolean }) isStreaming = false;
 	@property({ type: Object }) pendingToolCalls: ReadonlySet<string> = new Set();
+	@property({ type: Object }) toolCallTimings: Readonly<ToolCallTimings> = {};
 	@property({ type: String }) sessionPath = "";
 	/** 0 disables truncation. */
 	@property({ type: Number }) initialCount = 0;
@@ -116,6 +118,7 @@ export class PiMessageList extends LitElement {
 						.message=${msg}
 						.isStreaming=${isThisMessageStreaming}
 						.pendingToolCalls=${this.pendingToolCalls}
+						.toolCallTimings=${this.toolCallTimings}
 						.toolResultsById=${toolResultsById}
 					></assistant-message>`,
 					messageIndex: index,
