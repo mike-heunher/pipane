@@ -17,6 +17,11 @@ interface RegisterRestApiOptions {
 	traceStore?: LoadTraceStore;
 	localSettingsStore?: LocalSettingsStore;
 	onLocalSettingsReloaded?: () => void;
+	runSessionMutation?: (
+		sessionPath: string,
+		operation: string,
+		mutation: () => Promise<void>,
+	) => Promise<void>;
 }
 
 let localSettingsStore: LocalSettingsStore;
@@ -195,7 +200,12 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				res.status(404).json({ error: "Session not found" });
 				return;
 			}
-			await unlink(sessionPath);
+			const remove = () => unlink(sessionPath);
+			if (options.runSessionMutation) {
+				await options.runSessionMutation(sessionPath, "delete session", remove);
+			} else {
+				await remove();
+			}
 			res.json({ success: true });
 		} catch (err: any) {
 			res.status(500).json({ error: err.message });

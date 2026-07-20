@@ -1,16 +1,9 @@
 /**
- * CWD-aware process pool for pi RPC processes.
+ * CWD-aware, leased process pool for pi RPC processes.
  *
- * Processes are grouped by cwd. When acquiring a process for a session,
- * the caller provides the session's cwd and gets a process that was
- * spawned in that directory. This ensures bash/read/edit/write tools
- * operate in the correct project directory.
- *
- * Features:
- * - Lazy spawning per-cwd with configurable pre-warming
- * - Readiness check via get_state RPC (replaces setTimeout(500) hack)
- * - Dead process cleanup on exit
- * - Global process cap
+ * The pool is the sole owner of process availability. Callers receive an
+ * idempotent lease instead of passing a separate busy set, so a process is
+ * reserved atomically before control returns to asynchronous application code.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -19,24 +12,18 @@ import { existsSync } from "node:fs";
 
 export interface RpcProcess {
 	id: number;
-	/** The cwd this process was spawned with */
 	cwd: string;
 	process: ChildProcess;
 	rl: readline.Interface;
 	pendingRequests: Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>;
 	requestId: number;
-	/** Timestamp of last successful RPC response */
 	lastResponseTime: number;
-	/** Recent stderr lines from this process (ring buffer) */
 	recentStderr: string[];
 }
 
 export interface PoolOptions {
-	/** Max total processes across all cwds. Default: 6 */
 	maxProcesses?: number;
-	/** Number of processes to pre-warm for the default cwd. Default: 2 */
 	prewarmCount?: number;
-	/** RPC timeout in ms. Default: 30000 */
 	rpcTimeout?: number;
 }
 
@@ -50,9 +37,34 @@ export interface SpawnConfig {
 export type RpcProcessEvent = Record<string, any>;
 export type RpcProcessEventListener = (proc: RpcProcess, event: RpcProcessEvent) => void;
 
+/** Exclusive ownership of one pooled process. */
+export class RpcProcessLease {
+	readonly process: RpcProcess;
+	private pool: ProcessPool;
+	private _released = false;
+
+	constructor(pool: ProcessPool, process: RpcProcess) {
+		this.pool = pool;
+		this.process = process;
+	}
+
+	get released(): boolean { return this._released; }
+
+	release(): void {
+		this.pool.releaseLease(this);
+	}
+
+	/** @internal */
+	markReleased(): void {
+		this._released = true;
+	}
+}
+
 export class ProcessPool {
-	/** All live processes, keyed by cwd */
 	private pools = new Map<string, RpcProcess[]>();
+	private leases = new Map<RpcProcess, RpcProcessLease>();
+	private decommissioning = new Set<RpcProcess>();
+	private finalizedProcesses = new WeakSet<RpcProcess>();
 	private nextProcId = 0;
 	private spawnConfig: SpawnConfig;
 	private maxProcesses: number;
@@ -72,16 +84,14 @@ export class ProcessPool {
 		this.onProcessExit = options?.onProcessExit;
 	}
 
-	/** Get the total count of live processes across all cwds */
 	get totalProcesses(): number {
 		let count = 0;
 		for (const procs of this.pools.values()) {
-			count += procs.filter((p) => p.process.exitCode === null).length;
+			count += procs.filter((proc) => proc.process.exitCode === null).length;
 		}
 		return count;
 	}
 
-	/** Subscribe to parsed non-response events from every process. */
 	subscribeEvents(listener: RpcProcessEventListener): () => void {
 		this.eventListeners.add(listener);
 		return () => this.eventListeners.delete(listener);
@@ -97,25 +107,25 @@ export class ProcessPool {
 		}
 	}
 
-	/** Get all processes (for debug endpoint) */
 	getAllProcesses(): RpcProcess[] {
 		const all: RpcProcess[] = [];
-		for (const procs of this.pools.values()) {
-			all.push(...procs);
-		}
+		for (const procs of this.pools.values()) all.push(...procs);
 		return all;
 	}
 
-	/** Return recent stderr lines for a process (tail). */
+	isLeased(proc: RpcProcess): boolean {
+		return this.leases.has(proc);
+	}
+
+	isDecommissioning(proc: RpcProcess): boolean {
+		return this.decommissioning.has(proc);
+	}
+
 	getRecentStderr(proc: RpcProcess, maxLines = 12): string[] {
 		if (!proc?.recentStderr?.length) return [];
 		return proc.recentStderr.slice(Math.max(0, proc.recentStderr.length - maxLines));
 	}
 
-	/**
-	 * Spawn a new RPC process for the given cwd.
-	 * Does not wait for readiness — call waitForReady() separately.
-	 */
 	spawn(cwd: string): RpcProcess {
 		if (!existsSync(cwd)) {
 			throw new Error(`Cannot spawn pi process: directory does not exist: ${cwd}`);
@@ -123,11 +133,7 @@ export class ProcessPool {
 
 		const procId = ++this.nextProcId;
 		console.log(`[pool] Spawning pi process #${procId} (cwd: ${cwd})...`);
-
-		// Strip NODE_ENV from the child environment so tools spawned by pi
-		// (e.g. bash) don't inherit pipane's "production" setting.
 		const { NODE_ENV: _, ...parentEnv } = process.env;
-
 		const baseArgs = typeof this.spawnConfig.baseArgs === "function"
 			? this.spawnConfig.baseArgs()
 			: this.spawnConfig.baseArgs;
@@ -153,7 +159,6 @@ export class ProcessPool {
 		});
 
 		const rl = readline.createInterface({ input: child.stdout!, terminal: false });
-
 		const proc: RpcProcess = {
 			id: procId,
 			cwd,
@@ -165,8 +170,6 @@ export class ProcessPool {
 			recentStderr,
 		};
 
-		// Parse each stdout record once. Responses resolve RPC calls; all other
-		// records are available to lifetime-long event subscribers.
 		rl.on("line", (line: string) => {
 			let data: any;
 			try {
@@ -174,7 +177,6 @@ export class ProcessPool {
 			} catch {
 				return;
 			}
-
 			if (data.type === "response") {
 				if (data.id && proc.pendingRequests.has(data.id)) {
 					const pending = proc.pendingRequests.get(data.id)!;
@@ -184,67 +186,49 @@ export class ProcessPool {
 				}
 				return;
 			}
-
 			this.emitEvent(proc, data);
 		});
 
 		child.on("error", (err) => {
 			console.error(`[pool] pi#${proc.id} spawn error: ${err.message}`);
-
-			// Remove from pool
-			const poolForCwd = this.pools.get(cwd);
-			if (poolForCwd) {
-				const idx = poolForCwd.indexOf(proc);
-				if (idx !== -1) poolForCwd.splice(idx, 1);
-				if (poolForCwd.length === 0) this.pools.delete(cwd);
-			}
-
-			// Reject any pending requests
-			for (const [, pending] of proc.pendingRequests) {
-				pending.reject(new Error(`pi process #${proc.id} failed to spawn: ${err.message}`));
-			}
-			proc.pendingRequests.clear();
-
-			this.onProcessExit?.(proc);
+			this.finalizeProcess(proc, new Error(`pi process #${proc.id} failed to spawn: ${err.message}`));
 		});
-
 		child.on("exit", (code) => {
 			console.log(`[pool] pi#${proc.id} exited (code ${code})`);
-
-			// Remove from pool
-			const poolForCwd = this.pools.get(cwd);
-			if (poolForCwd) {
-				const idx = poolForCwd.indexOf(proc);
-				if (idx !== -1) poolForCwd.splice(idx, 1);
-				if (poolForCwd.length === 0) this.pools.delete(cwd);
-			}
-
-			// Reject any pending requests
-			for (const [, pending] of proc.pendingRequests) {
-				pending.reject(new Error(`pi process #${proc.id} exited unexpectedly (code ${code})`));
-			}
-			proc.pendingRequests.clear();
-
-			// Notify caller
-			this.onProcessExit?.(proc);
+			this.finalizeProcess(proc, new Error(`pi process #${proc.id} exited unexpectedly (code ${code})`));
 		});
 
-		// Add to pool
 		let poolForCwd = this.pools.get(cwd);
 		if (!poolForCwd) {
 			poolForCwd = [];
 			this.pools.set(cwd, poolForCwd);
 		}
 		poolForCwd.push(proc);
-
 		console.log(`[pool] pi#${procId} spawned (total: ${this.totalProcesses})`);
 		return proc;
 	}
 
-	/**
-	 * Wait for a process to be ready by sending a get_state RPC.
-	 * Falls back to a timeout if the process doesn't respond.
-	 */
+	private finalizeProcess(proc: RpcProcess, error: Error): void {
+		if (this.finalizedProcesses.has(proc)) return;
+		this.finalizedProcesses.add(proc);
+
+		const poolForCwd = this.pools.get(proc.cwd);
+		if (poolForCwd) {
+			const index = poolForCwd.indexOf(proc);
+			if (index !== -1) poolForCwd.splice(index, 1);
+			if (poolForCwd.length === 0) this.pools.delete(proc.cwd);
+		}
+
+		const lease = this.leases.get(proc);
+		if (lease) lease.markReleased();
+		this.leases.delete(proc);
+		this.decommissioning.delete(proc);
+
+		for (const pending of proc.pendingRequests.values()) pending.reject(error);
+		proc.pendingRequests.clear();
+		this.onProcessExit?.(proc);
+	}
+
 	async waitForReady(proc: RpcProcess, timeoutMs = 5000): Promise<boolean> {
 		try {
 			await this.sendRpc(proc, { type: "get_state" }, timeoutMs);
@@ -254,101 +238,108 @@ export class ProcessPool {
 		}
 	}
 
-	/**
-	 * Get an idle process for the given cwd, or spawn one.
-	 * An "idle" process is one that's alive and not in the busySet.
-	 */
-	acquire(cwd: string, busySet: Set<RpcProcess>): RpcProcess | null {
+	/** Atomically reserve a matching process, spawning one when capacity allows. */
+	acquire(cwd: string): RpcProcessLease | null {
 		const poolForCwd = this.pools.get(cwd);
-		if (poolForCwd) {
-			const idle = poolForCwd.find((p) => p.process.exitCode === null && !busySet.has(p));
-			if (idle) return idle;
-		}
-
-		// Check global cap
-		if (this.totalProcesses >= this.maxProcesses) {
-			return null;
-		}
-
-		return this.spawn(cwd);
+		const idle = poolForCwd?.find((proc) => this.isAvailable(proc));
+		if (idle) return this.reserve(idle);
+		if (this.totalProcesses >= this.maxProcesses) return null;
+		return this.reserve(this.spawn(cwd));
 	}
 
-	/**
-	 * Get any live process (idle preferred). For model queries that don't
-	 * need a specific cwd.
-	 */
-	getAny(busySet: Set<RpcProcess>): RpcProcess | null {
-		// Prefer idle
+	/** Reserve any idle live process, regardless of cwd. */
+	acquireAny(): RpcProcessLease | null {
 		for (const procs of this.pools.values()) {
-			const idle = procs.find((p) => p.process.exitCode === null && !busySet.has(p));
-			if (idle) return idle;
-		}
-		// Fall back to any live process
-		for (const procs of this.pools.values()) {
-			const live = procs.find((p) => p.process.exitCode === null);
-			if (live) return live;
+			const idle = procs.find((proc) => this.isAvailable(proc));
+			if (idle) return this.reserve(idle);
 		}
 		return null;
 	}
 
-	/**
-	 * Evict one idle process from a different cwd to free capacity.
-	 * Returns the evicted process, or null if none can be evicted.
-	 */
-	evictIdleDifferentCwd(targetCwd: string, busySet: Set<RpcProcess>): RpcProcess | null {
+	private isAvailable(proc: RpcProcess): boolean {
+		return proc.process.exitCode === null
+			&& !this.leases.has(proc)
+			&& !this.decommissioning.has(proc);
+	}
+
+	private reserve(proc: RpcProcess): RpcProcessLease {
+		if (!this.isAvailable(proc)) throw new Error(`pi process #${proc.id} is not available`);
+		const lease = new RpcProcessLease(this, proc);
+		this.leases.set(proc, lease);
+		return lease;
+	}
+
+	/** @internal Called only by RpcProcessLease.release(). */
+	releaseLease(lease: RpcProcessLease): void {
+		if (lease.released) return;
+		const proc = lease.process;
+		if (this.leases.get(proc) !== lease) {
+			lease.markReleased();
+			return;
+		}
+		this.leases.delete(proc);
+		lease.markReleased();
+		if (this.decommissioning.has(proc) && proc.process.exitCode === null) {
+			// Keep the marker until the exit event removes the process. Otherwise a
+			// concurrent acquisition could lease the dying process before SIGTERM lands.
+			console.log(`[pool] Decommissioning pi#${proc.id} after completed operation`);
+			proc.process.kill("SIGTERM");
+		}
+	}
+
+	/** Evict an idle process from a different cwd to free capacity. */
+	evictIdleDifferentCwd(targetCwd: string): RpcProcess | null {
 		for (const [cwd, procs] of this.pools) {
 			if (cwd === targetCwd) continue;
-
-			const victim = procs.find((p) => p.process.exitCode === null && !busySet.has(p));
+			const victim = procs.find((proc) => this.isAvailable(proc));
 			if (!victim) continue;
-
 			console.log(`[pool] Evicting idle pi#${victim.id} from cwd ${cwd} to make room for ${targetCwd}`);
+			this.decommissioning.add(victim);
 			victim.process.kill("SIGTERM");
 			return victim;
 		}
 		return null;
 	}
 
-	/**
-	 * Pre-warm the pool with processes for the given cwd.
-	 */
-	/**
-	 * Pre-warm the pool with processes for the given cwd.
-	 * Spawns are staggered: each process must be ready (via get_state RPC)
-	 * before the next one is spawned. This prevents lock contention on
-	 * shared resources like auth.json during startup.
-	 */
+	/** Kill idle processes now and mark leased processes for kill on release. */
+	decommissionAll(): { killed: number; draining: number } {
+		let killed = 0;
+		let draining = 0;
+		for (const proc of this.getAllProcesses()) {
+			if (proc.process.exitCode !== null || this.decommissioning.has(proc)) continue;
+			this.decommissioning.add(proc);
+			if (this.leases.has(proc)) {
+				draining += 1;
+			} else {
+				proc.process.kill("SIGTERM");
+				killed += 1;
+			}
+		}
+		return { killed, draining };
+	}
+
 	async prewarm(cwd: string): Promise<void> {
-		const existing = this.pools.get(cwd)?.filter((p) => p.process.exitCode === null).length ?? 0;
+		const existing = this.pools.get(cwd)?.filter((proc) => proc.process.exitCode === null).length ?? 0;
 		const needed = Math.min(this.prewarmCount, this.maxProcesses) - existing;
 		for (let i = 0; i < needed; i++) {
 			if (this.totalProcesses >= this.maxProcesses) break;
 			const proc = this.spawn(cwd);
-			if (i < needed - 1) {
-				// Wait for this process to be ready before spawning the next one
-				await this.waitForReady(proc);
-			}
+			if (i < needed - 1) await this.waitForReady(proc);
 		}
 	}
 
-	/**
-	 * Send an RPC command to a process and wait for a response.
-	 */
 	sendRpc(proc: RpcProcess, command: any, timeoutMs?: number): Promise<any> {
 		if (!proc.process || proc.process.exitCode !== null) {
 			return Promise.reject(new Error("RPC process is dead"));
 		}
-
 		const timeout = timeoutMs ?? this.rpcTimeout;
 		const id = `req_${++proc.requestId}`;
 		const fullCommand = { ...command, id };
-
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				proc.pendingRequests.delete(id);
 				reject(new Error(`Timeout waiting for RPC response to ${command.type}`));
 			}, timeout);
-
 			proc.pendingRequests.set(id, {
 				resolve: (data: any) => {
 					clearTimeout(timer);
@@ -359,14 +350,10 @@ export class ProcessPool {
 					reject(err);
 				},
 			});
-
 			proc.process.stdin!.write(JSON.stringify(fullCommand) + "\n");
 		});
 	}
 
-	/**
-	 * Send an RPC command and throw if it fails.
-	 */
 	async sendRpcChecked(proc: RpcProcess, command: any): Promise<any> {
 		const response = await this.sendRpc(proc, command);
 		if (!response?.success) {
@@ -374,5 +361,4 @@ export class ProcessPool {
 		}
 		return response;
 	}
-
 }

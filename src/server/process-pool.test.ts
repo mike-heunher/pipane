@@ -3,7 +3,7 @@ import { ProcessPool, type RpcProcess, type SpawnConfig } from "./process-pool.j
 
 // We can't easily spawn real pi processes in tests, so we test the
 // pool logic with a mock spawn config that will fail to spawn. For
-// unit-testable logic (acquire selection, busySet filtering, caps),
+// unit-testable logic (lease selection, atomic reservation, caps),
 // we inject processes directly.
 
 function makeSpawnConfig(): SpawnConfig {
@@ -50,28 +50,23 @@ function createPoolWithMocks(options?: { maxProcesses?: number }) {
 }
 
 describe("ProcessPool", () => {
-	describe("acquire with cwd grouping", () => {
-		it("returns idle process for matching cwd", () => {
+	describe("leased acquisition with cwd grouping", () => {
+		it("atomically leases an idle process for the matching cwd", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc = injectProc("/project-a", 1);
 
-			const busy = new Set<RpcProcess>();
-			const result = pool.acquire("/project-a", busy);
+			const lease = pool.acquire("/project-a");
 
-			expect(result).toBe(proc);
+			expect(lease?.process).toBe(proc);
+			expect(pool.isLeased(proc)).toBe(true);
+			lease?.release();
+			expect(pool.isLeased(proc)).toBe(false);
 		});
 
-		it("does not return process from different cwd", () => {
-			const { pool, injectProc } = createPoolWithMocks();
-			injectProc("/project-a", 1);
-
-			const busy = new Set<RpcProcess>();
-			// Acquiring for /project-b should spawn a new one (or return null if at cap)
-			// Since we're using a mock spawn config, it would try to spawn — but for
-			// this test we set maxProcesses to 1 to force null
-			const pool2 = new ProcessPool(makeSpawnConfig(), { maxProcesses: 1 });
-			const poolsMap2 = (pool2 as any).pools as Map<string, RpcProcess[]>;
-			poolsMap2.set("/project-a", [{
+		it("does not return a process from a different cwd at capacity", () => {
+			const pool = new ProcessPool(makeSpawnConfig(), { maxProcesses: 1 });
+			const pools = (pool as any).pools as Map<string, RpcProcess[]>;
+			pools.set("/project-a", [{
 				id: 1,
 				cwd: "/project-a",
 				process: { exitCode: null } as any,
@@ -79,72 +74,61 @@ describe("ProcessPool", () => {
 				pendingRequests: new Map(),
 				requestId: 0,
 				lastResponseTime: Date.now(),
+				recentStderr: [],
 			} as RpcProcess]);
 
-			const result = pool2.acquire("/project-b", busy);
-			// At max capacity, can't spawn for project-b
-			expect(result).toBeNull();
+			expect(pool.acquire("/project-b")).toBeNull();
 		});
 
-		it("skips busy processes", () => {
+		it("never leases the same process twice", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc1 = injectProc("/project-a", 1);
 			const proc2 = injectProc("/project-a", 2);
 
-			const busy = new Set<RpcProcess>([proc1]);
-			const result = pool.acquire("/project-a", busy);
+			const first = pool.acquire("/project-a");
+			const second = pool.acquire("/project-a");
 
-			expect(result).toBe(proc2);
+			expect(first?.process).toBe(proc1);
+			expect(second?.process).toBe(proc2);
+			first?.release();
+			second?.release();
 		});
 
 		it("skips dead processes", () => {
 			const { pool, injectProc } = createPoolWithMocks();
-			injectProc("/project-a", 1, false); // dead
+			injectProc("/project-a", 1, false);
 			const proc2 = injectProc("/project-a", 2, true);
-
-			const busy = new Set<RpcProcess>();
-			const result = pool.acquire("/project-a", busy);
-
-			expect(result).toBe(proc2);
+			const lease = pool.acquire("/project-a");
+			expect(lease?.process).toBe(proc2);
+			lease?.release();
 		});
 	});
 
-	describe("getAny", () => {
-		it("returns any idle process across cwds", () => {
+	describe("acquireAny", () => {
+		it("leases any idle process across cwds", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc = injectProc("/project-a", 1);
-
-			const busy = new Set<RpcProcess>();
-			const result = pool.getAny(busy);
-
-			expect(result).toBe(proc);
+			const lease = pool.acquireAny();
+			expect(lease?.process).toBe(proc);
+			lease?.release();
 		});
 
-		it("prefers idle over busy", () => {
+		it("prefers an idle process and never falls back to a leased process", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc1 = injectProc("/project-a", 1);
 			const proc2 = injectProc("/project-b", 2);
-
-			const busy = new Set<RpcProcess>([proc1]);
-			const result = pool.getAny(busy);
-
-			expect(result).toBe(proc2);
-		});
-
-		it("falls back to busy process if no idle", () => {
-			const { pool, injectProc } = createPoolWithMocks();
-			const proc1 = injectProc("/project-a", 1);
-
-			const busy = new Set<RpcProcess>([proc1]);
-			const result = pool.getAny(busy);
-
-			expect(result).toBe(proc1);
+			const first = pool.acquire("/project-a");
+			const second = pool.acquireAny();
+			expect(first?.process).toBe(proc1);
+			expect(second?.process).toBe(proc2);
+			expect(pool.acquireAny()).toBeNull();
+			first?.release();
+			second?.release();
 		});
 
 		it("returns null when no live processes exist", () => {
 			const { pool } = createPoolWithMocks();
-			const result = pool.getAny(new Set());
-			expect(result).toBeNull();
+			expect(pool.acquireAny()).toBeNull();
 		});
 	});
 
@@ -280,36 +264,53 @@ describe("ProcessPool", () => {
 		});
 	});
 
-	describe("maxProcesses cap", () => {
-		it("returns null when at capacity for new cwd", () => {
+	describe("lease lifecycle and capacity", () => {
+		it("returns null when at capacity for a new cwd", () => {
 			const { pool, injectProc } = createPoolWithMocks({ maxProcesses: 2 });
 			injectProc("/project-a", 1);
 			injectProc("/project-b", 2);
+			expect(pool.acquire("/project-c")).toBeNull();
+		});
 
-			const result = pool.acquire("/project-c", new Set());
-			expect(result).toBeNull();
+		it("releases idempotently", () => {
+			const { pool, injectProc } = createPoolWithMocks();
+			const proc = injectProc("/project-a", 1);
+			const lease = pool.acquire("/project-a")!;
+			lease.release();
+			lease.release();
+			expect(pool.isLeased(proc)).toBe(false);
 		});
 	});
 
-	describe("evictIdleDifferentCwd", () => {
+	describe("eviction and decommission", () => {
 		it("evicts an idle process from another cwd", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const victim = injectProc("/project-a", 1);
 			injectProc("/project-b", 2);
-
-			const evicted = pool.evictIdleDifferentCwd("/project-b", new Set());
+			const evicted = pool.evictIdleDifferentCwd("/project-b");
 			expect(evicted).toBe(victim);
 			expect(victim.process.kill).toHaveBeenCalledWith("SIGTERM");
 		});
 
-		it("does not evict busy processes", () => {
+		it("does not evict a leased process", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const victim = injectProc("/project-a", 1);
 			injectProc("/project-b", 2);
-
-			const evicted = pool.evictIdleDifferentCwd("/project-b", new Set([victim]));
-			expect(evicted).toBeNull();
+			const lease = pool.acquire("/project-a")!;
+			expect(pool.evictIdleDifferentCwd("/project-b")).toBeNull();
 			expect(victim.process.kill).not.toHaveBeenCalled();
+			lease.release();
+		});
+
+		it("drains leased processes and kills them on release", () => {
+			const { pool, injectProc } = createPoolWithMocks();
+			const proc = injectProc("/project-a", 1);
+			const lease = pool.acquire("/project-a")!;
+			expect(pool.decommissionAll()).toEqual({ killed: 0, draining: 1 });
+			expect(proc.process.kill).not.toHaveBeenCalled();
+			lease.release();
+			expect(proc.process.kill).toHaveBeenCalledWith("SIGTERM");
+			expect(pool.acquireAny()).toBeNull();
 		});
 	});
 

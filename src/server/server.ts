@@ -9,10 +9,9 @@
  * switched to that session, and runs one turn. After the turn completes,
  * the process is released back to the pool.
  *
- * Session lifecycle is managed by SessionLifecycle (single source of truth
- * for session→process mappings and status). Process spawning and pooling
- * is handled by ProcessPool. The WsHandler routes WebSocket commands to
- * these modules.
+ * Each session is owned by a serialized SessionActor registered in
+ * SessionRegistry. ProcessPool owns exclusive process leases, and WsHandler
+ * only routes transport commands and publishes actor state.
  */
 
 import express, { type Request, type Response, type NextFunction } from "express";
@@ -27,7 +26,7 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { resolvePiLaunch } from "./pi-launch.js";
 import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
-import { SessionLifecycle } from "./session-lifecycle.js";
+import { SessionRegistry } from "./session-registry.js";
 import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
 import { LoadTraceStore } from "./load-trace-store.js";
@@ -176,6 +175,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 const traceStore = new LoadTraceStore();
 const localSettingsStore = new LocalSettingsStore();
+const registry = new SessionRegistry();
 
 app.use((req: Request, res: Response, next: NextFunction) => {
 	const traceId = typeof req.headers["x-pi-trace-id"] === "string" ? req.headers["x-pi-trace-id"] : "";
@@ -207,6 +207,13 @@ app.use(express.static(clientDist));
 registerRestApi(app, {
 	traceStore,
 	localSettingsStore,
+	runSessionMutation: (sessionPath, operation, mutation) => {
+		const actor = registry.get(sessionPath);
+		return actor.enqueue(operation, async () => {
+			actor.assertAvailable(operation);
+			await mutation();
+		});
+	},
 	onLocalSettingsReloaded: () => {
 		wss.clients.forEach((client) => {
 			if (client.readyState === WebSocket.OPEN) {
@@ -222,8 +229,6 @@ registerRestApi(app, {
 // ============================================================================
 // Core modules
 // ============================================================================
-
-const lifecycle = new SessionLifecycle();
 
 // Resolve bundled extension entrypoints once at startup.
 const canvasExtension = path.resolve(__dirname, "../../../extensions/canvas.ts");
@@ -258,7 +263,7 @@ const pool = new ProcessPool(
 );
 
 const wsHandler = new WsHandler({
-	lifecycle,
+	registry,
 	pool,
 	defaultCwd: PI_CWD,
 	piLaunch: PI_LAUNCH,
