@@ -16,6 +16,7 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { AgentEvent, AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import { getLoadTraceId, traceSpanStart, tracedFetch } from "./load-trace.js";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
+import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import {
 	clampThinkingLevel,
 	modelsMatch,
@@ -985,7 +986,11 @@ export class WsAgentAdapter {
 		const id = `req_${++this.requestId}`;
 		const endSpan = this.startTrace(`frontend_ws_command ${command.type}`);
 		return new Promise((resolve, reject) => {
-			const timeoutMs = command.type === "prompt" || command.type === "fork_prompt" ? 90000 : 30000;
+			const timeoutMs = command.type === "compact"
+				? COMPACT_CLIENT_TIMEOUT_MS
+				: command.type === "prompt" || command.type === "fork_prompt"
+					? 90000
+					: 30000;
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
 				endSpan();
@@ -1399,18 +1404,25 @@ export class WsAgentAdapter {
 			if (!this._sessionPath) return true;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
 			// Show a loading indicator while compaction runs (LLM summarization can take a while)
-			this._state.isStreaming = true;
-			this._state.messages = [...this._state.messages, {
+			const placeholder = {
 				role: "compactionSummary",
 				summary: "",
 				tokensBefore: 0,
 				timestamp: Date.now(),
 				_compacting: true,
-			} as any];
+			} as any;
+			this._state.isStreaming = true;
+			this._state.messages = [...this._state.messages, placeholder];
 			this.emitStatusChange();
 			this.emitContentChange();
 			try {
 				await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
+			} catch (error) {
+				// Do not leave an optimistic "compacting…" row spinning forever when
+				// the command fails before an authoritative snapshot replaces it.
+				this._state.messages = this._state.messages.filter((message) => message !== placeholder);
+				this.emitContentChange();
+				throw error;
 			} finally {
 				this._state.isStreaming = false;
 				this.emitStatusChange();

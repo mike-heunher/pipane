@@ -163,6 +163,28 @@ describe("ProcessPool", () => {
 			await expect(pool.sendRpc(proc, { type: "test" })).rejects.toThrow("RPC process is dead");
 		});
 
+		it("decommissions a leased process after an RPC timeout", async () => {
+			vi.useFakeTimers();
+			try {
+				const { pool, injectProc } = createPoolWithMocks();
+				const proc = injectProc("/project-a", 1);
+				const lease = pool.acquire("/project-a")!;
+				const rejection = expect(pool.sendRpc(proc, { type: "compact" }, 1000))
+					.rejects.toThrow("Timeout waiting for RPC response to compact");
+
+				await vi.advanceTimersByTimeAsync(1000);
+				await rejection;
+
+				expect(pool.isDecommissioning(proc)).toBe(true);
+				expect(proc.process.kill).not.toHaveBeenCalled();
+				lease.release();
+				expect(proc.process.kill).toHaveBeenCalledWith("SIGTERM");
+				expect(pool.acquireAny()).toBeNull();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("sends command and resolves on response", async () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc = injectProc("/project-a", 1);

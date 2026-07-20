@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { SessionJsonl } from "./session-jsonl.js";
 import { SessionRegistry } from "./session-registry.js";
+import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import { WsHandler } from "./ws-handler.js";
 
 function makeHandler(overrides: Record<string, any> = {}) {
@@ -172,6 +173,29 @@ describe("WsHandler actor orchestration", () => {
 		await expect(handler.handleCompact(ws, "req_2", { sessionPath: actor.sessionPath }))
 			.rejects.toThrow("Cannot compact while session turn is starting");
 		expect(pool.sendRpc).not.toHaveBeenCalled();
+	});
+
+	it("keeps the compact RPC pending for long-running summarization", async () => {
+		const sendRpc = vi.fn(async () => ({ success: true, data: { tokensBefore: 375137 } }));
+		const { handler, registry } = makeHandler({ sendRpc });
+		const proc = { id: 30 };
+		const { actor, release } = attachActor(registry, "/tmp/compact.jsonl", proc);
+		const { ws, sent } = makeWs();
+
+		await handler.handleCompact(ws, "req_compact", { sessionPath: actor.sessionPath });
+
+		expect(sendRpc).toHaveBeenCalledWith(
+			proc,
+			{ type: "compact", customInstructions: undefined },
+			COMPACT_RPC_TIMEOUT_MS,
+		);
+		expect(COMPACT_RPC_TIMEOUT_MS).toBeGreaterThan(55_000);
+		expect(release).toHaveBeenCalledOnce();
+		expect(sent).toContainEqual(expect.objectContaining({
+			id: "req_compact",
+			command: "compact",
+			success: true,
+		}));
 	});
 
 	it("rejects fork-and-prompt while the source session is running", async () => {

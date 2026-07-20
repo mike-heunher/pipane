@@ -287,6 +287,14 @@ export class ProcessPool {
 		}
 	}
 
+	private decommission(proc: RpcProcess): "ignored" | "draining" | "killed" {
+		if (proc.process.exitCode !== null || this.decommissioning.has(proc)) return "ignored";
+		this.decommissioning.add(proc);
+		if (this.leases.has(proc)) return "draining";
+		proc.process.kill("SIGTERM");
+		return "killed";
+	}
+
 	/** Evict an idle process from a different cwd to free capacity. */
 	evictIdleDifferentCwd(targetCwd: string): RpcProcess | null {
 		for (const [cwd, procs] of this.pools) {
@@ -294,8 +302,7 @@ export class ProcessPool {
 			const victim = procs.find((proc) => this.isAvailable(proc));
 			if (!victim) continue;
 			console.log(`[pool] Evicting idle pi#${victim.id} from cwd ${cwd} to make room for ${targetCwd}`);
-			this.decommissioning.add(victim);
-			victim.process.kill("SIGTERM");
+			this.decommission(victim);
 			return victim;
 		}
 		return null;
@@ -306,14 +313,9 @@ export class ProcessPool {
 		let killed = 0;
 		let draining = 0;
 		for (const proc of this.getAllProcesses()) {
-			if (proc.process.exitCode !== null || this.decommissioning.has(proc)) continue;
-			this.decommissioning.add(proc);
-			if (this.leases.has(proc)) {
-				draining += 1;
-			} else {
-				proc.process.kill("SIGTERM");
-				killed += 1;
-			}
+			const result = this.decommission(proc);
+			if (result === "killed") killed += 1;
+			if (result === "draining") draining += 1;
 		}
 		return { killed, draining };
 	}
@@ -338,6 +340,9 @@ export class ProcessPool {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				proc.pendingRequests.delete(id);
+				// A timed-out RPC may still be executing. Never return that process to
+				// the idle pool where a new session command could overlap with it.
+				this.decommission(proc);
 				reject(new Error(`Timeout waiting for RPC response to ${command.type}`));
 			}, timeout);
 			proc.pendingRequests.set(id, {

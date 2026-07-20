@@ -30,6 +30,7 @@ import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import type { LoadTraceStore } from "./load-trace-store.js";
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
+import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ExtensionStatusMessage, ProviderUsageMessage } from "../shared/ws-protocol.js";
 import {
 	extensionStatusSnapshot,
@@ -698,7 +699,14 @@ export class WsHandler {
 			actor.assertAvailable("compact");
 			const proc = await this.acquireForActor(actor);
 			try {
-				return await this.pool.sendRpc(proc, { type: "compact", customInstructions: command.customInstructions });
+				// Pi returns only after the summarization model call and session write.
+				// The generic 30s RPC timeout can expire while compaction is healthy,
+				// causing its eventual response and compaction_end event to be orphaned.
+				return await this.pool.sendRpc(
+					proc,
+					{ type: "compact", customInstructions: command.customInstructions },
+					COMPACT_RPC_TIMEOUT_MS,
+				);
 			} finally {
 				this.releaseActor(actor);
 			}

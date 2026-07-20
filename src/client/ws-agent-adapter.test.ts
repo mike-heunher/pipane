@@ -1091,6 +1091,59 @@ describe("WsAgentAdapter prompt routing", () => {
 	});
 
 	describe("slash commands", () => {
+		it("keeps /compact pending beyond the generic 30-second command timeout", async () => {
+			vi.useFakeTimers();
+			try {
+				const sessionPath = "/tmp/sessions/session-a.jsonl";
+				const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
+				let compactRequest: any;
+				(mockWs.send as any).mockImplementation((raw: string) => {
+					const command = JSON.parse(raw);
+					if (command.type === "compact") {
+						compactRequest = command;
+						return;
+					}
+					simulateServerMessage({ type: "response", id: command.id, success: true, data: {} });
+				});
+				const settled = vi.fn();
+
+				const compacting = adapter.prompt("/compact").then(settled);
+				await vi.advanceTimersByTimeAsync(30_001);
+
+				expect(compactRequest?.type).toBe("compact");
+				expect(settled).not.toHaveBeenCalled();
+				simulateServerMessage({
+					type: "response",
+					id: compactRequest.id,
+					success: true,
+					data: {},
+				});
+				await compacting;
+				expect(settled).toHaveBeenCalledOnce();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("removes the optimistic compaction row when /compact fails", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				simulateServerMessage({
+					type: "response",
+					id: command.id,
+					success: false,
+					error: "Compaction failed",
+				});
+			});
+
+			await expect(adapter.prompt("/compact")).rejects.toThrow("Compaction failed");
+
+			expect(adapter.state.isStreaming).toBe(false);
+			expect(adapter.state.messages).not.toContainEqual(expect.objectContaining({ _compacting: true }));
+		});
+
 		it("/reload sends reload_processes, does not send a prompt, and adds a confirmation message", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, sent } = setupWithSession(sessionPath);
