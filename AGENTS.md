@@ -4,6 +4,8 @@
 
 Once a change is finished, solid, and verified, commit it to Git rather than leaving completed work uncommitted. Do not commit partial or known-broken work.
 
+For every fixed bug or added/improved feature, add one line under `Unreleased` in `changelog.md`; when cutting a release, move those entries under a dated release heading and leave `Unreleased` empty.
+
 ## Testing
 
 Run the canonical full verification before committing:
