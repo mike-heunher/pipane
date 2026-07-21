@@ -297,6 +297,57 @@ test.describe("Real stack e2e", () => {
 		await expect(page.getByText("dot_3", { exact: false }).first()).toBeVisible({ timeout: 10000 });
 	});
 
+	test("user scroll position survives streaming Bash output", async ({ page, harness }) => {
+		harness.setScenarios([
+			{
+				match: "stream enough output to scroll",
+				hasToolResults: false,
+				chunks: toolCallChunks(
+					"call_bash_scroll",
+					"bash",
+					{ command: "for i in $(seq 1 40); do echo scroll_line_$i; sleep 0.05; done" },
+				),
+			},
+			{
+				match: /.*/,
+				hasToolResults: true,
+				chunks: textChunks("Finished the scroll stream."),
+			},
+		]);
+
+		await gotoFreshSession(page, harness);
+		await page.addStyleTag({
+			content: "#chat-scroll-area > div { padding-top: 1800px !important; }",
+		});
+
+		const textarea = page.locator("message-editor textarea").first();
+		await textarea.fill("stream enough output to scroll");
+		await textarea.press("Enter");
+
+		const output = page.locator("tool-message .tool-body-scroll").first();
+		await expect(output).toContainText("scroll_line_3", { timeout: 15000 });
+
+		const scrollArea = page.locator("#chat-scroll-area");
+		const bounds = await scrollArea.boundingBox();
+		expect(bounds).not.toBeNull();
+		await page.mouse.move(bounds!.x + 20, bounds!.y + 100);
+		await page.mouse.wheel(0, -700);
+		await expect.poll(() => scrollArea.evaluate((element) =>
+			element.scrollHeight - element.scrollTop - element.clientHeight,
+		)).toBeGreaterThan(100);
+
+		await expect(output).toContainText("scroll_line_30", { timeout: 15000 });
+		const distanceAfterMoreOutput = await scrollArea.evaluate((element) =>
+			element.scrollHeight - element.scrollTop - element.clientHeight,
+		);
+		expect(distanceAfterMoreOutput).toBeGreaterThan(100);
+
+		await expect(page.getByText("Finished the scroll stream.", { exact: true })).toBeVisible({ timeout: 15000 });
+		await expect.poll(() => scrollArea.evaluate((element) =>
+			element.scrollHeight - element.scrollTop - element.clientHeight,
+		)).toBeGreaterThan(100);
+	});
+
 	test("session appears in picker after prompt", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Sure, I'll help with that.") },

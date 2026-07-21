@@ -1,5 +1,6 @@
 # Unreleased
 
+- Let users scroll away from streaming conversation and tool output without being snapped back to the bottom.
 - Render HTML and styled Marked Markdown previews in script-enabled isolated iframes.
 - Add persistent backend identities, authenticated rendezvous registration, signaling relay, and a browser-to-Node WebRTC DataChannel foundation.
 - Keep older completed tool calls collapsed when conversation renders recreate their DOM.

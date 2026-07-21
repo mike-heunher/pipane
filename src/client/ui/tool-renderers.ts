@@ -36,6 +36,7 @@ import scss from "highlight.js/lib/languages/scss";
 import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight, Puzzle } from "lucide";
 import { showCanvas } from "../canvas-panel.js";
 import { notifyToolToggled } from "../auto-collapse.js";
+import { streamingScrollPin } from "./streaming-scroll-pin.js";
 
 // Register highlight.js languages
 hljs.registerLanguage("javascript", javascript);
@@ -59,81 +60,6 @@ hljs.registerLanguage("php", php);
 hljs.registerLanguage("swift", swift);
 hljs.registerLanguage("kotlin", kotlin);
 hljs.registerLanguage("scss", scss);
-
-/**
- * Auto-scroll pinning for streaming tool output containers.
- */
-function createScrollPin() {
-	let userScrolledUp = false;
-	let isStreaming = false;
-	let el: HTMLElement | null = null;
-	let observer: MutationObserver | null = null;
-	let scrollListenerInstalled = false;
-	let didCompleteScroll = false;
-
-	function isAtBottom(): boolean {
-		if (!el) return true;
-		return el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-	}
-
-	function scrollToEnd() {
-		if (el) el.scrollTop = el.scrollHeight;
-	}
-
-	function onUserScroll() {
-		if (!el || !isStreaming) return;
-		userScrolledUp = !isAtBottom();
-	}
-
-	function onMutation() {
-		if (!el) return;
-		if (isStreaming && !userScrolledUp) {
-			scrollToEnd();
-		}
-	}
-
-	function refCb(element: Element | undefined) {
-		if (!element || !(element instanceof HTMLElement)) return;
-
-		if (element !== el) {
-			el = element;
-			scrollListenerInstalled = false;
-			observer?.disconnect();
-			observer = null;
-			didCompleteScroll = false;
-			userScrolledUp = false;
-		}
-
-		if (!scrollListenerInstalled) {
-			el.addEventListener("scroll", onUserScroll, { passive: true });
-			scrollListenerInstalled = true;
-		}
-
-		if (!observer) {
-			observer = new MutationObserver(onMutation);
-			observer.observe(el, { childList: true, subtree: true, characterData: true });
-		}
-
-		if (!isStreaming && !didCompleteScroll) {
-			didCompleteScroll = true;
-			requestAnimationFrame(() => scrollToEnd());
-		}
-	}
-
-	return {
-		ref: refCb,
-		set streaming(v: boolean) {
-			if (isStreaming && !v) {
-				didCompleteScroll = false;
-			}
-			if (!isStreaming && v) {
-				userScrolledUp = false;
-				didCompleteScroll = false;
-			}
-			isStreaming = v;
-		},
-	};
-}
 
 /** Strip `cd /some/path && ` prefix that pi injects for cwd. */
 export function stripCdPrefix(command: string): string {
@@ -297,11 +223,8 @@ function antiFlickerRef(el: Element | undefined) {
 // ── Renderers ───────────────────────────────────────────────────
 
 class ReadRenderer implements ToolRenderer {
-	private scrollPin = createScrollPin();
-
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
@@ -342,7 +265,7 @@ class ReadRenderer implements ToolRenderer {
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
 							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
-								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+								${runtime}<div ${streamingScrollPin(state === "inprogress")} class="overflow-auto tool-body-scroll px-2 py-1.5">
 									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : content}</pre>
 								</div>
 							</div>
@@ -356,11 +279,8 @@ class ReadRenderer implements ToolRenderer {
 }
 
 class WriteRenderer implements ToolRenderer {
-	private scrollPin = createScrollPin();
-
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
@@ -405,7 +325,7 @@ class WriteRenderer implements ToolRenderer {
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
 							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
-								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+								${runtime}<div ${streamingScrollPin(state === "inprogress")} class="overflow-auto tool-body-scroll px-2 py-1.5">
 									<pre class="m-0 tool-body-code text-foreground font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : displayContent}</pre>
 								</div>
 							</div>
@@ -447,11 +367,8 @@ function simpleDiff(oldText: string, newText: string): { lines: { type: "ctx" | 
 }
 
 class EditRenderer implements ToolRenderer {
-	private scrollPin = createScrollPin();
-
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
@@ -475,7 +392,7 @@ class EditRenderer implements ToolRenderer {
 		if (hasDiff) {
 			const diff = simpleDiff(oldText, newText);
 			diffBody = html`<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
-				${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+				${runtime}<div ${streamingScrollPin(state === "inprogress")} class="overflow-auto tool-body-scroll px-2 py-1.5">
 					<pre class="m-0 tool-body-code font-mono whitespace-pre-wrap">${diff.lines.map(l =>
 						l.type === "del" ? html`<span class="text-red-500 dark:text-red-400">- ${l.text}\n</span>`
 						: l.type === "add" ? html`<span class="text-green-500 dark:text-green-400">+ ${l.text}\n</span>`
@@ -517,13 +434,10 @@ class EditRenderer implements ToolRenderer {
 }
 
 class BashRenderer implements ToolRenderer {
-	private scrollPin = createScrollPin();
-
 	render(params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result
 			? result.isError ? "error" : (isStreaming ? "inprogress" : "complete")
 			: "inprogress";
-		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
@@ -563,7 +477,7 @@ class BashRenderer implements ToolRenderer {
 						</div>
 						<div class="tool-body-collapsible">
 							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
-								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+								${runtime}<div ${streamingScrollPin(state === "inprogress")} class="overflow-auto tool-body-scroll px-2 py-1.5">
 									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${combined || ""}</pre>
 								</div>
 							</div>
@@ -628,11 +542,8 @@ class CanvasRenderer implements ToolRenderer {
 }
 
 class GenericFallbackRenderer implements FallbackToolRenderer {
-	private scrollPin = createScrollPin();
-
 	render(toolName: string, params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
-		this.scrollPin.streaming = state === "inprogress";
 
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
@@ -697,7 +608,7 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 						</div>
 						${hasBody ? html`<div class="tool-body-collapsible">
 							<div class="tool-runtime-card bg-muted rounded-md mt-0.5">
-								${runtime}<div ${ref(this.scrollPin.ref)} class="overflow-auto tool-body-scroll px-2 py-1.5">
+								${runtime}<div ${streamingScrollPin(state === "inprogress")} class="overflow-auto tool-body-scroll px-2 py-1.5">
 									<pre class="m-0 tool-body-code ${isError ? "text-destructive" : "text-foreground"} font-mono whitespace-pre-wrap">${highlighted ? html`<code class="hljs">${unsafeHTML(highlighted)}</code>` : bodyContent}</pre>
 								</div>
 							</div>

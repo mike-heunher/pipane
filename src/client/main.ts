@@ -8,6 +8,7 @@ if ("serviceWorker" in navigator) {
 import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
 import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
+import { ConversationScrollController } from "./conversation-scroll.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import "./session-picker.js";
@@ -67,9 +68,8 @@ let localSettingsModalOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
 let prefetchedSessions: SessionInfoDTO[] | undefined;
-let autoScroll = true;
-let lastScrollTop = 0;
-let ignoreScrollEvents = false;
+const conversationScroll = new ConversationScrollController();
+let conversationTouchY: number | undefined;
 let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
 let messagesInitialCount = 50;
@@ -192,7 +192,7 @@ function handleSend(input: string, attachments?: any[]) {
 		editor.attachments = [];
 	}
 
-	autoScroll = true;
+	conversationScroll.pinToBottom();
 	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err: unknown) => {
 		agent.reportError(err, "Prompt failed");
 		console.error("Prompt failed:", err);
@@ -486,41 +486,43 @@ function getTokenUsageSummary(): TokenUsageSummary | undefined {
 	return computeTokenUsageSummary(state.messages, state.model?.contextWindow);
 }
 
-function handleScroll(e: Event) {
-	const el = e.target as HTMLElement;
-	if (!el) return;
-
-	// After a session switch or programmatic scroll-to-bottom, ignore scroll
-	// events until the programmatic scroll settles. This prevents the browser's
-	// intermediate scroll adjustments from disabling autoScroll.
-	if (ignoreScrollEvents) return;
-
-	const currentScrollTop = el.scrollTop;
-	const distanceFromBottom = el.scrollHeight - currentScrollTop - el.clientHeight;
-
-	if (currentScrollTop !== 0 && currentScrollTop < lastScrollTop && distanceFromBottom > 50) {
-		autoScroll = false;
-	} else if (distanceFromBottom < 10) {
-		autoScroll = true;
-	}
-	lastScrollTop = currentScrollTop;
+function handleScroll(event: Event): void {
+	const target = event.currentTarget;
+	if (target instanceof HTMLElement) conversationScroll.handleScroll(target);
 }
 
-function scrollToBottomIfNeeded() {
-	if (!autoScroll) return;
-	ignoreScrollEvents = true;
-	requestAnimationFrame(() => {
-		const scrollArea = document.getElementById("chat-scroll-area");
-		if (scrollArea) {
-			scrollArea.scrollTop = scrollArea.scrollHeight;
-			lastScrollTop = scrollArea.scrollTop;
-		}
-		// Re-enable scroll event handling after the programmatic scroll settles.
-		// Use a second rAF to ensure the browser has processed the scroll.
-		requestAnimationFrame(() => {
-			ignoreScrollEvents = false;
-		});
-	});
+function handleConversationWheel(event: WheelEvent): void {
+	if (event.deltaY < 0) conversationScroll.pauseForUser();
+}
+
+function handleConversationTouchStart(event: TouchEvent): void {
+	conversationTouchY = event.touches[0]?.clientY;
+}
+
+function handleConversationTouchMove(event: TouchEvent): void {
+	const nextY = event.touches[0]?.clientY;
+	if (nextY === undefined) return;
+	if (conversationTouchY !== undefined && nextY > conversationTouchY) {
+		conversationScroll.pauseForUser();
+	}
+	conversationTouchY = nextY;
+}
+
+function handleConversationTouchEnd(): void {
+	conversationTouchY = undefined;
+}
+
+function handleConversationPointerDown(event: PointerEvent): void {
+	const target = event.currentTarget;
+	if (!(target instanceof HTMLElement) || event.button !== 0) return;
+	const scrollbarWidth = target.offsetWidth - target.clientWidth;
+	if (scrollbarWidth <= 0) return;
+	const bounds = target.getBoundingClientRect();
+	if (event.clientX >= bounds.right - scrollbarWidth) conversationScroll.pauseForUser();
+}
+
+function scrollToBottomIfNeeded(): void {
+	conversationScroll.scrollToBottomIfNeeded(() => document.getElementById("chat-scroll-area"));
 }
 
 async function refreshUpdateNotices(): Promise<void> {
@@ -683,7 +685,17 @@ const renderApp = () => {
 					<div class="flex-1 overflow-hidden flex">
 						<div class="flex-1 overflow-hidden relative flex flex-col">
 							<!-- Messages area -->
-							<div id="chat-scroll-area" class="flex-1 overflow-y-auto" @scroll=${handleScroll}>
+							<div
+								id="chat-scroll-area"
+								class="flex-1 overflow-y-auto"
+								@scroll=${handleScroll}
+								@wheel=${handleConversationWheel}
+								@touchstart=${handleConversationTouchStart}
+								@touchmove=${handleConversationTouchMove}
+								@touchend=${handleConversationTouchEnd}
+								@touchcancel=${handleConversationTouchEnd}
+								@pointerdown=${handleConversationPointerDown}
+							>
 								<div class="max-w-3xl mx-auto p-4 pb-4">
 									<pi-message-list
 										.messages=${messages}
@@ -862,9 +874,7 @@ async function initApp() {
 		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
 		setJsonlSessionPath(agent.sessionFile);
-		autoScroll = true;
-		lastScrollTop = 0;
-		ignoreScrollEvents = false;
+		conversationScroll.pinToBottom();
 		// Auto-close sidebar overlay on mobile after session switch
 		if (isMobile()) mobileSidebarOpen = false;
 		renderApp();

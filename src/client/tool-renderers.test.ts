@@ -6,7 +6,8 @@
  * icon/spinner in console header, isCustom: true).
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { html, render as renderTemplate } from "lit";
 import hljs from "highlight.js/lib/core";
 import { getToolRenderer } from "./ui/tool-registry.js";
 import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./ui/tool-renderers.js";
@@ -16,6 +17,10 @@ registerCodingAgentRenderers();
 
 beforeEach(() => {
 	vi.restoreAllMocks();
+});
+
+afterEach(() => {
+	document.body.replaceChildren();
 });
 
 describe("stripCdPrefix", () => {
@@ -89,6 +94,57 @@ describe("syntax highlighting", () => {
 		renderer.render({ path: "/tmp/large-profile-test.ts" }, toolResult, false);
 
 		expect(highlight).not.toHaveBeenCalled();
+	});
+});
+
+describe("streaming tool output scroll pin", () => {
+	it("keeps a streaming Bash output detached when older Bash calls rerender", async () => {
+		const renderer = getToolRenderer("bash")!;
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const result = (id: string, text: string) => ({
+			role: "toolResult" as const,
+			isError: false,
+			content: [{ type: "text" as const, text }],
+			toolCallId: id,
+			toolName: "bash",
+			timestamp: Date.now(),
+		});
+		const renderCalls = (streamedText: string) => {
+			const completed = renderer.render(
+				{ command: "printf old" },
+				result("completed-bash", "old output"),
+				false,
+			).content;
+			const streaming = renderer.render(
+				{ command: "stream output" },
+				result("streaming-bash", streamedText),
+				true,
+			).content;
+			renderTemplate(html`${completed}${streaming}`, container);
+		};
+
+		renderCalls("line 1");
+		const outputs = container.querySelectorAll<HTMLElement>(".tool-body-scroll");
+		expect(outputs).toHaveLength(2);
+		const streamingOutput = outputs[1];
+		Object.defineProperties(streamingOutput, {
+			scrollHeight: { configurable: true, get: () => 500 },
+			clientHeight: { configurable: true, get: () => 100 },
+		});
+		streamingOutput.scrollTop = 400;
+		streamingOutput.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+		// Model the wheel's default movement before the browser emits `scroll`;
+		// a streamed mutation can arrive in this exact interval.
+		streamingOutput.scrollTop = 40;
+
+		renderCalls("line 1\nline 2");
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(streamingOutput.textContent).toContain("line 2");
+		expect(streamingOutput.scrollTop).toBe(40);
+		renderTemplate(null, container);
 	});
 });
 
