@@ -1,4 +1,4 @@
-import { initThemes, getShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
+import { initThemes, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
 import { live } from "lit/directives/live.js";
 import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
@@ -443,7 +443,7 @@ function renderSessionCost(
 
 function renderToolbarExtras() {
 	const statuses = getProviderStatuses();
-	const usage = getShowTokenUsage() ? getTokenUsageSummary() : undefined;
+	const usage = getTokenUsageSummary();
 	return html`
 		${renderThinkingButton()}
 		${renderProviderQuota(statuses.find((status) => status.percent != null), statuses, usage)}

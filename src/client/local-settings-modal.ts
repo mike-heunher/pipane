@@ -325,7 +325,7 @@ export function openLocalSettingsDialog(opts: {
 			addRow(colors, "Interface mode", "Use a light, dark, or system-controlled interface.", modes);
 
 			const display = addSection("Status display");
-			addRow(display, "Show token usage", "Display live context-window usage beneath the composer.", toggle(
+			addRow(display, "Show token usage", "Display token totals beneath assistant messages; status-bar context usage remains visible.", toggle(
 				settings.appearance.showTokenUsage,
 				"Show token usage",
 				(value) => { settings.appearance.showTokenUsage = value; },

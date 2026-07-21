@@ -70,8 +70,8 @@ body {
 
 /* ── Hide token usage when toggled off ──────────────────────────── */
 
-/* Per-message usage line (↑X ↓Y) — the mt-2 text-xs div after tool blocks */
-.hide-token-usage assistant-message > div > .px-4.mt-2.text-xs.text-muted-foreground {
+/* Per-message usage line (↑X ↓Y); status-bar context usage stays visible. */
+.hide-token-usage .message-token-usage {
 	display: none !important;
 }
 

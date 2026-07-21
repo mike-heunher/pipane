@@ -151,7 +151,7 @@ const completedToolCallTimings = {
 	t6: { startedAt: 80_000, completedAt: 80_640 },
 };
 
-function createMockServer(): Promise<MockPipaneServer> {
+function createMockServer(showTokenUsage = true): Promise<MockPipaneServer> {
 	return startMockPipaneServer({
 		sessions,
 		states: Object.fromEntries(sessions.map((session) => [session.path, {
@@ -161,7 +161,7 @@ function createMockServer(): Promise<MockPipaneServer> {
 		model: MOCK_MODEL,
 		sessionStatuses: { [SESSION_PATH_2]: "running" },
 		settings: {
-			appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage: true },
+			appearance: { colorTheme: "gruvbox", darkMode: "light", showTokenUsage },
 			messages: { initialCount: 50 },
 		},
 		browse: {
@@ -469,6 +469,31 @@ test.describe("UI visual goldens", () => {
 		await expect(compaction.locator("details")).toHaveAttribute("open", "");
 		await expect(compaction.locator("markdown-block")).toContainText("Finish the auth migration");
 		await captureAndCompare(compaction, "compaction-expanded.png");
+	});
+
+	test("disabled token usage hides conversation totals but keeps context progress", async ({ page }) => {
+		const hiddenUsageMock = await createMockServer(false);
+		try {
+			await page.goto(`http://localhost:${hiddenUsageMock.port}`);
+			await openMainSession(page);
+			await expect(page.locator("html")).toHaveClass(/hide-token-usage/);
+
+			hiddenUsageMock.sendSessionState(SESSION_PATH, {
+				messages: toolMessages,
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: completedToolCallTimings,
+				steeringQueue: [],
+			});
+
+			const messageUsage = page.locator(".message-token-usage");
+			await expect(messageUsage).toHaveCount(7);
+			await expect(messageUsage.first()).toBeHidden();
+			await expect(page.locator(".status-context-percent")).toHaveText("76%");
+			await expect(page.locator(".status-context")).toBeVisible();
+		} finally {
+			await hiddenUsageMock.close();
+		}
 	});
 
 	test("context usage stays visible during an all-zero streaming response", async ({ page }) => {
