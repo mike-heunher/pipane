@@ -59,11 +59,11 @@ describe("linked file preview", () => {
 			.toBe("```text\n/tmp/project/guide.md\n```");
 	});
 
-	it("loads and renders markdown in the right-hand pane", async () => {
+	it("renders marked markdown in an isolated iframe", async () => {
 		const container = setupPanel();
 		const fetchMock = vi.fn(async () => new Response(JSON.stringify({
 			path: "/work/project/docs/guide.md",
-			content: "# Guide\n\nRead **this**.",
+			content: "# Guide\n\nRead **this**.\n\n| Item | Done |\n| --- | --- |\n| Preview | yes |",
 		}), { status: 200, headers: { "Content-Type": "application/json" } }));
 
 		expect(openFilePreviewLink("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }))).toBe(true);
@@ -77,7 +77,33 @@ describe("linked file preview", () => {
 		);
 		expect(getFilePreviewPath()).toBe("/work/project/docs/guide.md");
 		expect(container.querySelector(".file-preview-title")?.textContent).toBe("guide.md");
-		expect((container.querySelector("markdown-block") as any).content).toContain("# Guide");
+		const frame = container.querySelector<HTMLIFrameElement>(".file-preview-frame");
+		expect(frame?.title).toBe("guide.md preview");
+		expect(frame?.srcdoc).toContain("<h1>Guide</h1>");
+		expect(frame?.srcdoc).toContain("<strong>this</strong>");
+		expect(frame?.srcdoc).toContain("<table>");
+		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
+		expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+	});
+
+	it("renders HTML with active scripts in an isolated iframe", async () => {
+		const container = setupPanel();
+		const source = "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive</h1><script>const template = '<head>'; document.body.dataset.ready = 'yes';<\/script></body></html>";
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+			path: "/work/project/demo.html",
+			content: source,
+		}), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+		openFilePreviewLink("demo.html", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }));
+		await settle();
+
+		const frame = container.querySelector<HTMLIFrameElement>(".file-preview-frame");
+		expect(frame?.srcdoc).toContain("<h1>Interactive</h1>");
+		expect(frame?.srcdoc).toContain("const template = '<head>'");
+		expect(frame?.srcdoc).toContain("document.body.dataset.ready = 'yes'");
+		expect(frame?.srcdoc).toMatch(/^<!doctype html><script>/);
+		expect(frame?.srcdoc.indexOf("pipane:file-preview-link")).toBeLessThan(frame?.srcdoc.indexOf("const template") ?? 0);
+		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
 	});
 
 	it("renders non-markdown text as escaped source", async () => {
@@ -90,7 +116,7 @@ describe("linked file preview", () => {
 		openFilePreviewLink("src/main.ts", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }));
 		await settle();
 
-		expect(container.querySelector("markdown-block")).toBeNull();
+		expect(container.querySelector("iframe")).toBeNull();
 		expect(container.querySelector(".file-preview-source")?.textContent).toBe("const value = '<safe>';" );
 		expect(container.querySelector(".file-preview-source")?.innerHTML).not.toContain("<safe>");
 	});

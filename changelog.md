@@ -1,5 +1,6 @@
 # Unreleased
 
+- Render HTML and styled Marked Markdown previews in script-enabled isolated iframes.
 - Keep older completed tool calls collapsed when conversation renders recreate their DOM.
 - Isolate browser/backend operations behind carrier-neutral client and frame-transport contracts.
 - Add fuzzy slash-command autocomplete with inline help for built-in and Pi-provided commands.
