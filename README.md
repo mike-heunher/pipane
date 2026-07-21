@@ -30,18 +30,27 @@ If `pi` is missing, install it like this:
 npm install -g @earendil-works/pi-coding-agent
 ```
 
-### Explicit local dev deployment
+### Explicit local deployments
 
-On the pipane LXC, deploy the current working tree to the separate dev instance with:
+Deploy the current working tree to the separate dev instance with:
 
 ```bash
 npm run deploy:dev
 ```
 
-This builds a release, atomically advances the `pipane-dev` systemd service, and verifies it on port `8223`. It does not change the production instance on port `8222`; source edits only become visible after the next explicit deployment.
+This builds a release, atomically advances the `pipane-dev` systemd service, and verifies it on port `8223`. It does not change production.
+
+Deploy the current committed working tree to local production with:
+
+```bash
+npm run deploy:prod
+```
+
+Production deployment requires a clean Git working tree, atomically advances the `pipane` systemd service, verifies it on port `8222`, and rolls back if the health check fails. Both commands skip dependency installation when `package-lock.json` is unchanged and retain five releases.
 
 ```bash
 journalctl -u pipane-dev -f
+journalctl -u pipane -f
 ```
 
 ---

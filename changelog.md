@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add a fast, atomic local production deployment command with health checks and rollback.
 - Reduce full verification wall time with parallel checks, shared E2E harnesses, and opt-in browser artifacts.
 - Constrain REST and WebSocket session file operations to canonical paths within the Pi sessions directory.
 - Define, version, and runtime-validate the complete browser WebSocket and supported Pi RPC protocol contracts.

@@ -42,6 +42,7 @@
 	"scripts": {
 		"dev": "./dev.sh",
 		"deploy:dev": "./deploy-dev.sh",
+		"deploy:prod": "./deploy-prod.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
 		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && concurrently --raw --kill-others-on-fail \"vite build\" \"tsc -p tsconfig.server.json\"",
