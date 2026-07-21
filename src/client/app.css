@@ -1165,7 +1165,8 @@ markdown-block pre code {
 	}
 
 	.canvas-container,
-	.jsonl-container {
+	.jsonl-container,
+	.file-preview-container {
 		position: fixed !important;
 		inset: 0 !important;
 		width: 100% !important;
@@ -1227,6 +1228,113 @@ markdown-block pre code {
 	.status-cost {
 		font-size: 0.62rem;
 	}
+}
+
+/* ── Linked file preview side panel ───────────────────────────── */
+
+.file-preview-container {
+	width: 45%;
+	min-width: 320px;
+	max-width: 760px;
+	flex-shrink: 0;
+	overflow: hidden;
+}
+
+.file-preview-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	background: var(--background, #fff);
+}
+
+.file-preview-header {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	min-height: 3.15rem;
+	padding: 0.45rem 0.65rem 0.45rem 0.8rem;
+	border-bottom: 1px solid var(--border, #e5e7eb);
+	flex-shrink: 0;
+}
+
+.file-preview-heading {
+	display: flex;
+	flex: 1 1 auto;
+	min-width: 0;
+	flex-direction: column;
+	gap: 0.08rem;
+}
+
+.file-preview-title {
+	overflow: hidden;
+	color: var(--foreground, #111);
+	font-size: 0.8rem;
+	font-weight: 650;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.file-preview-path {
+	overflow: hidden;
+	color: var(--muted-foreground, #6b7280);
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+	font-size: 0.62rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.file-preview-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.5rem;
+	height: 1.5rem;
+	flex: 0 0 auto;
+	border: none;
+	border-radius: 0.25rem;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	font-size: 0.85rem;
+	line-height: 1;
+	transition: background 0.15s, color 0.15s;
+}
+
+.file-preview-close:hover {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
+.file-preview-body {
+	flex: 1;
+	overflow: auto;
+	padding: 1rem 1.1rem 2rem;
+}
+
+.file-preview-body markdown-block {
+	font-size: 0.9rem;
+	line-height: 1.55;
+}
+
+.file-preview-state {
+	padding: 2rem 1rem;
+	color: var(--muted-foreground, #6b7280);
+	font-size: 0.8rem;
+	text-align: center;
+}
+
+.file-preview-state.is-error {
+	color: var(--destructive, #b91c1c);
+}
+
+.file-preview-source {
+	min-width: min-content;
+	margin: 0;
+	font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+	font-size: 0.75rem;
+	line-height: 1.55;
+	tab-size: 4;
+	white-space: pre;
 }
 
 /* ── Canvas side panel ─────────────────────────────────────────── */

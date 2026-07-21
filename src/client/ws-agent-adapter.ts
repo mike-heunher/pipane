@@ -657,6 +657,7 @@ export class WsAgentAdapter {
 			}
 			case "session_attached": {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
+				if (data.cwd) this._pendingCwd = data.cwd;
 				const shouldAdopt = data.sessionPath === this._sessionPath
 					|| (this._sessionStatus === "virtual" && this._pendingNewPrompt);
 				if (shouldAdopt) {
@@ -1542,8 +1543,9 @@ export class WsAgentAdapter {
 	}
 
 	/** Switch to an existing session (load messages from server cache) */
-	async switchSession(sessionPath: string): Promise<void> {
+	async switchSession(sessionPath: string, cwd?: string): Promise<void> {
 		const nonce = ++this._sessionNonce;
+		if (cwd !== undefined) this._pendingCwd = cwd;
 		this._pendingNewPrompt = false;
 		this._pendingControl = undefined;
 		this._lastAuthoritativeControl = undefined;

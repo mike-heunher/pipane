@@ -658,6 +658,14 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			expect(adapter.sessionStatus).toBe("attached");
 		});
+
+		it("remembers the selected session cwd for resolving linked files", async () => {
+			const { adapter } = setupWithSession("/tmp/sessions/session-a.jsonl");
+
+			await adapter.switchSession("/tmp/sessions/session-b.jsonl", "/work/project-b");
+
+			expect(adapter.cwd).toBe("/work/project-b");
+		});
 	});
 
 	describe("stop button visibility (isStreaming) for running sessions", () => {

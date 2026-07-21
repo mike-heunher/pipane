@@ -15,8 +15,16 @@ import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
-import { initCanvas, isCanvasVisible, restoreCanvasFromMessages } from "./canvas-panel.js";
+import { closeCanvas, initCanvas, isCanvasVisible, restoreCanvasFromMessages } from "./canvas-panel.js";
 import { initJsonlPanel, isJsonlPanelVisible, toggleJsonlPanel, setJsonlSessionPath, refreshJsonlPanel, jumpToJsonlEntryForChat } from "./jsonl-panel.js";
+import {
+	closeFilePreview,
+	getFilePreviewPath,
+	initFilePreview,
+	isFilePreviewVisible,
+	isPreviewableFileHref,
+	openFilePreviewLink,
+} from "./file-preview-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
@@ -56,6 +64,7 @@ window.addEventListener("resize", () => {
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let chatJsonlJumpListenerInstalled = false;
+let filePreviewLinkListenerInstalled = false;
 let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undefined;
 let autoScroll = true;
 let lastScrollTop = 0;
@@ -190,6 +199,32 @@ function installChatJsonlJumpListener() {
 			(toolEl?.getAttribute?.("data-tool-call-id") as string | null) ??
 			(toolEl?.toolCall?.id as string | undefined);
 		jumpToJsonlEntryForChat(displayedMessageOrdinal, toolCallId || undefined);
+	});
+}
+
+function installFilePreviewLinkListener() {
+	if (filePreviewLinkListenerInstalled) return;
+	filePreviewLinkListenerInstalled = true;
+
+	document.addEventListener("click", (event) => {
+		const target = event.target as HTMLElement | null;
+		const anchor = target?.closest("a") as HTMLAnchorElement | null;
+		if (!anchor) return;
+
+		const messageList = document.querySelector("pi-message-list");
+		const previewPanel = anchor.closest(".file-preview-panel");
+		if (!previewPanel && (!messageList || !messageList.contains(anchor))) return;
+
+		const rawHref = anchor.getAttribute("href") ?? "";
+		const cwd = agent?.cwd;
+		const sessionPath = agent?.sessionFile;
+		if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;
+		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined)) return;
+
+		event.preventDefault();
+		if (isCanvasVisible()) closeCanvas();
+		if (isJsonlPanelVisible()) toggleJsonlPanel();
+		renderApp();
 	});
 }
 
@@ -553,7 +588,11 @@ const renderApp = () => {
 	const burgerMenuCallbacks = {
 		onToggleTokenUsage: () => { toggleTokenUsage(); renderApp(); },
 		onOpenSettings: () => { void openLocalSettingsModal(); },
-		onToggleJsonl: () => { toggleJsonlPanel(); renderApp(); },
+		onToggleJsonl: () => {
+			if (isFilePreviewVisible()) closeFilePreview();
+			toggleJsonlPanel();
+			renderApp();
+		},
 		isTokenUsageHidden: isTokenUsageHidden(),
 		isJsonlVisible: isJsonlPanelVisible(),
 		isDevMode,
@@ -663,6 +702,9 @@ const renderApp = () => {
 						${isJsonlPanelVisible()
 							? html`<div id="jsonl-container" class="jsonl-container border-l border-border"></div>`
 							: ""}
+						${isFilePreviewVisible()
+							? html`<div id="file-preview-container" class="file-preview-container border-l border-border"></div>`
+							: ""}
 					</div>
 				</div>
 			</div>
@@ -692,6 +734,8 @@ const renderApp = () => {
 		if (canvasEl) initCanvas(canvasEl, renderApp);
 		const jsonlEl = document.getElementById("jsonl-container");
 		if (jsonlEl) initJsonlPanel(jsonlEl, renderApp);
+		const filePreviewEl = document.getElementById("file-preview-container");
+		if (filePreviewEl) initFilePreview(filePreviewEl, renderApp);
 	});
 };
 
@@ -786,6 +830,7 @@ async function initApp() {
 	});
 
 	installChatJsonlJumpListener();
+	installFilePreviewLinkListener();
 
 	// Re-fetch feature flags and appearance when local settings change
 	agent.onSessionsChanged(async (file) => {
@@ -810,6 +855,7 @@ async function initApp() {
 	// Session switch
 	agent.onSessionChange(async () => {
 		clearPendingHardKillOffer();
+		closeFilePreview();
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
@@ -927,7 +973,7 @@ async function initApp() {
 			const sTime = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
 			return sTime > bestTime ? s : best;
 		});
-		await agent.switchSession(mostRecent.path);
+		await agent.switchSession(mostRecent.path, mostRecent.cwd);
 	} else {
 		await agent.newSession();
 	}

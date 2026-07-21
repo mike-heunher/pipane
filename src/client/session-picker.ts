@@ -974,7 +974,7 @@ export class SessionPicker extends LitElement {
 			this.expandedGroups = new Set();
 		}
 		try {
-			await this.agent.switchSession(session.path);
+			await this.agent.switchSession(session.path, session.cwd);
 		} catch (err) {
 			console.error("Failed to switch session:", err);
 		}

@@ -37,7 +37,7 @@ export function showCanvas(title: string, markdown: string) {
 /**
  * Close the canvas panel.
  */
-function closeCanvas() {
+export function closeCanvas() {
 	visible = false;
 	renderPanel();
 	onChangeCallback?.();

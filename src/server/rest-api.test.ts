@@ -27,6 +27,9 @@ describe("REST session path confinement", () => {
 	let traversalPath: string;
 	let symlinkPath: string;
 	let settingsPath: string;
+	let projectRoot: string;
+	let previewPath: string;
+	let projectEscapePath: string;
 	let server: Server;
 	let baseUrl: string;
 
@@ -40,6 +43,13 @@ describe("REST session path confinement", () => {
 		traversalPath = `${sessionsRoot}${path.sep}..${path.sep}outside.jsonl`;
 		symlinkPath = path.join(sessionsRoot, "escape.jsonl");
 		settingsPath = path.join(tmpDir, "settings.json");
+		projectRoot = path.join(tmpDir, "projects", "project-a");
+		previewPath = path.join(projectRoot, "docs", "guide.md");
+		projectEscapePath = path.join(projectRoot, "outside.md");
+		mkdirSync(path.dirname(previewPath), { recursive: true });
+		writeFileSync(previewPath, "# Guide\n\nProject documentation.\n");
+		writeFileSync(path.join(tmpDir, "outside.md"), "private\n");
+		symlinkSync(path.join(tmpDir, "outside.md"), projectEscapePath);
 
 		const sessionLines = [
 			{
@@ -47,7 +57,7 @@ describe("REST session path confinement", () => {
 				version: 3,
 				id: "session",
 				timestamp: "2026-01-01T00:00:00.000Z",
-				cwd: tmpDir,
+				cwd: projectRoot,
 			},
 			{
 				type: "message",
@@ -132,9 +142,35 @@ describe("REST session path confinement", () => {
 		expect(existsSync(deletePath)).toBe(false);
 	});
 
+	it("retrieves previewable text files within the supplied session cwd", async () => {
+		const query = new URLSearchParams({ sessionPath, path: "docs/guide.md" });
+		const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			path: previewPath,
+			content: "# Guide\n\nProject documentation.\n",
+		});
+	});
+
+	it("rejects file previews that escape the supplied session cwd", async () => {
+		for (const candidate of [path.join(projectRoot, "..", "..", "outside.md"), projectEscapePath]) {
+			const query = new URLSearchParams({ sessionPath, path: candidate });
+			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+			expect(response.status).toBe(403);
+		}
+	});
+
+	it("requires a guarded session path before retrieving file content", async () => {
+		for (const maliciousPath of [outsidePath, traversalPath, symlinkPath]) {
+			const query = new URLSearchParams({ sessionPath: maliciousPath, path: previewPath });
+			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+			expect(response.status).toBe(400);
+		}
+	});
+
 	it("keeps project directory browsing independently unrestricted", async () => {
 		const outsideDirectory = path.join(tmpDir, "projects");
-		mkdirSync(path.join(outsideDirectory, "project-a"), { recursive: true });
 		const query = new URLSearchParams({ path: outsideDirectory });
 		const response = await fetch(`${baseUrl}/api/browse?${query}`);
 

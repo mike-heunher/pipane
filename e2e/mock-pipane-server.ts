@@ -26,6 +26,7 @@ export interface MockPipaneServerOptions {
 	sessionStatuses?: Record<string, "running" | "done">;
 	settings?: any;
 	browse?: { path: string; dirs: Array<{ name: string; path: string }> };
+	files?: Record<string, string>;
 	updates?: UpdateNotice[];
 }
 
@@ -104,6 +105,15 @@ export class MockPipaneServer {
 			},
 		}));
 		app.get("/api/browse", (_req, res) => res.json(options.browse ?? { path: "/tmp", dirs: [] }));
+		app.get("/api/files/content", (req, res) => {
+			const filePath = typeof req.query.path === "string" ? req.query.path : "";
+			const content = options.files?.[filePath];
+			if (content === undefined) {
+				res.status(404).json({ error: "File not found" });
+				return;
+			}
+			res.json({ path: filePath, content });
+		});
 		app.get("/api/updates", (_req, res) => res.json({
 			checkedAt: new Date().toISOString(),
 			notices: mock?.getUpdateNotices() ?? [],

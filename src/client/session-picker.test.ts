@@ -582,7 +582,7 @@ describe("session-picker", () => {
 			await el.updateComplete;
 
 			expect(getSearchInput(el)!.value).toBe("");
-			expect(switchSpy).toHaveBeenCalledWith(target.path);
+			expect(switchSpy).toHaveBeenCalledWith(target.path, target.cwd);
 		});
 	});
 

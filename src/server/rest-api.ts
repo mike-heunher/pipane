@@ -5,13 +5,14 @@
  */
 
 import type { Express, Response } from "express";
-import { existsSync, readFileSync, readdirSync, watchFile } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watchFile } from "node:fs";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { SessionIndex } from "./session-index.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { SessionPathError, SessionPathGuard } from "./session-path.js";
+import { getSessionCwd } from "./session-cwd.js";
 
 interface RegisterRestApiOptions {
 	localSettingsStore?: LocalSettingsStore;
@@ -28,6 +29,13 @@ let localSettingsStore: LocalSettingsStore;
 let sessionIndex: SessionIndex;
 
 let localSettingsWatcherStarted = false;
+
+const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
+
+function isPathInside(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
 
 function startLocalSettingsWatcher(onLocalSettingsReloaded?: () => void) {
 	if (localSettingsWatcherStarted) return;
@@ -199,6 +207,59 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 			res.type("text/plain").send(content);
 		} catch (error) {
 			sendError(res, error);
+		}
+	});
+
+	app.get("/api/files/content", (req, res) => {
+		try {
+			if (typeof req.query.sessionPath !== "string" || typeof req.query.path !== "string") {
+				res.status(400).json({ error: "Missing 'sessionPath' or 'path' query parameter" });
+				return;
+			}
+
+			const sessionPath = sessionPaths.resolveExisting(req.query.sessionPath);
+			const sessionCwd = getSessionCwd(sessionPath);
+			if (!sessionCwd) {
+				res.status(400).json({ error: "Session has no working directory" });
+				return;
+			}
+			const root = realpathSync(path.resolve(sessionCwd.replace(/^~/, process.env.HOME || "/")));
+
+			const requested = path.isAbsolute(req.query.path)
+				? req.query.path
+				: path.resolve(root, req.query.path);
+			const resolved = realpathSync(requested);
+			if (!isPathInside(root, resolved)) {
+				res.status(403).json({ error: "File is outside the session working directory" });
+				return;
+			}
+
+			const stat = statSync(resolved);
+			if (!stat.isFile()) {
+				res.status(400).json({ error: "Path is not a file" });
+				return;
+			}
+			if (stat.size > MAX_PREVIEW_FILE_BYTES) {
+				res.status(413).json({ error: "File is too large to preview" });
+				return;
+			}
+
+			const bytes = readFileSync(resolved);
+			if (bytes.includes(0)) {
+				res.status(415).json({ error: "Binary files cannot be previewed" });
+				return;
+			}
+			res.json({ path: resolved, content: bytes.toString("utf8") });
+		} catch (error: any) {
+			if (error instanceof SessionPathError) {
+				sendError(res, error);
+				return;
+			}
+			if (error?.code === "ENOENT") {
+				res.status(404).json({ error: "File not found" });
+				return;
+			}
+			res.status(500).json({ error: error?.message ?? String(error) });
 		}
 	});
 
