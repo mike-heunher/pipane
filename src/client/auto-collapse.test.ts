@@ -152,23 +152,41 @@ describe("auto-collapse", () => {
 		expect(chevron.style.transform).toBe("");
 	});
 
-	it("only runs when new tools complete (not on every render)", () => {
+	it("re-collapses an older tool when a render recreates its open body", () => {
 		setAutoCollapseKeepOpen(1);
 		container.appendChild(createToolMessage("t0", true));
 		container.appendChild(createToolMessage("t1", true));
 		runAutoCollapse();
 
-		// t0 collapsed
-		const body0 = container.querySelector("tool-message:first-child .tool-body-collapsible") as HTMLElement;
-		expect(body0.style.display).toBe("none");
+		expect((container.querySelector("tool-message:first-child .tool-body-collapsible") as HTMLElement).style.display)
+			.toBe("none");
 
-		// Simulate user opening t0
+		// A parent Lit render can recreate tool DOM while retaining the same tool ID.
+		// The replacement starts expanded even though t0 was previously collapsed.
+		container.replaceChildren(createToolMessage("t0", true), createToolMessage("t1", true));
+		runAutoCollapse();
+
+		expect((container.querySelector("tool-message:first-child .tool-body-collapsible") as HTMLElement).style.display)
+			.toBe("none");
+		expect((container.querySelector("tool-message:last-child .tool-body-collapsible") as HTMLElement).style.display)
+			.not.toBe("none");
+	});
+
+	it("keeps a manually reopened tool open across renders", () => {
+		setAutoCollapseKeepOpen(1);
+		container.appendChild(createToolMessage("t0", true));
+		container.appendChild(createToolMessage("t1", true));
+		runAutoCollapse();
+
+		const body0 = container.querySelector("tool-message:first-child .tool-body-collapsible") as HTMLElement;
 		body0.style.display = "";
 		notifyToolToggled(container.querySelector("tool-message:first-child .tool-gutter-wrap")!);
 
-		// Re-run without new completions — should not re-collapse t0
+		container.replaceChildren(createToolMessage("t0", true), createToolMessage("t1", true));
 		runAutoCollapse();
-		expect(body0.style.display).not.toBe("none");
+
+		expect((container.querySelector("tool-message:first-child .tool-body-collapsible") as HTMLElement).style.display)
+			.not.toBe("none");
 	});
 
 	it("resets state on resetAutoCollapse", () => {

@@ -13,7 +13,6 @@
 let keepOpen = 999999; // disabled by default until settings load
 const userOpened = new Set<string>(); // tool call IDs opened by user after auto-collapse
 const autoCollapsed = new Set<string>(); // tool call IDs that were auto-collapsed
-let lastCompletedCount = 0;
 
 export function setAutoCollapseKeepOpen(n: number) {
 	keepOpen = n;
@@ -25,7 +24,6 @@ export function setAutoCollapseKeepOpen(n: number) {
 export function resetAutoCollapse() {
 	userOpened.clear();
 	autoCollapsed.clear();
-	lastCompletedCount = 0;
 }
 
 /**
@@ -67,19 +65,15 @@ export function runAutoCollapse() {
 		}
 	}
 
-	// Only act when new tools have completed
-	if (completed.length <= lastCompletedCount) return;
-	lastCompletedCount = completed.length;
-
-	// Filter out user-opened tools from collapse candidates
+	// Filter out user-opened tools from collapse candidates. Reconcile on every
+	// render because Lit may replace a tool's body and lose our inline display
+	// state while the tool ID remains in autoCollapsed.
 	const candidates = completed.filter((t) => !userOpened.has(t.id));
 
 	// Keep the last `keepOpen` candidates expanded, collapse the rest
 	const toCollapse = candidates.slice(0, Math.max(0, candidates.length - keepOpen));
 
 	for (const { id, wrap } of toCollapse) {
-		if (autoCollapsed.has(id)) continue; // already collapsed
-
 		const body = wrap.querySelector(".tool-body-collapsible") as HTMLElement | null;
 		if (!body || body.style.display === "none") {
 			// Already collapsed (e.g. no body), just track it

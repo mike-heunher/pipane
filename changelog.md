@@ -1,5 +1,6 @@
 # Unreleased
 
+- Keep older completed tool calls collapsed when conversation renders recreate their DOM.
 - Isolate browser/backend operations behind carrier-neutral client and frame-transport contracts.
 - Add fuzzy slash-command autocomplete with inline help for built-in and Pi-provided commands.
 - Allow previewing files outside the session working directory when their exact paths appear in the conversation.
