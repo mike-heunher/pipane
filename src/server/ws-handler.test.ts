@@ -83,6 +83,33 @@ function makeWs() {
 }
 
 describe("WsHandler protocol boundary", () => {
+	it("accepts an already-authenticated carrier without an HTTP request", async () => {
+		const { handler } = makeHandler();
+		const emitter = new EventEmitter();
+		const sent: any[] = [];
+		const connection = {
+			readyState: WebSocket.OPEN,
+			send: (raw: string) => sent.push(JSON.parse(raw)),
+			close: vi.fn(),
+			on(event: string, listener: (...args: any[]) => void) {
+				emitter.on(event, listener);
+				return this;
+			},
+		};
+		handler.acceptAuthenticatedConnection(connection);
+		emitter.emit("message", JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "remote-statuses",
+			type: "get_session_statuses",
+		}));
+		await vi.waitFor(() => expect(sent).toEqual(expect.arrayContaining([
+			expect.objectContaining({ type: "init" }),
+			expect.objectContaining({ type: "response", id: "remote-statuses", success: true }),
+		])));
+		emitter.emit("close");
+		expect(handler.clients.size).toBe(0);
+	});
+
 	it("returns structured errors for malformed JSON, unknown commands, and version mismatches", async () => {
 		const { handler } = makeHandler();
 		const { ws, sent } = makeWs();

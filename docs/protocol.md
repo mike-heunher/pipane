@@ -37,26 +37,81 @@ Every `session_sync` message includes a non-negative `revision`. Revisions incre
 
 The existing hash and patch fields remain in v1. Revisions make ordering and recovery explicit without pre-empting the future semantic-update protocol.
 
-## Rendezvous signaling protocol
+## Rendezvous, pairing, and connection trust
 
-The control-plane contract lives in `src/shared/rendezvous-protocol.ts` and is independently versioned by `RENDEZVOUS_PROTOCOL_VERSION`, currently `1`. The standalone rendezvous process exposes:
+The control-plane contract lives in `src/shared/rendezvous-protocol.ts` and is independently versioned by `RENDEZVOUS_PROTOCOL_VERSION`, currently `2`. The standalone rendezvous process exposes:
 
-- `/v1/rendezvous/backend` for persistent outbound backend registration and signaling
-- `/v1/rendezvous/browser` for one browser/backend signaling route
+- `/v2/rendezvous/backend` for persistent outbound backend registration, pairing control, and signaling
+- `/v2/rendezvous/browser` for one ticket-authorized browser/backend signaling route
 
-Every frame is validated JSON containing `protocolVersion` and a `type` discriminant. Rendezvous forwards ICE descriptions/candidates only; application frames never pass through it.
+Every frame is validated JSON containing `protocolVersion` and a `type` discriminant. Rendezvous forwards trust metadata plus ICE descriptions/candidates only; application frames never pass through it.
 
-### Backend registration
+### Backend registration and ICE
 
-The server sends a fresh random `challenge`. A backend responds with `register_backend`, containing its P-256 public key, metadata, and an ES256 signature over the domain-separated challenge. The rendezvous derives `backendId` from the SHA-256 fingerprint of the canonical public key and replies with `registered`. Backend identities persist in a mode-`0600` local file and survive process restarts.
+The server sends a fresh random `challenge`. A backend responds with `register_backend`, containing its P-256 public key, metadata, and an ES256 signature over the domain-separated challenge. Rendezvous derives `backendId` from the SHA-256 fingerprint of canonical SPKI bytes and replies with `registered`, its ticket-verification public key, and short-lived ICE server credentials. Backend identity and trust files are mode `0600` and survive restarts.
 
-Registered backends receive `connection_request`, `signal`, and `connection_closed`. They send `signal` or `close_connection`. The backend client automatically reconnects its outbound WebSocket with bounded exponential backoff and repeats challenge authentication.
+The backend client reconnects its outbound WebSocket with bounded exponential backoff and repeats challenge authentication. STUN servers may be static. TURN credentials use coturn's REST convention: an expiring `timestamp:subject` username and HMAC-SHA1 credential; fresh backend credentials accompany each `connection_request` rather than expiring in a long-running peer manager. Browser and backend support relay-only ICE policy; deterministic E2E forces both peers through a local UDP TURN relay.
 
-### Browser signaling
+Backend registration uses `PIPANE_RENDEZVOUS_URL` and optional `PIPANE_APP_URL`/`PIPANE_BACKEND_NAME`. The rendezvous executable reads comma-separated `PIPANE_STUN_URLS` and `PIPANE_TURN_URLS`, plus `PIPANE_TURN_SECRET`; durable central identity/account state defaults to `~/.config/pipane-rendezvous` or `PIPANE_RENDEZVOUS_DATA_DIR`.
 
-A browser sends `connect_backend` with a `backendId`. If that backend is online, both peers receive an opaque connection id. Either peer may then send a validated `signal` containing an SDP offer/answer or ICE candidate. A connection id is scoped to exactly its browser socket and registered backend; cross-route signaling is rejected.
+### Device identity and anonymous accounts
 
-The answer-side WebRTC implementation uses a reliable ordered DataChannel with label `pipane` and subprotocol `pipane.v1`. The deterministic browser test establishes a real Chromium-to-Node DataChannel through this signaling protocol. Until authenticated pairing is implemented, the shipped backend registration closes browser connection requests before application access is granted.
+The browser creates a non-exportable P-256 private key and stores the `CryptoKey` in IndexedDB. `deviceId` is the SHA-256 fingerprint of its canonical public SPKI. Central trust endpoints issue one-use challenges for pairing, normal connection tickets, authorized-backend discovery, device revocation, and backend-grant revocation. The device signs every challenge; no permanent bearer credential is stored in the browser.
+
+- `POST /v1/auth/challenges`
+- `POST /v1/pairings/:pairId/tickets`
+- `POST /v1/connections/tickets`
+- `POST /v1/accounts/backends`
+- `POST /v1/revocations/devices`
+- `POST /v1/revocations/backends`
+
+The first backend-confirmed pairing creates an anonymous account. Later terminal pairings can add another browser device to the backend's owner account, or an authenticated device can add an unowned backend to its account. A signed `discover` challenge returns only that account's backend grants, with registration metadata and current reachability. A backend has one owning account in this protocol version.
+
+### Pairing capabilities
+
+The backend creates a 256-bit secret, stores only its hash, and publishes the opaque pair id and expiry with `open_pairing`. The QR URL has this shape:
+
+```text
+https://app.example/pair/pair_id#backend=b_id&secret=secret
+```
+
+The secret remains in the URL fragment and never reaches HTTP access logs. Capabilities expire within fifteen minutes and are single-use at both rendezvous and backend. `pipane pair` asks the running local backend for a fresh QR link. The backend validates the secret over the end-to-end DataChannel before sending `confirm_pairing`; only then does rendezvous create or extend the anonymous account and backend grant.
+
+### Connection tickets and signaling
+
+A browser first signs a purpose- and route-scoped central challenge. Rendezvous then signs a short-lived ticket containing ticket id, kind, account (after pairing), device id and public key, backend id, browser-generated connection id, issue time, expiry, and optional pair id. `connect_backend` requires this ticket. Rendezvous and backend each reject ticket replay, expiry, route mismatch, revoked devices, and revoked backend grants.
+
+The browser may send only an SDP offer and the registered backend only an answer. The backend signs a `connection_binding` over the connection id, SHA-256 hashes of both exact SDP descriptions, the answer's DTLS certificate fingerprint, and ticket expiry. Rendezvous validates it against the observed signaling transcript; the browser validates the signature and pins the public key fingerprint to `backendId` before applying the answer.
+
+### Authenticated DataChannel
+
+The answer-side implementation accepts only a reliable ordered DataChannel with label `pipane` and subprotocol `pipane.v1`. Its first frame must contain the exact connection ticket, backend-binding signature, a device signature over both, and the pairing secret when applicable. The backend exposes the channel to `WsHandler` only after all central-ticket, local-owner, replay, revocation, device-proof, and optional pairing-secret checks pass.
+
+Authenticated DataChannels carry the existing versioned v1 application frames through the same server connection boundary as local WebSockets. A frame router keeps those application frames isolated from semantic v2 responses on the same ordered channel. Revocation closes active rendezvous routes and matching backend peers, prevents new ticket issuance, and is retained centrally so an offline backend clears stale local ownership when it next registers.
+
+### Semantic backend protocol v2
+
+`src/shared/backend-protocol.ts` defines the carrier-neutral request protocol independently from application v1:
+
+```text
+{ v: 2, kind: "request", id, method, params }
+{ v: 2, kind: "response", id, method, success, result | error }
+{ v: 2, kind: "event", cursor, type, data }
+```
+
+The currently implemented semantic methods are:
+
+- `backend.capabilities`
+- `sessions.list`, `sessions.delete`, `sessions.forkMessages`, `sessions.raw`
+- `files.read`, `host.browse`
+- `settings.get`, `settings.validate`, `settings.patch`, `settings.save`
+- `updates.get`, `updates.run`
+
+Every method has runtime-validated parameters, correlated responses, stable error codes, bounded concurrency, and a bounded device-scoped completed-request cache. Pending browser requests retain their id across a carrier reconnect, so an in-flight mutation is resumed or answered from the cache instead of being executed twice. The backend uses one `LocalBackendApi` implementation for both the legacy local HTTP facade and semantic DataChannel requests. Remote session results are scoped to a structured `{ backendId, path }` identity; paths remain backend-local identifiers rather than authorization.
+
+The browser's `RemoteBackendManager` maintains one client/store per active backend id, requests a fresh ticket whenever a WebRTC carrier reconnects, and never treats an arbitrary URL backend id as authorized until signed account discovery includes it. The product UI exposes reachable authorized backends and uses on-demand pairwise connections rather than a full mesh. Terminal `pipane pair` remains the no-email recovery path when browser storage is lost.
+
+Application streaming, turn control, and session snapshots remain on validated v1 frames during parity migration. Semantic v2 is deployed beside v1 rather than changing v1's renderer-state contract in place.
 
 ## Pi subprocess RPC protocol
 
@@ -68,4 +123,4 @@ Pi RPC uses strict JSONL framing. Records are split only on LF; Unicode line sep
 
 ## Compatibility policy
 
-A breaking browser/backend contract change must increment `WS_PROTOCOL_VERSION`; a breaking rendezvous control-plane change must increment `RENDEZVOUS_PROTOCOL_VERSION`. Update both decoders and contract tests. Additive fields may be introduced without a version increment when old peers can safely ignore them. New discriminants require explicit validation and exhaustive handling on both sides.
+A breaking browser/backend application-frame change must increment `WS_PROTOCOL_VERSION`; a breaking semantic method-envelope change must increment `BACKEND_PROTOCOL_VERSION`; a breaking rendezvous control-plane change must increment `RENDEZVOUS_PROTOCOL_VERSION`. Update the corresponding decoders and contract tests. Additive fields may be introduced without a version increment when old peers can safely ignore them. New discriminants require explicit validation and exhaustive handling on both sides.

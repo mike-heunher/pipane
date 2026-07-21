@@ -1,22 +1,38 @@
 // @vitest-environment node
 
-import { describe, expect, it, vi } from "vitest";
+import { generateKeyPairSync, sign } from "node:crypto";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IceSignal } from "../shared/rendezvous-protocol.js";
+import { deviceChallengePayload, type DeviceChallenge } from "../shared/trust-protocol.js";
+import { RendezvousTrustStore } from "../rendezvous/trust-store.js";
 import {
 	BackendWebRtcManager,
 	PIPANE_DATA_CHANNEL_LABEL,
 	PIPANE_DATA_CHANNEL_PROTOCOL,
 	type BackendSignalingClient,
 } from "./backend-webrtc.js";
+import { loadOrCreateBackendIdentity } from "./backend-identity.js";
+import type { BackendConnectionRequest } from "./rendezvous-client.js";
+
+const cleanupDirs: string[] = [];
+
+afterEach(async () => {
+	await Promise.all(cleanupDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 class FakeSignaling implements BackendSignalingClient {
-	private connectionListener?: (connectionId: string) => void;
+	private connectionListener?: (request: BackendConnectionRequest) => void;
 	private signalListener?: (connectionId: string, signal: IceSignal) => void;
 	private closedListener?: (connectionId: string, reason: string) => void;
 	readonly sendSignal = vi.fn();
+	readonly sendIdentityBinding = vi.fn();
 	readonly closeConnection = vi.fn();
 
-	onConnectionRequest(listener: (connectionId: string) => void): () => void {
+	onConnectionRequest(listener: (request: BackendConnectionRequest) => void): () => void {
 		this.connectionListener = listener;
 		return () => { this.connectionListener = undefined; };
 	}
@@ -31,8 +47,8 @@ class FakeSignaling implements BackendSignalingClient {
 		return () => { this.closedListener = undefined; };
 	}
 
-	request(connectionId: string): void {
-		this.connectionListener?.(connectionId);
+	request(request: BackendConnectionRequest): void {
+		this.connectionListener?.(request);
 	}
 
 	signal(connectionId: string, signal: IceSignal): void {
@@ -44,28 +60,58 @@ class FakeSignaling implements BackendSignalingClient {
 	}
 }
 
+function setup(connectionId = "connection") {
+	const dir = mkdtempSync(path.join(tmpdir(), "pipane-webrtc-unit-"));
+	cleanupDirs.push(dir);
+	const identity = loadOrCreateBackendIdentity(path.join(dir, "backend.json"));
+	const trust = new RendezvousTrustStore({ dataDir: path.join(dir, "rendezvous") });
+	const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+	const devicePublicKey = Buffer.from(publicKey.export({ type: "spki", format: "der" })).toString("base64url");
+	const challenge = trust.createChallenge({
+		purpose: "pair",
+		devicePublicKey,
+		backendId: identity.backendId,
+		connectionId,
+		pairId: "pair_unit",
+	});
+	const signature = sign("sha256", Buffer.from(deviceChallengePayload(challenge as DeviceChallenge)), {
+		key: privateKey,
+		dsaEncoding: "ieee-p1363",
+	}).toString("base64url");
+	const issued = trust.issuePairingTicket(challenge.challengeId, signature);
+	const signaling = new FakeSignaling();
+	const manager = new BackendWebRtcManager({
+		signaling,
+		identity,
+		ticketPublicKey: () => trust.ticketPublicKey,
+		authorize: async ({ claims }) => ({ accountId: "a_owner", deviceId: claims.deviceId }),
+	});
+	return { identity, trust, signaling, manager, request: { connectionId, ticket: issued.ticket, iceServers: [] } };
+}
+
 describe("BackendWebRtcManager", () => {
-	it("rejects signals for unknown connections", async () => {
-		const signaling = new FakeSignaling();
-		const manager = new BackendWebRtcManager({ signaling });
-
+	it("rejects signals for unknown connections", () => {
+		const { signaling, manager } = setup();
 		signaling.signal("missing", { kind: "description", type: "offer", sdp: "v=0" });
-
 		expect(signaling.closeConnection).toHaveBeenCalledWith("missing", "Unknown backend WebRTC connection");
 		manager.close();
 	});
 
+	it("rejects malformed tickets before allocating a peer", () => {
+		const { signaling, manager } = setup();
+		signaling.request({ connectionId: "bad", ticket: "malformed", iceServers: [] });
+		expect(signaling.closeConnection).toHaveBeenCalledWith("bad", "Malformed connection ticket");
+		manager.close();
+	});
+
 	it("serializes negotiation failures and closes their peer", async () => {
-		const signaling = new FakeSignaling();
-		const manager = new BackendWebRtcManager({ signaling });
+		const { signaling, manager, request } = setup();
 		const error = new Promise<Error>((resolve) => manager.onError((_connectionId, value) => resolve(value)));
-		signaling.request("connection");
-
-		signaling.signal("connection", { kind: "description", type: "answer", sdp: "v=0" });
-
+		signaling.request(request);
+		signaling.signal(request.connectionId, { kind: "description", type: "answer", sdp: "v=0" });
 		expect((await error).message).toContain("expected an offer");
-		expect(signaling.closeConnection).toHaveBeenCalledWith("connection", "WebRTC negotiation failed");
-		signaling.close("connection", "done");
+		expect(signaling.closeConnection).toHaveBeenCalledWith(request.connectionId, "WebRTC negotiation failed");
+		signaling.close(request.connectionId, "done");
 		manager.close();
 	});
 

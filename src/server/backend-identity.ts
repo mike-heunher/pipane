@@ -11,6 +11,11 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { backendRegistrationPayload } from "../shared/rendezvous-protocol.js";
+import {
+	TRUST_PROTOCOL_VERSION,
+	backendIdentityBindingPayload,
+	type BackendIdentityBinding,
+} from "../shared/trust-protocol.js";
 
 const BACKEND_IDENTITY_VERSION = 1 as const;
 const BACKEND_ID_PREFIX = "b_";
@@ -120,12 +125,57 @@ export function verifyBackendChallenge(
 	nonce: string,
 	signature: string,
 ): boolean {
+	return verifyBackendSignature(publicKey, backendRegistrationPayload(nonce), signature);
+}
+
+export function signBackendIdentityBinding(
+	identity: BackendIdentity,
+	input: { connectionId: string; offerSdp: string; answerSdp: string; expiresAt: number },
+): BackendIdentityBinding {
+	const unsigned: Omit<BackendIdentityBinding, "signature"> = {
+		version: TRUST_PROTOCOL_VERSION,
+		backendId: identity.backendId,
+		publicKey: identity.publicKey,
+		connectionId: input.connectionId,
+		offerSha256: sha256Base64Url(input.offerSdp),
+		answerSha256: sha256Base64Url(input.answerSdp),
+		dtlsFingerprint: extractDtlsFingerprint(input.answerSdp),
+		expiresAt: input.expiresAt,
+	};
+	const signature = sign("sha256", Buffer.from(backendIdentityBindingPayload(unsigned)), {
+		key: identity.privateKey,
+		dsaEncoding: "ieee-p1363",
+	}).toString("base64url");
+	return { ...unsigned, signature };
+}
+
+export function verifyBackendIdentityBinding(binding: BackendIdentityBinding): boolean {
+	try {
+		if (binding.version !== TRUST_PROTOCOL_VERSION || deriveBackendId(binding.publicKey) !== binding.backendId) return false;
+		const { signature, ...unsigned } = binding;
+		return verifyBackendSignature(binding.publicKey, backendIdentityBindingPayload(unsigned), signature);
+	} catch {
+		return false;
+	}
+}
+
+export function sha256Base64Url(value: string): string {
+	return createHash("sha256").update(value).digest("base64url");
+}
+
+export function extractDtlsFingerprint(sdp: string): string {
+	const match = /^a=fingerprint:(sha-(?:1|224|256|384|512)) ([A-Fa-f0-9:]+)\r?$/m.exec(sdp);
+	if (!match) throw new Error("SDP answer is missing a DTLS certificate fingerprint");
+	return `${match[1].toLowerCase()} ${match[2].toUpperCase()}`;
+}
+
+function verifyBackendSignature(publicKey: string, payload: string, signature: string): boolean {
 	try {
 		const key = createPublicKey({ key: decodePublicKey(publicKey), format: "der", type: "spki" });
 		assertP256Key(key);
 		return verify(
 			"sha256",
-			Buffer.from(backendRegistrationPayload(nonce)),
+			Buffer.from(payload),
 			{ key, dsaEncoding: "ieee-p1363" },
 			Buffer.from(signature, "base64url"),
 		);

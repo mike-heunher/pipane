@@ -15,6 +15,7 @@
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
+import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import type { UpdateTarget } from "../shared/updates.js";
@@ -535,6 +536,8 @@ export class WsAgentAdapter implements BackendClient {
 	}
 
 	private handleMessage(raw: string): void {
+		// Semantic v2 responses share authenticated DataChannels with application v1.
+		if (isBackendProtocolFrame(raw)) return;
 		const decoded = decodeServerMessage(raw);
 		if (!decoded.ok) {
 			this.handleProtocolError(decoded.error);

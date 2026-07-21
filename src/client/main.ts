@@ -1,10 +1,3 @@
-// Unregister any stale service workers from previous apps on this port
-if ("serviceWorker" in navigator) {
-	navigator.serviceWorker.getRegistrations().then((registrations) => {
-		for (const r of registrations) r.unregister();
-	});
-}
-
 import { initThemes, getShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
 import { live } from "lit/directives/live.js";
@@ -12,6 +5,7 @@ import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
 import { ConversationScrollController } from "./conversation-scroll.js";
 import { conversationDraftKey, ConversationDraftStore } from "./conversation-drafts.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { consumeAppRuntime } from "./app-runtime.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import "./session-picker.js";
 import "./ui/index.js";
@@ -47,7 +41,9 @@ import {
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
 
-const agent: BackendClient = new WsAgentAdapter();
+const appRuntime = consumeAppRuntime(() => new WsAgentAdapter());
+const agent: BackendClient = appRuntime.client;
+const remoteRuntime = appRuntime.remote;
 initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
 document.addEventListener("keydown", handleConversationKeyDown);
@@ -622,6 +618,73 @@ function renderUpdateNotifications() {
 	`;
 }
 
+function backendDisplayName(backendId: string): string {
+	const descriptor = remoteRuntime?.backends.find((backend) => backend.backendId === backendId);
+	return descriptor?.name || `${backendId.slice(0, 12)}…`;
+}
+
+function switchBackend(event: Event): void {
+	const backendId = (event.currentTarget as HTMLSelectElement).value;
+	if (backendId && backendId !== remoteRuntime?.backendId) {
+		window.location.assign(`/backend/${encodeURIComponent(backendId)}`);
+	}
+}
+
+async function removeCurrentBackend(): Promise<void> {
+	if (!remoteRuntime) return;
+	const name = backendDisplayName(remoteRuntime.backendId);
+	if (!window.confirm(`Remove ${name} from this account? Active connections will close immediately.`)) return;
+	try {
+		await remoteRuntime.manager.revokeBackend(remoteRuntime.backendId);
+		const next = remoteRuntime.backends.find((backend) => backend.backendId !== remoteRuntime.backendId && backend.online)
+			?? remoteRuntime.backends.find((backend) => backend.backendId !== remoteRuntime.backendId);
+		if (next) window.location.assign(`/backend/${encodeURIComponent(next.backendId)}`);
+		else window.location.reload();
+	} catch (error) {
+		agent.reportError(error, "Failed to remove backend");
+	}
+}
+
+function renderBackendBar() {
+	if (!remoteRuntime) return "";
+	const active = remoteRuntime.backends.find((backend) => backend.backendId === remoteRuntime.backendId);
+	return html`
+		<div class="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/40 text-sm" data-testid="backend-switcher">
+			<span class="text-muted-foreground shrink-0">Backend</span>
+			<select
+				class="min-w-0 max-w-64 rounded border border-border bg-background px-2 py-1 text-foreground"
+				@change=${switchBackend}
+				aria-label="Active backend"
+			>
+				${remoteRuntime.backends.map((backend) => html`
+					<option
+						value=${backend.backendId}
+						?selected=${backend.backendId === remoteRuntime.backendId}
+						?disabled=${!backend.online}
+					>
+						${backendDisplayName(backend.backendId)}${backend.online ? "" : " (offline)"}
+					</option>
+				`)}
+			</select>
+			<span class=${active?.online ? "text-green-600" : "text-amber-600"}>
+				${active?.online ? "Online" : "Offline"}
+			</span>
+			<span class="flex-1"></span>
+			<button
+				type="button"
+				class="text-muted-foreground hover:text-foreground"
+				title="Pair or recover another browser or backend"
+				@click=${() => window.alert("Run `pipane pair` in an owned backend terminal, then scan its QR code. This also restores access after browser storage loss.")}
+			>Pair / recover</button>
+			<button
+				type="button"
+				class="text-red-600 hover:text-red-700"
+				@click=${() => { void removeCurrentBackend(); }}
+			>Remove</button>
+		</div>
+	`;
+}
+
 const renderApp = () => {
 	const app = document.getElementById("app");
 	if (!app) return;
@@ -645,6 +708,7 @@ const renderApp = () => {
 
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
+			${renderBackendBar()}
 			<!-- Main content: sidebar + chat -->
 			<div class="flex flex-1 overflow-hidden">
 				${!isMobile()
@@ -855,8 +919,26 @@ async function initApp() {
 		clearTimeout(connectingOverlayTimer);
 		render(
 			html`
-				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground">
-					<div class="text-destructive">Failed to connect to server. Is the backend running?</div>
+				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground p-6">
+					<div class="max-w-lg rounded-lg border border-border p-6">
+						<h1 class="text-lg font-semibold mb-2">Backend unavailable</h1>
+						<p class="text-destructive mb-4">Failed to connect to the selected backend. It may be offline or unreachable.</p>
+						${remoteRuntime ? html`
+							<button class="text-red-600 underline mb-4" type="button" @click=${() => { void removeCurrentBackend(); }}>
+								Remove this backend from the account
+							</button>
+						` : ""}
+						${remoteRuntime?.backends.some((backend) => backend.backendId !== remoteRuntime.backendId && backend.online)
+							? html`
+								<p class="text-sm text-muted-foreground mb-2">Open another authorized backend:</p>
+								<div class="flex flex-wrap gap-2">
+									${remoteRuntime.backends.filter((backend) => backend.backendId !== remoteRuntime.backendId && backend.online).map((backend) => html`
+										<a class="underline" href=${`/backend/${encodeURIComponent(backend.backendId)}`}>${backendDisplayName(backend.backendId)}</a>
+									`)}
+								</div>
+							`
+							: html`<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to restore access.</p>`}
+					</div>
 				</div>
 			`,
 			app,

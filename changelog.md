@@ -8,6 +8,8 @@
 - Let users scroll away from streaming conversation and tool output without being snapped back to the bottom.
 - Render HTML and styled Marked Markdown previews in script-enabled isolated iframes.
 - Add persistent backend identities, authenticated rendezvous registration, signaling relay, and a browser-to-Node WebRTC DataChannel foundation.
+- Add anonymous QR pairing, non-exportable browser device keys, signed one-use connection tickets, SDP/DTLS identity binding, revocation, and TURN fallback.
+- Add authorized multi-backend discovery and switching, remote semantic v2 operations, reconnection, recovery guidance, and restart-safe revocation.
 - Keep older completed tool calls collapsed when conversation renders recreate their DOM.
 - Isolate browser/backend operations behind carrier-neutral client and frame-transport contracts.
 - Add fuzzy slash-command autocomplete with inline help for built-in and Pi-provided commands.

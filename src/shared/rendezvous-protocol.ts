@@ -1,4 +1,6 @@
-export const RENDEZVOUS_PROTOCOL_VERSION = 1 as const;
+import type { BackendIdentityBinding, IceServerConfiguration } from "./trust-protocol.js";
+
+export const RENDEZVOUS_PROTOCOL_VERSION = 2 as const;
 
 export type RendezvousRole = "backend" | "browser";
 
@@ -9,7 +11,7 @@ export function rendezvousWebSocketUrl(baseUrl: string, role: RendezvousRole): s
 	else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
 		throw new Error(`Unsupported rendezvous URL protocol: ${url.protocol}`);
 	}
-	url.pathname = `/v1/rendezvous/${role}`;
+	url.pathname = `/v${RENDEZVOUS_PROTOCOL_VERSION}/rendezvous/${role}`;
 	url.search = "";
 	url.hash = "";
 	return url.toString();
@@ -45,21 +47,32 @@ export type BackendRendezvousCommand = RendezvousEnvelope & (
 		signature: string;
 		metadata: BackendRegistrationMetadata;
 	}
+	| { type: "open_pairing"; pairId: string; expiresAt: number }
+	| { type: "confirm_pairing"; connectionId: string }
 	| { type: "signal"; connectionId: string; signal: IceSignal }
+	| { type: "connection_binding"; connectionId: string; binding: BackendIdentityBinding }
 	| { type: "close_connection"; connectionId: string; reason?: string }
 );
 
 export type BackendRendezvousMessage = RendezvousEnvelope & (
 	| { type: "challenge"; nonce: string }
-	| { type: "registered"; backendId: string }
-	| { type: "connection_request"; connectionId: string }
+	| {
+		type: "registered";
+		backendId: string;
+		ticketPublicKey: string;
+		iceServers: IceServerConfiguration[];
+	}
+	| { type: "pairing_opened"; pairId: string; expiresAt: number }
+	| { type: "pairing_confirmed"; connectionId: string; pairId: string; accountId: string; deviceId: string }
+	| { type: "connection_request"; connectionId: string; ticket: string; iceServers: IceServerConfiguration[] }
 	| { type: "signal"; connectionId: string; signal: IceSignal }
 	| { type: "connection_closed"; connectionId: string; reason: string }
+	| { type: "authorization_revoked"; accountId: string; deviceId?: string }
 	| RendezvousErrorMessage
 );
 
 export type BrowserRendezvousCommand = RendezvousEnvelope & (
-	| { type: "connect_backend"; backendId: string }
+	| { type: "connect_backend"; backendId: string; ticket: string }
 	| { type: "signal"; connectionId: string; signal: IceSignal }
 	| { type: "close_connection"; connectionId: string; reason?: string }
 );
@@ -67,6 +80,7 @@ export type BrowserRendezvousCommand = RendezvousEnvelope & (
 export type BrowserRendezvousMessage = RendezvousEnvelope & (
 	| { type: "backend_connected"; backendId: string; connectionId: string }
 	| { type: "signal"; connectionId: string; signal: IceSignal }
+	| { type: "connection_binding"; connectionId: string; binding: BackendIdentityBinding }
 	| { type: "connection_closed"; connectionId: string; reason: string }
 	| RendezvousErrorMessage
 );
@@ -77,7 +91,9 @@ export type RendezvousErrorCode =
 	| "unsupported_version"
 	| "unknown_message"
 	| "backend_offline"
-	| "unauthorized_connection";
+	| "unauthorized_connection"
+	| "invalid_ticket"
+	| "invalid_pairing";
 
 export interface RendezvousErrorMessage extends RendezvousEnvelope {
 	type: "error";
@@ -135,24 +151,43 @@ function decodeCommand(
 			if (!isString(value.publicKey) || !isString(value.signature) || !isBackendMetadata(value.metadata)) {
 				return invalidMessage("register_backend requires publicKey, signature, and valid metadata");
 			}
-			return { ok: true, value: value as BackendRendezvousCommand };
+			break;
+		case "open_pairing":
+			if (role !== "backend") return unknownMessage(value.type);
+			if (!isString(value.pairId) || !isPositiveInteger(value.expiresAt)) {
+				return invalidMessage("open_pairing requires pairId and expiresAt");
+			}
+			break;
+		case "confirm_pairing":
+			if (role !== "backend") return unknownMessage(value.type);
+			if (!isString(value.connectionId)) return invalidMessage("confirm_pairing requires connectionId");
+			break;
 		case "connect_backend":
 			if (role !== "browser") return unknownMessage(value.type);
-			if (!isString(value.backendId)) return invalidMessage("connect_backend requires backendId");
-			return { ok: true, value: value as BrowserRendezvousCommand };
+			if (!isString(value.backendId) || !isString(value.ticket)) {
+				return invalidMessage("connect_backend requires backendId and ticket");
+			}
+			break;
 		case "signal":
 			if (!isString(value.connectionId) || !isIceSignal(value.signal)) {
 				return invalidMessage("signal requires connectionId and a valid ICE signal");
 			}
-			return { ok: true, value: value as BackendRendezvousCommand | BrowserRendezvousCommand };
+			break;
+		case "connection_binding":
+			if (role !== "backend") return unknownMessage(value.type);
+			if (!isString(value.connectionId) || !isBackendIdentityBinding(value.binding)) {
+				return invalidMessage("connection_binding requires connectionId and a valid binding");
+			}
+			break;
 		case "close_connection":
 			if (!isString(value.connectionId) || !isOptionalString(value.reason)) {
 				return invalidMessage("close_connection requires connectionId and an optional reason");
 			}
-			return { ok: true, value: value as BackendRendezvousCommand | BrowserRendezvousCommand };
+			break;
 		default:
 			return unknownMessage(value.type);
 	}
+	return { ok: true, value: value as BackendRendezvousCommand | BrowserRendezvousCommand };
 }
 
 function decodeServerMessage(raw: string, role: "backend"): RendezvousDecodeResult<BackendRendezvousMessage>;
@@ -170,10 +205,28 @@ function decodeServerMessage(
 			if (role !== "backend" || !isString(value.nonce)) return invalidMessage("invalid backend challenge");
 			break;
 		case "registered":
-			if (role !== "backend" || !isString(value.backendId)) return invalidMessage("invalid backend registration");
+			if (role !== "backend" || !isString(value.backendId) || !isString(value.ticketPublicKey) || !isIceServers(value.iceServers)) {
+				return invalidMessage("invalid backend registration");
+			}
+			break;
+		case "pairing_opened":
+			if (role !== "backend" || !isString(value.pairId) || !isPositiveInteger(value.expiresAt)) {
+				return invalidMessage("invalid pairing acknowledgement");
+			}
+			break;
+		case "pairing_confirmed":
+			if (role !== "backend"
+				|| !isString(value.connectionId)
+				|| !isString(value.pairId)
+				|| !isString(value.accountId)
+				|| !isString(value.deviceId)) {
+				return invalidMessage("invalid pairing confirmation");
+			}
 			break;
 		case "connection_request":
-			if (role !== "backend" || !isString(value.connectionId)) return invalidMessage("invalid connection request");
+			if (role !== "backend" || !isString(value.connectionId) || !isString(value.ticket) || !isIceServers(value.iceServers)) {
+				return invalidMessage("invalid connection request");
+			}
 			break;
 		case "backend_connected":
 			if (role !== "browser" || !isString(value.backendId) || !isString(value.connectionId)) {
@@ -183,8 +236,18 @@ function decodeServerMessage(
 		case "signal":
 			if (!isString(value.connectionId) || !isIceSignal(value.signal)) return invalidMessage("invalid ICE signal");
 			break;
+		case "connection_binding":
+			if (role !== "browser" || !isString(value.connectionId) || !isBackendIdentityBinding(value.binding)) {
+				return invalidMessage("invalid backend identity binding");
+			}
+			break;
 		case "connection_closed":
 			if (!isString(value.connectionId) || !isString(value.reason)) return invalidMessage("invalid connection closure");
+			break;
+		case "authorization_revoked":
+			if (role !== "backend" || !isString(value.accountId) || !isOptionalString(value.deviceId)) {
+				return invalidMessage("invalid authorization revocation");
+			}
 			break;
 		case "error":
 			if (!isErrorCode(value.code) || !isString(value.message) || !isOptionalString(value.connectionId)) {
@@ -239,13 +302,35 @@ function isIceSignal(value: unknown): value is IceSignal {
 	return false;
 }
 
+function isBackendIdentityBinding(value: unknown): value is BackendIdentityBinding {
+	return isRecord(value)
+		&& value.version === 1
+		&& isString(value.backendId)
+		&& isString(value.publicKey)
+		&& isString(value.connectionId)
+		&& isString(value.offerSha256)
+		&& isString(value.answerSha256)
+		&& isString(value.dtlsFingerprint)
+		&& isPositiveInteger(value.expiresAt)
+		&& isString(value.signature);
+}
+
+function isIceServers(value: unknown): value is IceServerConfiguration[] {
+	return Array.isArray(value) && value.every((server) => isRecord(server)
+		&& (isString(server.urls) || (Array.isArray(server.urls) && server.urls.length > 0 && server.urls.every(isString)))
+		&& isOptionalString(server.username)
+		&& isOptionalString(server.credential));
+}
+
 function isErrorCode(value: unknown): value is RendezvousErrorCode {
 	return value === "invalid_json"
 		|| value === "invalid_message"
 		|| value === "unsupported_version"
 		|| value === "unknown_message"
 		|| value === "backend_offline"
-		|| value === "unauthorized_connection";
+		|| value === "unauthorized_connection"
+		|| value === "invalid_ticket"
+		|| value === "invalid_pairing";
 }
 
 function invalidMessage(message: string): RendezvousDecodeResult<never> {
@@ -265,5 +350,9 @@ function isString(value: unknown): value is string {
 }
 
 function isOptionalString(value: unknown): value is string | undefined {
-	return value === undefined || typeof value === "string";
+	return value === undefined || isString(value);
+}
+
+function isPositiveInteger(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) > 0;
 }

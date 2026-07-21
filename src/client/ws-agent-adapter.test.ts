@@ -191,6 +191,19 @@ describe("WsAgentAdapter transport injection", () => {
 		expect(transport.send).toHaveBeenCalledOnce();
 		expect(transport.close).toHaveBeenCalledOnce();
 	});
+
+	it("ignores semantic v2 responses multiplexed on a remote carrier", () => {
+		const { adapter, simulateServerMessage } = createTestAdapter();
+		simulateServerMessage({
+			v: 2,
+			kind: "response",
+			id: "api_1",
+			method: "sessions.list",
+			success: true,
+			result: [],
+		});
+		expect(adapter.state.error).toBeUndefined();
+	});
 });
 
 describe("WsAgentAdapter prompt routing", () => {

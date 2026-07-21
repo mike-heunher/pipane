@@ -9,8 +9,10 @@
  * - Detached sessions are read from JSONL on demand.
  */
 
-import { WebSocket, type WebSocketServer } from "ws";
+import type { WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
+import { FRAME_CONNECTION_OPEN, type ServerFrameConnection } from "./frame-connection.js";
+
 import { copyFile } from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
 import path from "node:path";
@@ -105,7 +107,7 @@ export class WsHandler {
 	private ensurePool: () => void;
 	private isRequestAuthorized: (req: IncomingMessage) => boolean;
 
-	private clients = new Map<WebSocket, ClientState>();
+	private clients = new Map<ServerFrameConnection, ClientState>();
 	/** Last known extension statuses, retained while a session is detached. */
 	private extensionStatusesBySession = new Map<string, Map<string, string>>();
 	/** Latest successful account-wide subscription usage from any process. */
@@ -255,7 +257,7 @@ export class WsHandler {
 	private pushExtensionStatusesToSubscribers(sessionPath: string): void {
 		const message = encodeServerMessage(this.makeExtensionStatusMessage(sessionPath));
 		for (const [ws, client] of this.clients) {
-			if (client.subscribedSession !== sessionPath || ws.readyState !== WebSocket.OPEN) continue;
+			if (client.subscribedSession !== sessionPath || ws.readyState !== FRAME_CONNECTION_OPEN) continue;
 			ws.send(message);
 		}
 	}
@@ -312,22 +314,27 @@ export class WsHandler {
 				.map((process) => process.attachedSession)
 				.filter((sessionPath): sessionPath is string => sessionPath !== null),
 			sessionStatuses: this.registry.getAllStatuses(),
-			connectedWsOpen: Array.from(this.clients.keys()).filter((ws) => ws.readyState === WebSocket.OPEN).length,
+			connectedWsOpen: Array.from(this.clients.keys()).filter((ws) => ws.readyState === FRAME_CONNECTION_OPEN).length,
 			processes,
 		};
 	}
 
 	register(wss: WebSocketServer): void {
-		wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+		wss.on("connection", (ws, req) => {
+			if (!this.isRequestAuthorized(req)) {
+				ws.close(1008, "Unauthorized");
+				return;
+			}
+			this.acceptConnection(ws);
+		});
 	}
 
-	private handleConnection(ws: WebSocket, req: IncomingMessage): void {
-		if (!this.isRequestAuthorized(req)) {
-			ws.close(1008, "Unauthorized");
-			return;
-		}
+	acceptAuthenticatedConnection(connection: ServerFrameConnection): void {
+		this.acceptConnection(connection);
+	}
 
-		console.log("WebSocket client connected");
+	private acceptConnection(ws: ServerFrameConnection): void {
+		console.log("Frame client connected");
 		this.clients.set(ws, {
 			subscribedSession: null,
 			lastVersion: 0,
@@ -354,17 +361,17 @@ export class WsHandler {
 
 		ws.on("message", (raw) => this.handleMessage(ws, raw.toString()));
 		ws.on("close", () => {
-			console.log("WebSocket client disconnected");
+			console.log("Frame client disconnected");
 			this.clients.delete(ws);
 		});
 	}
 
-	private sendMessage(ws: WebSocket, payload: ServerMessagePayload): void {
-		if (ws.readyState === WebSocket.OPEN) ws.send(encodeServerMessage(payload));
+	private sendMessage(ws: ServerFrameConnection, payload: ServerMessagePayload): void {
+		if (ws.readyState === FRAME_CONNECTION_OPEN) ws.send(encodeServerMessage(payload));
 	}
 
 	private sendSuccess<Type extends ClientCommandType>(
-		ws: WebSocket,
+		ws: ServerFrameConnection,
 		id: string,
 		command: Type,
 		data: CommandResponseData<Type>,
@@ -379,7 +386,7 @@ export class WsHandler {
 	}
 
 	private sendError(
-		ws: WebSocket,
+		ws: ServerFrameConnection,
 		id: string | null,
 		command: string,
 		error: string,
@@ -388,14 +395,18 @@ export class WsHandler {
 		this.sendMessage(ws, { type: "response", id, command, success: false, code, error });
 	}
 
+	notifySessionsChanged(file: string): void {
+		this.broadcast({ type: "sessions_changed", file });
+	}
+
 	private broadcast(payload: ServerMessagePayload): void {
 		const message = encodeServerMessage(payload);
 		for (const ws of this.clients.keys()) {
-			if (ws.readyState === WebSocket.OPEN) ws.send(message);
+			if (ws.readyState === FRAME_CONNECTION_OPEN) ws.send(message);
 		}
 	}
 
-	private async handleMessage(ws: WebSocket, raw: string): Promise<void> {
+	private async handleMessage(ws: ServerFrameConnection, raw: string): Promise<void> {
 		const decoded = decodeClientCommand(raw);
 		if (!decoded.ok) {
 			this.sendError(
@@ -488,7 +499,7 @@ export class WsHandler {
 		}
 	}
 
-	private async handleInstallPi(ws: WebSocket, command: CommandOf<"install_pi">): Promise<void> {
+	private async handleInstallPi(ws: ServerFrameConnection, command: CommandOf<"install_pi">): Promise<void> {
 		const installable = isPiInstallable(this.piLaunch.command, this.piLaunch.baseArgs);
 		if (!installable) {
 			throw new Error(`Automatic install not supported for command '${this.piLaunch.command}'. Set PI_CLI or install manually.`);
@@ -514,7 +525,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "install_pi", {});
 	}
 
-	private handleSubscribeSession(ws: WebSocket, command: CommandOf<"subscribe_session">): void {
+	private handleSubscribeSession(ws: ServerFrameConnection, command: CommandOf<"subscribe_session">): void {
 		const client = this.clients.get(ws);
 		if (!client) return;
 		const requestedPath = command.sessionPath;
@@ -580,7 +591,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "subscribe_session", {});
 	}
 
-	private async handlePrompt(ws: WebSocket, command: CommandOf<"prompt">): Promise<void> {
+	private async handlePrompt(ws: ServerFrameConnection, command: CommandOf<"prompt">): Promise<void> {
 		const requestedPath = command.sessionPath;
 		if (!requestedPath) throw new Error("Missing sessionPath");
 		let sessionPath = requestedPath === "__new__"
@@ -684,7 +695,7 @@ export class WsHandler {
 		}
 	}
 
-	private async handleSteer(ws: WebSocket, command: CommandOf<"steer">): Promise<void> {
+	private async handleSteer(ws: ServerFrameConnection, command: CommandOf<"steer">): Promise<void> {
 		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 		const actor = this.registry.find(sessionPath);
@@ -693,7 +704,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "steer", {});
 	}
 
-	private async handleRemoveSteering(ws: WebSocket, command: CommandOf<"remove_steering">): Promise<void> {
+	private async handleRemoveSteering(ws: ServerFrameConnection, command: CommandOf<"remove_steering">): Promise<void> {
 		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 		const index = command.index;
@@ -704,7 +715,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "remove_steering", {});
 	}
 
-	private async handleAbort(ws: WebSocket, command: CommandOf<"abort">): Promise<void> {
+	private async handleAbort(ws: ServerFrameConnection, command: CommandOf<"abort">): Promise<void> {
 		const sessionPath = command.sessionPath;
 		const actor = sessionPath ? this.registry.find(sessionPath) : undefined;
 		if (actor) {
@@ -717,7 +728,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "abort", {});
 	}
 
-	private async handleHardKill(ws: WebSocket, command: CommandOf<"hard_kill">): Promise<void> {
+	private async handleHardKill(ws: ServerFrameConnection, command: CommandOf<"hard_kill">): Promise<void> {
 		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 
@@ -746,7 +757,7 @@ export class WsHandler {
 		);
 	}
 
-	private async handleCompact(ws: WebSocket, command: CommandOf<"compact">): Promise<void> {
+	private async handleCompact(ws: ServerFrameConnection, command: CommandOf<"compact">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("compact", async () => {
@@ -769,7 +780,7 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "compact", { ...response.data });
 	}
 
-	private async handleGetAvailableModels(ws: WebSocket, command: CommandOf<"get_available_models">): Promise<void> {
+	private async handleGetAvailableModels(ws: ServerFrameConnection, command: CommandOf<"get_available_models">): Promise<void> {
 		const lease = await this.acquireAnyProcess();
 		try {
 			const response = await this.pool.sendRpcChecked(lease.process, { type: "get_available_models" });
@@ -781,7 +792,7 @@ export class WsHandler {
 		}
 	}
 
-	private async handleGetCommands(ws: WebSocket, command: CommandOf<"get_commands">): Promise<void> {
+	private async handleGetCommands(ws: ServerFrameConnection, command: CommandOf<"get_commands">): Promise<void> {
 		let cwd = command.cwd || this.defaultCwd;
 		if (command.sessionPath) {
 			const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
@@ -802,13 +813,13 @@ export class WsHandler {
 		}
 	}
 
-	private async handleReloadProcesses(ws: WebSocket, command: CommandOf<"reload_processes">): Promise<void> {
+	private async handleReloadProcesses(ws: ServerFrameConnection, command: CommandOf<"reload_processes">): Promise<void> {
 		const { killed, draining } = this.pool.decommissionAll();
 		this.ensurePool();
 		this.sendSuccess(ws, command.id, "reload_processes", { killed, draining });
 	}
 
-	private async handleGetDefaultModel(ws: WebSocket, command: CommandOf<"get_default_model">): Promise<void> {
+	private async handleGetDefaultModel(ws: ServerFrameConnection, command: CommandOf<"get_default_model">): Promise<void> {
 		const lease = await this.acquireAnyProcess();
 		try {
 			const stateResp = await this.pool.sendRpcChecked(lease.process, { type: "get_state" });
@@ -823,11 +834,11 @@ export class WsHandler {
 		}
 	}
 
-	private handleGetSessionStatuses(ws: WebSocket, command: CommandOf<"get_session_statuses">): void {
+	private handleGetSessionStatuses(ws: ServerFrameConnection, command: CommandOf<"get_session_statuses">): void {
 		this.sendSuccess(ws, command.id, "get_session_statuses", { statuses: this.registry.getAllStatuses() });
 	}
 
-	private async handleFork(ws: WebSocket, command: CommandOf<"fork">): Promise<void> {
+	private async handleFork(ws: ServerFrameConnection, command: CommandOf<"fork">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const entryId = command.entryId;
 		if (!entryId) throw new Error("Missing entryId");
@@ -858,7 +869,7 @@ export class WsHandler {
 		});
 	}
 
-	private async handleForkPrompt(ws: WebSocket, command: CommandOf<"fork_prompt">): Promise<void> {
+	private async handleForkPrompt(ws: ServerFrameConnection, command: CommandOf<"fork_prompt">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const message = command.message;
 		if (!message) throw new Error("Missing message");
@@ -937,7 +948,7 @@ export class WsHandler {
 		}
 	}
 
-	private async handleSetSessionName(ws: WebSocket, command: CommandOf<"set_session_name">): Promise<void> {
+	private async handleSetSessionName(ws: ServerFrameConnection, command: CommandOf<"set_session_name">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("set session name", async () => {
@@ -973,7 +984,7 @@ export class WsHandler {
 	private async applyRequestedControlState(
 		proc: RpcProcess,
 		actor: SessionActor,
-		ws: WebSocket,
+		ws: ServerFrameConnection,
 		command: ControlCommand,
 	): Promise<void> {
 		const sessionPath = actor.sessionPath;
@@ -1005,7 +1016,7 @@ export class WsHandler {
 		}
 		this.publishEffectiveControlState(actor, stateResponse.data);
 
-		if (ws.readyState === WebSocket.OPEN) {
+		if (ws.readyState === FRAME_CONNECTION_OPEN) {
 			this.sendMessage(ws, {
 				type: "control_state",
 				sessionPath,
@@ -1200,7 +1211,7 @@ export class WsHandler {
 		const revision = this.revisionForState(sessionPath, hash);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
-			if (ws.readyState !== WebSocket.OPEN) continue;
+			if (ws.readyState !== FRAME_CONNECTION_OPEN) continue;
 			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
@@ -1223,7 +1234,7 @@ export class WsHandler {
 		const revision = this.revisionForState(sessionPath, session.hash);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
-			if (ws.readyState !== WebSocket.OPEN) continue;
+			if (ws.readyState !== FRAME_CONNECTION_OPEN) continue;
 
 			const syncOp = session.computeSyncOp(client.lastJson, client.lastHash, client.lastVersion);
 			if (!syncOp) continue;

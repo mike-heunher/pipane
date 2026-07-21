@@ -38,6 +38,7 @@ function setup() {
 	const client = new BrowserRendezvousClient({
 		url: "https://signal.example/base?ignored=true",
 		backendId: "b_expected",
+		ticket: "ticket",
 		createWebSocket,
 	});
 	return { client, socket, createWebSocket };
@@ -49,10 +50,11 @@ describe("BrowserRendezvousClient", () => {
 		const connecting = client.connect();
 		expect(client.connect()).toBe(connecting);
 		socket.open();
-		expect(createWebSocket).toHaveBeenCalledWith("wss://signal.example/v1/rendezvous/browser");
+		expect(createWebSocket).toHaveBeenCalledWith("wss://signal.example/v2/rendezvous/browser");
 		expect(socket.sent[0]).toEqual(expect.objectContaining({
 			type: "connect_backend",
 			backendId: "b_expected",
+			ticket: "ticket",
 		}));
 
 		socket.receive({ type: "backend_connected", backendId: "b_expected", connectionId: "c_one" });

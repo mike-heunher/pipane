@@ -6,6 +6,7 @@ import {
 	type IceSignal,
 	type RendezvousErrorMessage,
 } from "../shared/rendezvous-protocol.js";
+import type { BackendIdentityBinding } from "../shared/trust-protocol.js";
 
 export type BrowserRendezvousSocket = Pick<
 	WebSocket,
@@ -15,6 +16,7 @@ export type BrowserRendezvousSocket = Pick<
 export interface BrowserRendezvousClientOptions {
 	url: string;
 	backendId: string;
+	ticket: string;
 	createWebSocket?: (url: string) => BrowserRendezvousSocket;
 }
 
@@ -22,8 +24,10 @@ export interface BrowserRendezvousClientOptions {
 export class BrowserRendezvousClient {
 	private readonly endpoint: string;
 	private readonly backendId: string;
+	private readonly ticket: string;
 	private readonly createWebSocket: (url: string) => BrowserRendezvousSocket;
 	private readonly signalListeners = new Set<(signal: IceSignal) => void>();
+	private readonly bindingListeners = new Set<(binding: BackendIdentityBinding) => void>();
 	private readonly closedListeners = new Set<(reason: string) => void>();
 	private readonly errorListeners = new Set<(error: RendezvousErrorMessage | Error) => void>();
 	private socket: BrowserRendezvousSocket | null = null;
@@ -35,6 +39,7 @@ export class BrowserRendezvousClient {
 	constructor(options: BrowserRendezvousClientOptions) {
 		this.endpoint = rendezvousWebSocketUrl(options.url, "browser");
 		this.backendId = options.backendId;
+		this.ticket = options.ticket;
 		this.createWebSocket = options.createWebSocket ?? ((url) => new WebSocket(url));
 	}
 
@@ -50,13 +55,13 @@ export class BrowserRendezvousClient {
 			this.rejectConnecting = reject;
 		});
 		if (this.socket?.readyState === WebSocket.OPEN) {
-			this.sendRaw({ type: "connect_backend", backendId: this.backendId });
+			this.sendRaw({ type: "connect_backend", backendId: this.backendId, ticket: this.ticket });
 			return this.connecting;
 		}
 
 		const socket = this.createWebSocket(this.endpoint);
 		this.socket = socket;
-		socket.onopen = () => this.sendRaw({ type: "connect_backend", backendId: this.backendId });
+		socket.onopen = () => this.sendRaw({ type: "connect_backend", backendId: this.backendId, ticket: this.ticket });
 		socket.onmessage = (event) => this.handleMessage(socket, String(event.data));
 		socket.onerror = () => {
 			const error = new Error("Rendezvous WebSocket failed");
@@ -80,6 +85,11 @@ export class BrowserRendezvousClient {
 	onSignal(listener: (signal: IceSignal) => void): () => void {
 		this.signalListeners.add(listener);
 		return () => this.signalListeners.delete(listener);
+	}
+
+	onIdentityBinding(listener: (binding: BackendIdentityBinding) => void): () => void {
+		this.bindingListeners.add(listener);
+		return () => this.bindingListeners.delete(listener);
 	}
 
 	onConnectionClosed(listener: (reason: string) => void): () => void {
@@ -134,6 +144,10 @@ export class BrowserRendezvousClient {
 			case "signal":
 				if (message.connectionId !== this.connectionId) return;
 				for (const listener of this.signalListeners) listener(message.signal);
+				break;
+			case "connection_binding":
+				if (message.connectionId !== this.connectionId) return;
+				for (const listener of this.bindingListeners) listener(message.binding);
 				break;
 			case "connection_closed":
 				if (message.connectionId !== this.connectionId) return;

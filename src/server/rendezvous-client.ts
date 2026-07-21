@@ -10,12 +10,28 @@ import {
 	type WithoutProtocolVersion,
 	rendezvousWebSocketUrl,
 } from "../shared/rendezvous-protocol.js";
-import {
-	signBackendChallenge,
-	type BackendIdentity,
-} from "./backend-identity.js";
+import type { BackendIdentityBinding, IceServerConfiguration } from "../shared/trust-protocol.js";
+import { signBackendChallenge, type BackendIdentity } from "./backend-identity.js";
 
 export { rendezvousWebSocketUrl } from "../shared/rendezvous-protocol.js";
+
+export interface BackendConnectionRequest {
+	connectionId: string;
+	ticket: string;
+	iceServers: IceServerConfiguration[];
+}
+
+export interface PairingConfirmation {
+	connectionId: string;
+	pairId: string;
+	accountId: string;
+	deviceId: string;
+}
+
+export interface AuthorizationRevocation {
+	accountId: string;
+	deviceId?: string;
+}
 
 export interface BackendRendezvousClientOptions {
 	url: string;
@@ -36,10 +52,17 @@ export class BackendRendezvousClient {
 	private readonly cancelSchedule: typeof globalThis.clearTimeout;
 	private readonly maxReconnectDelayMs: number;
 	private readonly statusListeners = new Set<(connected: boolean) => void>();
-	private readonly connectionListeners = new Set<(connectionId: string) => void>();
+	private readonly connectionListeners = new Set<(request: BackendConnectionRequest) => void>();
 	private readonly signalListeners = new Set<(connectionId: string, signal: IceSignal) => void>();
 	private readonly closedListeners = new Set<(connectionId: string, reason: string) => void>();
+	private readonly revocationListeners = new Set<(revocation: AuthorizationRevocation) => void>();
 	private readonly errorListeners = new Set<(error: RendezvousErrorMessage | Error) => void>();
+	private readonly activePairings = new Map<string, number>();
+	private readonly pairingResolvers = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+	private readonly confirmationResolvers = new Map<string, {
+		resolve: (confirmation: PairingConfirmation) => void;
+		reject: (error: Error) => void;
+	}>();
 	private socket: WebSocket | null = null;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private reconnectAttempt = 0;
@@ -49,6 +72,8 @@ export class BackendRendezvousClient {
 	private readonly firstRegistration: Promise<string>;
 	private resolveFirstRegistration!: (backendId: string) => void;
 	private rejectFirstRegistration!: (error: Error) => void;
+	private _ticketPublicKey: string | undefined;
+	private _iceServers: IceServerConfiguration[] = [];
 
 	constructor(options: BackendRendezvousClientOptions) {
 		this.endpoint = rendezvousWebSocketUrl(options.url, "backend");
@@ -68,6 +93,18 @@ export class BackendRendezvousClient {
 		return this.registered;
 	}
 
+	get ticketPublicKey(): string {
+		if (!this._ticketPublicKey) throw new Error("Rendezvous ticket verification key is unavailable");
+		return this._ticketPublicKey;
+	}
+
+	get iceServers(): IceServerConfiguration[] {
+		return this._iceServers.map((server) => ({
+			...server,
+			urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+		}));
+	}
+
 	start(): Promise<string> {
 		if (this.stopped) {
 			this.stopped = false;
@@ -84,10 +121,15 @@ export class BackendRendezvousClient {
 			this.cancelSchedule(this.reconnectTimer);
 			this.reconnectTimer = undefined;
 		}
+		const error = new Error("Rendezvous client stopped");
 		if (!this.firstRegistrationSettled) {
 			this.firstRegistrationSettled = true;
-			this.rejectFirstRegistration(new Error("Rendezvous client stopped before registration"));
+			this.rejectFirstRegistration(error);
 		}
+		for (const pending of this.pairingResolvers.values()) pending.reject(error);
+		for (const pending of this.confirmationResolvers.values()) pending.reject(error);
+		this.pairingResolvers.clear();
+		this.confirmationResolvers.clear();
 		this.socket?.close(1000, "Backend stopped");
 		this.socket = null;
 	}
@@ -97,7 +139,7 @@ export class BackendRendezvousClient {
 		return () => this.statusListeners.delete(listener);
 	}
 
-	onConnectionRequest(listener: (connectionId: string) => void): () => void {
+	onConnectionRequest(listener: (request: BackendConnectionRequest) => void): () => void {
 		this.connectionListeners.add(listener);
 		return () => this.connectionListeners.delete(listener);
 	}
@@ -112,13 +154,40 @@ export class BackendRendezvousClient {
 		return () => this.closedListeners.delete(listener);
 	}
 
+	onAuthorizationRevoked(listener: (revocation: AuthorizationRevocation) => void): () => void {
+		this.revocationListeners.add(listener);
+		return () => this.revocationListeners.delete(listener);
+	}
+
 	onError(listener: (error: RendezvousErrorMessage | Error) => void): () => void {
 		this.errorListeners.add(listener);
 		return () => this.errorListeners.delete(listener);
 	}
 
+	openPairing(pairId: string, expiresAt: number): Promise<void> {
+		this.activePairings.set(pairId, expiresAt);
+		const existing = this.pairingResolvers.get(pairId);
+		if (existing) return Promise.reject(new Error("Pairing request is already pending"));
+		const promise = new Promise<void>((resolve, reject) => this.pairingResolvers.set(pairId, { resolve, reject }));
+		if (this.registered) this.send({ type: "open_pairing", pairId, expiresAt });
+		return promise;
+	}
+
+	confirmPairing(connectionId: string): Promise<PairingConfirmation> {
+		if (this.confirmationResolvers.has(connectionId)) return Promise.reject(new Error("Pairing confirmation is already pending"));
+		const promise = new Promise<PairingConfirmation>((resolve, reject) => {
+			this.confirmationResolvers.set(connectionId, { resolve, reject });
+		});
+		this.send({ type: "confirm_pairing", connectionId });
+		return promise;
+	}
+
 	sendSignal(connectionId: string, signal: IceSignal): void {
 		this.send({ type: "signal", connectionId, signal });
+	}
+
+	sendIdentityBinding(connectionId: string, binding: BackendIdentityBinding): void {
+		this.send({ type: "connection_binding", connectionId, binding });
 	}
 
 	closeConnection(connectionId: string, reason?: string): void {
@@ -135,6 +204,9 @@ export class BackendRendezvousClient {
 		socket.on("close", () => {
 			if (this.socket !== socket) return;
 			this.socket = null;
+			const interruption = new Error("Rendezvous disconnected during pairing confirmation");
+			for (const pending of this.confirmationResolvers.values()) pending.reject(interruption);
+			this.confirmationResolvers.clear();
 			const wasRegistered = this.registered;
 			this.registered = false;
 			if (wasRegistered) this.emitStatus(false);
@@ -166,6 +238,8 @@ export class BackendRendezvousClient {
 					socket.close(1002, "Backend identity mismatch");
 					return;
 				}
+				this._ticketPublicKey = message.ticketPublicKey;
+				this._iceServers = message.iceServers;
 				this.registered = true;
 				this.reconnectAttempt = 0;
 				this.emitStatus(true);
@@ -173,19 +247,53 @@ export class BackendRendezvousClient {
 					this.firstRegistrationSettled = true;
 					this.resolveFirstRegistration(message.backendId);
 				}
+				for (const [pairId, expiresAt] of this.activePairings) {
+					if (expiresAt > Date.now()) this.send({ type: "open_pairing", pairId, expiresAt });
+					else this.activePairings.delete(pairId);
+				}
 				break;
+			case "pairing_opened": {
+				const pending = this.pairingResolvers.get(message.pairId);
+				this.pairingResolvers.delete(message.pairId);
+				pending?.resolve();
+				break;
+			}
+			case "pairing_confirmed": {
+				const pending = this.confirmationResolvers.get(message.connectionId);
+				this.confirmationResolvers.delete(message.connectionId);
+				this.activePairings.delete(message.pairId);
+				pending?.resolve(message);
+				break;
+			}
 			case "connection_request":
-				for (const listener of this.connectionListeners) listener(message.connectionId);
+				for (const listener of this.connectionListeners) listener({
+					connectionId: message.connectionId,
+					ticket: message.ticket,
+					iceServers: message.iceServers,
+				});
 				break;
 			case "signal":
 				for (const listener of this.signalListeners) listener(message.connectionId, message.signal);
 				break;
-			case "connection_closed":
+			case "connection_closed": {
+				const pending = this.confirmationResolvers.get(message.connectionId);
+				this.confirmationResolvers.delete(message.connectionId);
+				pending?.reject(new Error(message.reason));
 				for (const listener of this.closedListeners) listener(message.connectionId, message.reason);
 				break;
-			case "error":
-				this.emitError(message);
+			}
+			case "authorization_revoked":
+				for (const listener of this.revocationListeners) listener(message);
 				break;
+			case "error": {
+				this.emitError(message);
+				if (message.connectionId) {
+					const pending = this.confirmationResolvers.get(message.connectionId);
+					this.confirmationResolvers.delete(message.connectionId);
+					pending?.reject(new Error(message.message));
+				}
+				break;
+			}
 		}
 	}
 
@@ -195,13 +303,8 @@ export class BackendRendezvousClient {
 	}
 
 	private sendRaw(command: object): void {
-		if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-			throw new Error("Rendezvous WebSocket is not connected");
-		}
-		this.socket.send(encodeRendezvousMessage({
-			protocolVersion: RENDEZVOUS_PROTOCOL_VERSION,
-			...command,
-		}));
+		if (!this.socket || this.socket.readyState !== WebSocket.OPEN) throw new Error("Rendezvous WebSocket is not connected");
+		this.socket.send(encodeRendezvousMessage({ protocolVersion: RENDEZVOUS_PROTOCOL_VERSION, ...command }));
 	}
 
 	private scheduleReconnect(): void {

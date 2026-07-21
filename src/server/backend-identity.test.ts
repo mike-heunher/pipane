@@ -10,7 +10,9 @@ import {
 	loadBackendIdentity,
 	loadOrCreateBackendIdentity,
 	signBackendChallenge,
+	signBackendIdentityBinding,
 	verifyBackendChallenge,
+	verifyBackendIdentityBinding,
 } from "./backend-identity.js";
 
 const cleanupPaths: string[] = [];
@@ -48,6 +50,19 @@ describe("backend identity", () => {
 		expect(verifyBackendChallenge(identity.publicKey, "challenge-one", signature)).toBe(true);
 		expect(verifyBackendChallenge(identity.publicKey, "challenge-two", signature)).toBe(false);
 		expect(verifyBackendChallenge(identity.publicKey, "challenge-one", "invalid")).toBe(false);
+	});
+
+	it("binds both SDP descriptions and the DTLS certificate fingerprint", () => {
+		const identity = loadOrCreateBackendIdentity(identityPath());
+		const binding = signBackendIdentityBinding(identity, {
+			connectionId: "c_binding",
+			offerSdp: "v=0\r\na=setup:actpass\r\n",
+			answerSdp: "v=0\r\na=fingerprint:sha-256 aa:bb:cc\r\n",
+			expiresAt: Date.now() + 60_000,
+		});
+		expect(binding.dtlsFingerprint).toBe("sha-256 AA:BB:CC");
+		expect(verifyBackendIdentityBinding(binding)).toBe(true);
+		expect(verifyBackendIdentityBinding({ ...binding, answerSha256: "tampered" })).toBe(false);
 	});
 
 	it("rejects malformed identity files and public keys", () => {
