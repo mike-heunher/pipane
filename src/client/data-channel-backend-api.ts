@@ -3,6 +3,11 @@ import type {
 	BackendCapabilities,
 	DirectoryListing,
 	FileContentResponse,
+	FileUploadChunk,
+	FileUploadChunkResponse,
+	FileUploadMetadata,
+	FileUploadResponse,
+	FileUploadSession,
 	LocalSettingsReadResponse,
 	LocalSettingsValidationResponse,
 	SessionInfoDTO,
@@ -107,6 +112,35 @@ export class DataChannelBackendApi implements BackendApi {
 			throw new Error("Backend returned invalid file content");
 		}
 		return value as unknown as FileContentResponse;
+	}
+
+	async createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession> {
+		const value = await this.request("files.upload.create", metadata);
+		if (!isRecord(value) || !isString(value.uploadId) || value.uploadId.length === 0) {
+			throw new Error("Backend returned an invalid file upload session");
+		}
+		return value as unknown as FileUploadSession;
+	}
+
+	async appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse> {
+		const value = await this.request("files.upload.append", chunk);
+		if (!isRecord(value) || !Number.isSafeInteger(value.nextOffset) || value.nextOffset < 0) {
+			throw new Error("Backend returned an invalid file upload offset");
+		}
+		return value as unknown as FileUploadChunkResponse;
+	}
+
+	async completeFileUpload(uploadId: string): Promise<FileUploadResponse> {
+		const value = await this.request("files.upload.complete", { uploadId });
+		if (!isRecord(value)
+			|| !isString(value.path)
+			|| !isString(value.fileName)
+			|| !isString(value.mimeType)
+			|| !Number.isSafeInteger(value.size)
+			|| value.size < 0) {
+			throw new Error("Backend returned an invalid uploaded file");
+		}
+		return value as unknown as FileUploadResponse;
 	}
 
 	async getLocalSettings(): Promise<LocalSettingsReadResponse> {

@@ -102,6 +102,33 @@ describe("owned message editor", () => {
 			.toBe("Stop generation (Esc)");
 	});
 
+	it("uploads arbitrary dropped files and retains their backend path", async () => {
+		const editor = new MessageEditor();
+		const onFileUpload = vi.fn(async () => "/tmp/pipane-upload-test/bundle.tar");
+		editor.onFileUpload = onFileUpload;
+		document.body.appendChild(editor);
+		await editor.updateComplete;
+
+		const file = new File([new Uint8Array([0, 1, 2, 255])], "bundle.tar", {
+			type: "application/x-tar",
+		});
+		await (editor as any).handleDrop({
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+			dataTransfer: { files: [file] },
+		});
+
+		expect(onFileUpload).toHaveBeenCalledWith(expect.objectContaining({
+			type: "document",
+			fileName: "bundle.tar",
+			mimeType: "application/x-tar",
+		}));
+		expect(editor.attachments).toEqual([
+			expect.objectContaining({ uploadedPath: "/tmp/pipane-upload-test/bundle.tar" }),
+		]);
+		expect(editor.querySelector<HTMLInputElement>("input[type=file]")?.accept).toBe("");
+	});
+
 	it("does not submit Enter while an IME composition is active", async () => {
 		const editor = new MessageEditor();
 		editor.value = "変換中";

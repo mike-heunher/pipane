@@ -97,6 +97,9 @@ export class MockPipaneServer {
 		const wss = new WebSocketServer({ server, path: "/ws" });
 
 		let mock: MockPipaneServer | undefined;
+		let uploadSequence = 0;
+		const uploads = new Map<string, { fileName: string; mimeType: string; size: number }>();
+		app.use(express.json({ limit: "1mb" }));
 		app.use(express.static(CLIENT_DIST));
 		app.get("/api/sessions", (_req, res) => res.json(mock?.sessions ?? options.sessions));
 		app.get("/api/settings/local", (_req, res) => res.json({
@@ -113,6 +116,36 @@ export class MockPipaneServer {
 				return;
 			}
 			res.json({ path: filePath, content });
+		});
+		app.post("/api/files/uploads", (req, res) => {
+			const uploadId = `mock-${++uploadSequence}`;
+			uploads.set(uploadId, {
+				fileName: String(req.body.fileName),
+				mimeType: String(req.body.mimeType),
+				size: Number(req.body.size),
+			});
+			res.status(201).json({ uploadId });
+		});
+		app.post("/api/files/uploads/:uploadId/chunks", (req, res) => {
+			if (!uploads.has(req.params.uploadId)) {
+				res.status(404).json({ error: "Upload not found" });
+				return;
+			}
+			res.json({
+				nextOffset: Number(req.body.offset) + Buffer.from(String(req.body.data), "base64").length,
+			});
+		});
+		app.post("/api/files/uploads/:uploadId/complete", (req, res) => {
+			const upload = uploads.get(req.params.uploadId);
+			if (!upload) {
+				res.status(404).json({ error: "Upload not found" });
+				return;
+			}
+			uploads.delete(req.params.uploadId);
+			res.json({
+				...upload,
+				path: path.join("/tmp", `pipane-mock-upload-${req.params.uploadId}`, path.basename(upload.fileName)),
+			});
 		});
 		app.get("/api/updates", (_req, res) => res.json({
 			checkedAt: new Date().toISOString(),

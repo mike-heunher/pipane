@@ -25,6 +25,9 @@ function api(overrides: Partial<BackendApi> = {}): BackendApi {
 		browseDirectory: async () => ({ path: "/", dirs: [] }),
 		getRawSession: async () => "",
 		getFileContent: async () => ({ path: "/file", content: "" }),
+		createFileUpload: async () => ({ uploadId: "upload" }),
+		appendFileUpload: async ({ offset, data }) => ({ nextOffset: offset + Buffer.from(data, "base64").length }),
+		completeFileUpload: async () => ({ path: "/tmp/file", fileName: "file", mimeType: "application/octet-stream", size: 0 }),
 		getLocalSettings: async () => ({ path: "/settings", exists: false, errors: [], settings: {}, formatted: "{}" }),
 		validateLocalSettings: async () => ({ valid: true, errors: [] }),
 		patchLocalSettings: async () => ({ valid: true, errors: [] }),
@@ -60,6 +63,25 @@ describe("BackendProtocolHandler", () => {
 		expect(connection.sent).toHaveLength(1);
 		expect(reconnected.sent).toEqual(connection.sent);
 		expect(JSON.parse(connection.sent[0])).toMatchObject({ success: true, method: "sessions.list" });
+	});
+
+	it("dispatches chunked file upload requests", async () => {
+		const appendFileUpload = vi.fn(async () => ({ nextOffset: 3 }));
+		const connection = new FakeConnection();
+		new BackendProtocolHandler(api({ appendFileUpload })).accept(connection, "d_one");
+		connection.message(request("upload-chunk", "files.upload.append", {
+			uploadId: "u1",
+			offset: 0,
+			data: "YWJj",
+		}));
+		await settle();
+
+		expect(appendFileUpload).toHaveBeenCalledWith({ uploadId: "u1", offset: 0, data: "YWJj" });
+		expect(JSON.parse(connection.sent[0])).toMatchObject({
+			method: "files.upload.append",
+			success: true,
+			result: { nextOffset: 3 },
+		});
 	});
 
 	it("scopes idempotency records to the authenticated device", async () => {

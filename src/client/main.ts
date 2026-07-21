@@ -11,6 +11,8 @@ import "./session-picker.js";
 import "./ui/index.js";
 import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import type { Attachment } from "./ui/utils/attachment-utils.js";
+import { buildAttachmentPromptPayload } from "./attachment-prompt.js";
+import { uploadAttachmentFile } from "./file-upload.js";
 import { mergeSlashCommands, type SlashCommandSuggestion } from "./slash-commands.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
@@ -171,29 +173,18 @@ function handleStopClick(): void {
 	agent.abort();
 }
 
+async function uploadEditorAttachment(attachment: Attachment): Promise<string> {
+	return (await uploadAttachmentFile(agent, attachment)).path;
+}
+
 function handleSend(input: string, attachments?: Attachment[]) {
-	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-	const docTexts: string[] = [];
-
-	if (attachments && attachments.length > 0) {
-		for (const att of attachments) {
-			if (att.type === "image") {
-				images.push({ type: "image", data: att.content, mimeType: att.mimeType });
-			} else if (att.extractedText) {
-				docTexts.push(att.extractedText);
-			}
-		}
-	}
-
-	const fullInput = docTexts.length > 0
-		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
-		: input;
+	const payload = buildAttachmentPromptPayload(input, attachments);
 
 	// Clear only this conversation's editor after capturing the input.
 	clearCurrentConversationDraft();
 
 	conversationScroll.pinToBottom();
-	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err: unknown) => {
+	agent.prompt(payload.input, payload.images).catch((err: unknown) => {
 		agent.reportError(err, "Prompt failed");
 		console.error("Prompt failed:", err);
 	});
@@ -810,6 +801,7 @@ const renderApp = () => {
 										.slashCommands=${slashCommands}
 										.onInput=${(value: string) => conversationDrafts.setValue(draftKey, value)}
 										.onFilesChange=${(files: Attachment[]) => conversationDrafts.setAttachments(draftKey, files)}
+										.onFileUpload=${uploadEditorAttachment}
 										.onSend=${(input: string, attachments?: Attachment[]) => handleSend(input, attachments)}
 										.onAbort=${handleStopClick}
 										.onModelSelect=${handleModelSelect}
@@ -867,25 +859,10 @@ const renderApp = () => {
  * Fork the current session and prompt in the new fork.
  */
 async function handleForkAndPrompt(input: string, attachments?: Attachment[]) {
-	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
-	const docTexts: string[] = [];
-
-	if (attachments && attachments.length > 0) {
-		for (const att of attachments) {
-			if (att.type === "image") {
-				images.push({ type: "image", data: att.content, mimeType: att.mimeType });
-			} else if (att.extractedText) {
-				docTexts.push(att.extractedText);
-			}
-		}
-	}
-
-	const fullInput = docTexts.length > 0
-		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
-		: input;
+	const payload = buildAttachmentPromptPayload(input, attachments);
 
 	try {
-		await agent.forkAndPrompt(fullInput, images.length > 0 ? images : undefined);
+		await agent.forkAndPrompt(payload.input, payload.images);
 	} catch (err) {
 		agent.reportError(err, "Fork prompt failed");
 		console.error("Fork prompt failed:", err);

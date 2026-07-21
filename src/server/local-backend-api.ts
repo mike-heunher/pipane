@@ -1,7 +1,10 @@
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watchFile } from "node:fs";
-import { unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, open, rm, unlink } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
+import { MAX_UPLOAD_FILE_BYTES } from "../shared/backend-api.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 import type {
@@ -9,6 +12,11 @@ import type {
 	BackendCapabilities,
 	DirectoryListing,
 	FileContentResponse,
+	FileUploadChunk,
+	FileUploadChunkResponse,
+	FileUploadMetadata,
+	FileUploadResponse,
+	FileUploadSession,
 	LocalSettingsReadResponse,
 	LocalSettingsValidationResponse,
 	SessionInfoDTO,
@@ -21,7 +29,21 @@ import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import type { UpdateApiManager } from "./update-api.js";
 
 const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_CHUNK_BYTES = 256 * 1024;
+const MAX_ACTIVE_UPLOADS = 32;
 const watchedSettingsPaths = new Set<string>();
+
+interface ActiveUploadChunk {
+	length: number;
+	digest: string;
+	operation: Promise<void>;
+}
+
+interface ActiveFileUpload extends FileUploadMetadata {
+	path: string;
+	received: number;
+	chunks: Map<number, ActiveUploadChunk>;
+}
 
 export class LocalBackendApiError extends Error {
 	constructor(
@@ -38,6 +60,7 @@ export interface LocalBackendApiOptions {
 	localSettingsStore?: LocalSettingsStore;
 	sessionPaths?: SessionPathGuard;
 	backendId?: string | (() => string | undefined);
+	uploadDirectory?: string;
 	updateManager?: UpdateApiManager;
 	onLocalSettingsReloaded?: () => void;
 	runSessionMutation?: (
@@ -52,16 +75,19 @@ export class LocalBackendApi implements BackendApi {
 	readonly localSettingsStore: LocalSettingsStore;
 	private readonly sessionPaths: SessionPathGuard;
 	private readonly backendId: () => string | undefined;
+	private readonly uploadDirectory: string;
 	private readonly updateManager?: UpdateApiManager;
 	private readonly onLocalSettingsReloaded?: () => void;
 	private readonly runSessionMutation?: LocalBackendApiOptions["runSessionMutation"];
 	private readonly sessionIndex: SessionIndex;
+	private readonly uploads = new Map<string, ActiveFileUpload>();
 
 	constructor(options: LocalBackendApiOptions = {}) {
 		this.localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
 		this.sessionPaths = options.sessionPaths ?? new SessionPathGuard();
 		const configuredBackendId = options.backendId;
 		this.backendId = typeof configuredBackendId === "function" ? configuredBackendId : () => configuredBackendId;
+		this.uploadDirectory = path.resolve(options.uploadDirectory ?? os.tmpdir());
 		this.updateManager = options.updateManager;
 		this.onLocalSettingsReloaded = options.onLocalSettingsReloaded;
 		this.runSessionMutation = options.runSessionMutation;
@@ -82,6 +108,7 @@ export class LocalBackendApi implements BackendApi {
 				"sessions",
 				"host-browse",
 				"file-preview",
+				"file-upload",
 				"local-settings",
 				"updates",
 			],
@@ -159,6 +186,115 @@ export class LocalBackendApi implements BackendApi {
 		return Promise.resolve({ path: resolved, content: bytes.toString("utf8") });
 	}
 
+	async createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession> {
+		if (!metadata || typeof metadata.fileName !== "string" || metadata.fileName.length === 0) {
+			throw new LocalBackendApiError("Upload filename is required", 400, "invalid_request");
+		}
+		if (typeof metadata.mimeType !== "string" || metadata.mimeType.length === 0 || metadata.mimeType.length > 255) {
+			throw new LocalBackendApiError("Upload MIME type is invalid", 400, "invalid_request");
+		}
+		if (!Number.isSafeInteger(metadata.size) || metadata.size < 0 || metadata.size > MAX_UPLOAD_FILE_BYTES) {
+			throw new LocalBackendApiError(
+				`Upload exceeds the ${Math.round(MAX_UPLOAD_FILE_BYTES / 1024 / 1024)}MB size limit`,
+				413,
+				"invalid_request",
+			);
+		}
+		if (this.uploads.size >= MAX_ACTIVE_UPLOADS) {
+			throw new LocalBackendApiError("Too many file uploads are active", 409, "conflict");
+		}
+
+		await mkdir(this.uploadDirectory, { recursive: true, mode: 0o700 });
+		const directory = await mkdtemp(path.join(this.uploadDirectory, "pipane-upload-"));
+		const fileName = safeUploadFileName(metadata.fileName);
+		const uploadPath = path.join(directory, fileName);
+		try {
+			const file = await open(uploadPath, "wx", 0o600);
+			try {
+				await file.truncate(metadata.size);
+			} finally {
+				await file.close();
+			}
+		} catch (error) {
+			await rm(directory, { recursive: true, force: true });
+			throw error;
+		}
+
+		const uploadId = randomUUID();
+		this.uploads.set(uploadId, {
+			fileName,
+			mimeType: metadata.mimeType,
+			size: metadata.size,
+			path: uploadPath,
+			received: 0,
+			chunks: new Map(),
+		});
+		return { uploadId };
+	}
+
+	async appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse> {
+		const upload = this.uploads.get(chunk.uploadId);
+		if (!upload) throw new LocalBackendApiError("File upload was not found", 404, "not_found");
+		if (!Number.isSafeInteger(chunk.offset) || chunk.offset < 0) {
+			throw new LocalBackendApiError("Upload chunk offset is invalid", 400, "invalid_request");
+		}
+		const bytes = decodeUploadChunk(chunk.data);
+		if (bytes.length === 0 || bytes.length > MAX_UPLOAD_CHUNK_BYTES) {
+			throw new LocalBackendApiError("Upload chunk size is invalid", 413, "invalid_request");
+		}
+		const end = chunk.offset + bytes.length;
+		if (end > upload.size) {
+			throw new LocalBackendApiError("Upload chunk exceeds the declared file size", 400, "invalid_request");
+		}
+
+		const digest = createHash("sha256").update(bytes).digest("hex");
+		const prior = upload.chunks.get(chunk.offset);
+		if (prior) {
+			if (prior.length !== bytes.length || prior.digest !== digest) {
+				throw new LocalBackendApiError("Upload chunk conflicts with existing data", 409, "conflict");
+			}
+			await prior.operation;
+			return { nextOffset: end };
+		}
+		for (const [existingOffset, existing] of upload.chunks) {
+			if (chunk.offset < existingOffset + existing.length && existingOffset < end) {
+				throw new LocalBackendApiError("Upload chunk overlaps existing data", 409, "conflict");
+			}
+		}
+
+		const operation = writeUploadChunk(upload.path, chunk.offset, bytes).then(() => {
+			upload.received += bytes.length;
+		});
+		upload.chunks.set(chunk.offset, { length: bytes.length, digest, operation });
+		try {
+			await operation;
+		} catch (error) {
+			upload.chunks.delete(chunk.offset);
+			throw error;
+		}
+		return { nextOffset: end };
+	}
+
+	async completeFileUpload(uploadId: string): Promise<FileUploadResponse> {
+		const upload = this.uploads.get(uploadId);
+		if (!upload) throw new LocalBackendApiError("File upload was not found", 404, "not_found");
+		await Promise.all([...upload.chunks.values()].map((chunk) => chunk.operation));
+		if (upload.received !== upload.size) {
+			throw new LocalBackendApiError(
+				`File upload is incomplete (${upload.received} of ${upload.size} bytes received)`,
+				409,
+				"conflict",
+			);
+		}
+		this.uploads.delete(uploadId);
+		return {
+			path: upload.path,
+			fileName: upload.fileName,
+			mimeType: upload.mimeType,
+			size: upload.size,
+		};
+	}
+
 	getLocalSettings(): Promise<LocalSettingsReadResponse> {
 		return Promise.resolve(this.localSettingsStore.read());
 	}
@@ -231,6 +367,50 @@ export class LocalBackendApi implements BackendApi {
 				void this.settingsChanged();
 			}, 150);
 		});
+	}
+}
+
+function safeUploadFileName(fileName: string): string {
+	const baseName = path.basename(fileName.replaceAll("\\", "/"))
+		.replace(/[\u0000-\u001f\u007f]/gu, "_")
+		.trim();
+	if (!baseName || baseName === "." || baseName === "..") return "upload.bin";
+
+	const extension = truncateUtf8(path.extname(baseName), 40);
+	const stem = truncateUtf8(baseName.slice(0, Math.max(0, baseName.length - path.extname(baseName).length)), 200 - Buffer.byteLength(extension));
+	return `${stem || "upload"}${extension}`;
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+	const characters = Array.from(value);
+	while (characters.length > 0 && Buffer.byteLength(characters.join("")) > maxBytes) characters.pop();
+	return characters.join("");
+}
+
+function decodeUploadChunk(data: unknown): Buffer {
+	if (typeof data !== "string" || data.length === 0 || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)) {
+		throw new LocalBackendApiError("Upload chunk is not valid base64", 400, "invalid_request");
+	}
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	const expectedBytes = (data.length / 4) * 3 - padding;
+	const bytes = Buffer.from(data, "base64");
+	if (bytes.length !== expectedBytes) {
+		throw new LocalBackendApiError("Upload chunk is not valid base64", 400, "invalid_request");
+	}
+	return bytes;
+}
+
+async function writeUploadChunk(uploadPath: string, offset: number, bytes: Buffer): Promise<void> {
+	const file = await open(uploadPath, "r+");
+	try {
+		let written = 0;
+		while (written < bytes.length) {
+			const result = await file.write(bytes, written, bytes.length - written, offset + written);
+			if (result.bytesWritten <= 0) throw new Error("Failed to write uploaded file chunk");
+			written += result.bytesWritten;
+		}
+	} finally {
+		await file.close();
 	}
 }
 

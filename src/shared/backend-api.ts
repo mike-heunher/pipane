@@ -53,9 +53,35 @@ export interface LocalSettingsValidationResponse {
 	formatted?: string;
 }
 
+export const MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024;
+
 export interface FileContentResponse {
 	path: string;
 	content: string;
+}
+
+export interface FileUploadMetadata {
+	fileName: string;
+	mimeType: string;
+	size: number;
+}
+
+export interface FileUploadSession {
+	uploadId: string;
+}
+
+export interface FileUploadChunk {
+	uploadId: string;
+	offset: number;
+	data: string;
+}
+
+export interface FileUploadChunkResponse {
+	nextOffset: number;
+}
+
+export interface FileUploadResponse extends FileUploadMetadata {
+	path: string;
 }
 
 /** Semantic request surface independent of HTTP or DataChannel transport. */
@@ -67,6 +93,9 @@ export interface BackendApi {
 	browseDirectory(path: string): Promise<DirectoryListing>;
 	getRawSession(sessionPath: string): Promise<string>;
 	getFileContent(sessionPath: string, path: string): Promise<FileContentResponse>;
+	createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession>;
+	appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse>;
+	completeFileUpload(uploadId: string): Promise<FileUploadResponse>;
 	getLocalSettings(): Promise<LocalSettingsReadResponse>;
 	validateLocalSettings(content: string): Promise<LocalSettingsValidationResponse>;
 	patchLocalSettings(patch: Record<string, unknown>): Promise<LocalSettingsValidationResponse>;

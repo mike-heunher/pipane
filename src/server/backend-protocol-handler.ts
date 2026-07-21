@@ -91,6 +91,9 @@ export class BackendProtocolHandler {
 			case "sessions.forkMessages": return this.api.listForkMessages(request.params.sessionPath);
 			case "sessions.raw": return this.api.getRawSession(request.params.sessionPath);
 			case "files.read": return this.api.getFileContent(request.params.sessionPath, request.params.path);
+			case "files.upload.create": return this.api.createFileUpload(request.params);
+			case "files.upload.append": return this.api.appendFileUpload(request.params);
+			case "files.upload.complete": return this.api.completeFileUpload(request.params.uploadId);
 			case "host.browse": return this.api.browseDirectory(request.params.path);
 			case "settings.get": return this.api.getLocalSettings();
 			case "settings.validate": return this.api.validateLocalSettings(request.params.content);

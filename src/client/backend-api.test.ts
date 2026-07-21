@@ -57,6 +57,36 @@ describe("HttpBackendApi", () => {
 		);
 	});
 
+	it("uploads file chunks through the HTTP backend facade", async () => {
+		const uploaded = {
+			path: "/tmp/pipane-upload-123/archive.zip",
+			fileName: "archive.zip",
+			mimeType: "application/zip",
+			size: 3,
+		};
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(jsonResponse({ uploadId: "upload/one" }, 201))
+			.mockResolvedValueOnce(jsonResponse({ nextOffset: 3 }))
+			.mockResolvedValueOnce(jsonResponse(uploaded));
+		const api = new HttpBackendApi({ fetch: fetchMock });
+
+		await expect(api.createFileUpload({ fileName: "archive.zip", mimeType: "application/zip", size: 3 }))
+			.resolves.toEqual({ uploadId: "upload/one" });
+		await expect(api.appendFileUpload({ uploadId: "upload/one", offset: 0, data: "eGl6" }))
+			.resolves.toEqual({ nextOffset: 3 });
+		await expect(api.completeFileUpload("upload/one")).resolves.toEqual(uploaded);
+
+		expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/files/uploads", expect.objectContaining({
+			method: "POST",
+			body: JSON.stringify({ fileName: "archive.zip", mimeType: "application/zip", size: 3 }),
+		}));
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/files/uploads/upload%2Fone/chunks", expect.objectContaining({
+			method: "POST",
+			body: JSON.stringify({ offset: 0, data: "eGl6" }),
+		}));
+		expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/files/uploads/upload%2Fone/complete", { method: "POST" });
+	});
+
 	it("maps settings and update operations without exposing fetch to callers", async () => {
 		const settings = { path: "/settings.json", exists: true, errors: [], settings: {}, formatted: "{}\n" };
 		const validation = { valid: true, errors: [], formatted: "{}\n" };

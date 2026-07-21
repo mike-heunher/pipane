@@ -103,11 +103,11 @@ The currently implemented semantic methods are:
 
 - `backend.capabilities`
 - `sessions.list`, `sessions.delete`, `sessions.forkMessages`, `sessions.raw`
-- `files.read`, `host.browse`
+- `files.read`, `files.upload.create`, `files.upload.append`, `files.upload.complete`, `host.browse`
 - `settings.get`, `settings.validate`, `settings.patch`, `settings.save`
 - `updates.get`, `updates.run`
 
-Every method has runtime-validated parameters, correlated responses, stable error codes, bounded concurrency, and a bounded device-scoped completed-request cache. Pending browser requests retain their id across a carrier reconnect, so an in-flight mutation is resumed or answered from the cache instead of being executed twice. The backend uses one `LocalBackendApi` implementation for both the legacy local HTTP facade and semantic DataChannel requests. Remote session results are scoped to a structured `{ backendId, path }` identity; paths remain backend-local identifiers rather than authorization.
+Every method has runtime-validated parameters, correlated responses, stable error codes, bounded concurrency, and a bounded device-scoped completed-request cache. File uploads use bounded, offset-addressed base64 chunks so arbitrary non-image attachments can cross either local HTTP or the authenticated DataChannel, land in a private temporary backend path, and be referenced in the agent prompt. Pending browser requests retain their id across a carrier reconnect, so an in-flight mutation is resumed or answered from the cache instead of being executed twice. The backend uses one `LocalBackendApi` implementation for both the legacy local HTTP facade and semantic DataChannel requests. Remote session results are scoped to a structured `{ backendId, path }` identity; paths remain backend-local identifiers rather than authorization.
 
 The browser's `RemoteBackendManager` maintains one client/store per active backend id, requests a fresh ticket whenever a WebRTC carrier reconnects, and never treats an arbitrary URL backend id as authorized until signed account discovery includes it. The product UI exposes reachable authorized backends and uses on-demand pairwise connections rather than a full mesh. Terminal `pipane pair` remains the no-email recovery path when browser storage is lost.
 

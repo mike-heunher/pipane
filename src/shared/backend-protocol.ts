@@ -11,6 +11,9 @@ export type BackendMethod =
 	| "sessions.forkMessages"
 	| "sessions.raw"
 	| "files.read"
+	| "files.upload.create"
+	| "files.upload.append"
+	| "files.upload.complete"
 	| "host.browse"
 	| "settings.get"
 	| "settings.validate"
@@ -26,6 +29,9 @@ export interface BackendMethodParams {
 	"sessions.forkMessages": { sessionPath: string };
 	"sessions.raw": { sessionPath: string };
 	"files.read": { sessionPath: string; path: string };
+	"files.upload.create": { fileName: string; mimeType: string; size: number };
+	"files.upload.append": { uploadId: string; offset: number; data: string };
+	"files.upload.complete": { uploadId: string };
 	"host.browse": { path: string };
 	"settings.get": Record<string, never>;
 	"settings.validate": { content: string };
@@ -164,6 +170,20 @@ function validateParams(method: BackendMethod, params: Record<string, unknown>):
 			return hasOnlyKeys(params, ["sessionPath", "path"])
 				&& isNonEmptyString(params.sessionPath)
 				&& isNonEmptyString(params.path);
+		case "files.upload.create":
+			return hasOnlyKeys(params, ["fileName", "mimeType", "size"])
+				&& isNonEmptyString(params.fileName)
+				&& isNonEmptyString(params.mimeType)
+				&& Number.isSafeInteger(params.size)
+				&& (params.size as number) >= 0;
+		case "files.upload.append":
+			return hasOnlyKeys(params, ["uploadId", "offset", "data"])
+				&& isNonEmptyString(params.uploadId)
+				&& Number.isSafeInteger(params.offset)
+				&& (params.offset as number) >= 0
+				&& isNonEmptyString(params.data);
+		case "files.upload.complete":
+			return hasOnlyKeys(params, ["uploadId"]) && isNonEmptyString(params.uploadId);
 		case "host.browse":
 			return hasOnlyKeys(params, ["path"]) && typeof params.path === "string";
 		case "settings.validate":
@@ -185,6 +205,9 @@ function isBackendMethod(value: string): value is BackendMethod {
 		"sessions.forkMessages",
 		"sessions.raw",
 		"files.read",
+		"files.upload.create",
+		"files.upload.append",
+		"files.upload.complete",
 		"host.browse",
 		"settings.get",
 		"settings.validate",

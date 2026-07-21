@@ -16,6 +16,7 @@ export interface Attachment {
 	size: number;
 	content: string; // base64 encoded original data (without data URL prefix)
 	extractedText?: string; // For documents: <pdf filename="..."><page number="1">text</page></pdf>
+	uploadedPath?: string; // Backend-local temporary path for non-image attachments
 	preview?: string; // base64 image preview (first page for PDFs, or same as content for images)
 }
 
@@ -197,7 +198,17 @@ export async function loadAttachment(
 		};
 	}
 
-	throw new Error(`Unsupported file type: ${mimeType}`);
+	return documentAttachment(id, detectedFileName, mimeType, size, base64Content);
+}
+
+function documentAttachment(
+	id: string,
+	fileName: string,
+	mimeType: string,
+	size: number,
+	content: string,
+): Attachment {
+	return { id, type: "document", fileName, mimeType, size, content };
 }
 
 async function processPdf(

@@ -58,6 +58,29 @@ describe("DataChannelBackendApi", () => {
 		await expect(deletion).rejects.toBeInstanceOf(DataChannelBackendApiError);
 	});
 
+	it("carries chunked file uploads over semantic frames", async () => {
+		const transport = new FakeTransport();
+		const api = new DataChannelBackendApi(transport, "b_one");
+
+		const creating = api.createFileUpload({ fileName: "data.bin", mimeType: "application/octet-stream", size: 3 });
+		expect(transport.sent[0]).toMatchObject({
+			method: "files.upload.create",
+			params: { fileName: "data.bin", mimeType: "application/octet-stream", size: 3 },
+		});
+		transport.reply(0, { uploadId: "u1" });
+		await expect(creating).resolves.toEqual({ uploadId: "u1" });
+
+		const appending = api.appendFileUpload({ uploadId: "u1", offset: 0, data: "YWJj" });
+		expect(transport.sent[1]).toMatchObject({ method: "files.upload.append" });
+		transport.reply(1, { nextOffset: 3 });
+		await expect(appending).resolves.toEqual({ nextOffset: 3 });
+
+		const completing = api.completeFileUpload("u1");
+		expect(transport.sent[2]).toMatchObject({ method: "files.upload.complete", params: { uploadId: "u1" } });
+		transport.reply(2, { path: "/tmp/data.bin", fileName: "data.bin", mimeType: "application/octet-stream", size: 3 });
+		await expect(completing).resolves.toMatchObject({ path: "/tmp/data.bin", size: 3 });
+	});
+
 	it("retries a pending request with the same id after carrier reconnection", async () => {
 		const transport = new FakeTransport();
 		const api = new DataChannelBackendApi(transport, "b_one");

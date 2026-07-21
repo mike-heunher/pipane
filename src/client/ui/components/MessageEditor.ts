@@ -5,6 +5,7 @@ import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Brain, Loader2, Paperclip, Send, Square } from "lucide";
+import { MAX_UPLOAD_FILE_BYTES } from "../../../shared/backend-api.js";
 import { type Attachment, loadAttachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
 import {
@@ -44,6 +45,7 @@ export class MessageEditor extends LitElement {
 	@property() onModelSelect?: () => void;
 	@property() onThinkingChange?: (level: "off" | "minimal" | "low" | "medium" | "high") => void;
 	@property() onFilesChange?: (files: Attachment[]) => void;
+	@property() onFileUpload?: (attachment: Attachment) => Promise<string>;
 	@property({ attribute: false }) slashCommands: SlashCommandSuggestion[] = [];
 	/** Called before built-in key handling. Return true when the event was handled. */
 	@property() onKeyDown?: (event: KeyboardEvent) => boolean;
@@ -53,9 +55,8 @@ export class MessageEditor extends LitElement {
 	@property() extraToolbarButtons?: () => TemplateResult;
 	@property() attachments: Attachment[] = [];
 	@property() maxFiles = 10;
-	@property() maxFileSize = 20 * 1024 * 1024; // 20MB
-	@property() acceptedTypes =
-		"image/*,application/pdf,.docx,.pptx,.xlsx,.xls,.txt,.md,.json,.xml,.html,.css,.js,.ts,.jsx,.tsx,.yml,.yaml";
+	@property() maxFileSize = MAX_UPLOAD_FILE_BYTES;
+	@property() acceptedTypes = "";
 
 	@state() processingFiles = false;
 	@state() isDragging = false;
@@ -151,6 +152,14 @@ export class MessageEditor extends LitElement {
 		}
 	};
 
+	private async loadFile(file: File): Promise<Attachment> {
+		const attachment = await loadAttachment(file);
+		if (attachment.type === "document" && this.onFileUpload) {
+			attachment.uploadedPath = await this.onFileUpload(attachment);
+		}
+		return attachment;
+	}
+
 	private handlePaste = async (e: ClipboardEvent) => {
 		const items = e.clipboardData?.items;
 		if (!items) return;
@@ -187,7 +196,7 @@ export class MessageEditor extends LitElement {
 						continue;
 					}
 
-					const attachment = await loadAttachment(file);
+					const attachment = await this.loadFile(file);
 					newAttachments.push(attachment);
 				} catch (error) {
 					console.error("Error processing pasted image:", error);
@@ -230,7 +239,7 @@ export class MessageEditor extends LitElement {
 					continue;
 				}
 
-				const attachment = await loadAttachment(file);
+				const attachment = await this.loadFile(file);
 				newAttachments.push(attachment);
 			} catch (error) {
 				console.error(`Error processing ${file.name}:`, error);
@@ -292,7 +301,7 @@ export class MessageEditor extends LitElement {
 					continue;
 				}
 
-				const attachment = await loadAttachment(file);
+				const attachment = await this.loadFile(file);
 				newAttachments.push(attachment);
 			} catch (error) {
 				console.error(`Error processing ${file.name}:`, error);

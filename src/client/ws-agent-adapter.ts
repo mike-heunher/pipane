@@ -1399,6 +1399,18 @@ export class WsAgentAdapter implements BackendClient {
 		return this.api.getFileContent(sessionPath, path);
 	}
 
+	createFileUpload(metadata: Parameters<BackendApi["createFileUpload"]>[0]) {
+		return this.api.createFileUpload(metadata);
+	}
+
+	appendFileUpload(chunk: Parameters<BackendApi["appendFileUpload"]>[0]) {
+		return this.api.appendFileUpload(chunk);
+	}
+
+	completeFileUpload(uploadId: string) {
+		return this.api.completeFileUpload(uploadId);
+	}
+
 	getLocalSettings() {
 		return this.api.getLocalSettings();
 	}

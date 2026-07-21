@@ -8,9 +8,14 @@ export interface RegisterRestApiOptions extends LocalBackendApiOptions {
 	api?: BackendApi;
 }
 
-async function readJsonBody(req: any): Promise<any> {
+async function readJsonBody(req: any, maxBytes = Number.POSITIVE_INFINITY): Promise<any> {
 	const chunks: Buffer[] = [];
-	for await (const chunk of req) chunks.push(chunk);
+	let size = 0;
+	for await (const chunk of req) {
+		size += chunk.length;
+		if (size > maxBytes) throw new LocalBackendApiError("Request body is too large", 413, "invalid_request");
+		chunks.push(chunk);
+	}
 	return JSON.parse(Buffer.concat(chunks).toString() || "{}");
 }
 
@@ -68,6 +73,46 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				throw new LocalBackendApiError("Missing 'sessionPath' or 'path' query parameter", 400, "invalid_request");
 			}
 			res.json(await api.getFileContent(req.query.sessionPath, req.query.path));
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
+	app.post("/api/files/uploads", async (req, res) => {
+		try {
+			const body = await readJsonBody(req, 512 * 1024);
+			if (typeof body.fileName !== "string" || typeof body.mimeType !== "string" || typeof body.size !== "number") {
+				throw new LocalBackendApiError("Missing file upload metadata", 400, "invalid_request");
+			}
+			res.status(201).json(await api.createFileUpload({
+				fileName: body.fileName,
+				mimeType: body.mimeType,
+				size: body.size,
+			}));
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
+	app.post("/api/files/uploads/:uploadId/chunks", async (req, res) => {
+		try {
+			const body = await readJsonBody(req, 512 * 1024);
+			if (typeof body.offset !== "number" || typeof body.data !== "string") {
+				throw new LocalBackendApiError("Missing file upload chunk", 400, "invalid_request");
+			}
+			res.json(await api.appendFileUpload({
+				uploadId: req.params.uploadId,
+				offset: body.offset,
+				data: body.data,
+			}));
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
+	app.post("/api/files/uploads/:uploadId/complete", async (req, res) => {
+		try {
+			res.json(await api.completeFileUpload(req.params.uploadId));
 		} catch (error) {
 			sendError(res, error);
 		}

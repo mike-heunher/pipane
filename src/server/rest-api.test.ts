@@ -7,6 +7,7 @@ import {
 	existsSync,
 	mkdtempSync,
 	mkdirSync,
+	readFileSync,
 	rmSync,
 	symlinkSync,
 	unwatchFile,
@@ -104,6 +105,7 @@ describe("REST session path confinement", () => {
 		registerRestApi(app, {
 			localSettingsStore: new LocalSettingsStore({ homeDir: tmpDir, settingsPath }),
 			sessionPaths: new SessionPathGuard(sessionsRoot),
+			uploadDirectory: path.join(tmpDir, "uploads"),
 		});
 		server = await new Promise<Server>((resolve) => {
 			const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
@@ -211,6 +213,52 @@ describe("REST session path confinement", () => {
 			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
 			expect(response.status).toBe(400);
 		}
+	});
+
+	it("stores arbitrary uploaded bytes in a confined temporary file", async () => {
+		const bytes = Buffer.from([0, 1, 2, 127, 128, 255]);
+		const created = await fetch(`${baseUrl}/api/files/uploads`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				fileName: "../payload.bin",
+				mimeType: "application/octet-stream",
+				size: bytes.length,
+			}),
+		});
+		expect(created.status).toBe(201);
+		const { uploadId } = await created.json() as { uploadId: string };
+
+		const chunk = await fetch(`${baseUrl}/api/files/uploads/${uploadId}/chunks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ offset: 0, data: bytes.toString("base64") }),
+		});
+		expect(chunk.status).toBe(200);
+		expect(await chunk.json()).toEqual({ nextOffset: bytes.length });
+
+		const completed = await fetch(`${baseUrl}/api/files/uploads/${uploadId}/complete`, { method: "POST" });
+		expect(completed.status).toBe(200);
+		const uploaded = await completed.json() as { path: string; fileName: string; size: number };
+		expect(uploaded).toMatchObject({ fileName: "payload.bin", size: bytes.length });
+		expect(uploaded.path.startsWith(path.join(tmpDir, "uploads"))).toBe(true);
+		expect(readFileSync(uploaded.path)).toEqual(bytes);
+	});
+
+	it("rejects invalid or incomplete file uploads", async () => {
+		const created = await fetch(`${baseUrl}/api/files/uploads`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ fileName: "partial.dat", mimeType: "application/octet-stream", size: 2 }),
+		});
+		const { uploadId } = await created.json() as { uploadId: string };
+		const invalidChunk = await fetch(`${baseUrl}/api/files/uploads/${uploadId}/chunks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ offset: 0, data: "not base64" }),
+		});
+		expect(invalidChunk.status).toBe(400);
+		expect((await fetch(`${baseUrl}/api/files/uploads/${uploadId}/complete`, { method: "POST" })).status).toBe(409);
 	});
 
 	it("keeps project directory browsing independently unrestricted", async () => {

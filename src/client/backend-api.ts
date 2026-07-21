@@ -3,6 +3,11 @@ import type {
 	BackendApi,
 	DirectoryListing,
 	FileContentResponse,
+	FileUploadChunk,
+	FileUploadChunkResponse,
+	FileUploadMetadata,
+	FileUploadResponse,
+	FileUploadSession,
 	LocalSettingsReadResponse,
 	LocalSettingsValidationResponse,
 	SessionInfoDTO,
@@ -14,6 +19,11 @@ export type {
 	DirectoryEntry,
 	DirectoryListing,
 	FileContentResponse,
+	FileUploadChunk,
+	FileUploadChunkResponse,
+	FileUploadMetadata,
+	FileUploadResponse,
+	FileUploadSession,
 	LocalSettingsReadResponse,
 	LocalSettingsValidationResponse,
 	SessionInfoDTO,
@@ -75,6 +85,26 @@ export class HttpBackendApi implements BackendApi {
 	getFileContent(sessionPath: string, path: string): Promise<FileContentResponse> {
 		const query = new URLSearchParams({ sessionPath, path });
 		return this.requestJson(`/api/files/content?${query}`, { cache: "no-store" });
+	}
+
+	createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession> {
+		return this.requestJson("/api/files/uploads", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(metadata),
+		});
+	}
+
+	appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse> {
+		return this.requestJson(`/api/files/uploads/${encodeURIComponent(chunk.uploadId)}/chunks`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ offset: chunk.offset, data: chunk.data }),
+		});
+	}
+
+	completeFileUpload(uploadId: string): Promise<FileUploadResponse> {
+		return this.requestJson(`/api/files/uploads/${encodeURIComponent(uploadId)}/complete`, { method: "POST" });
 	}
 
 	getLocalSettings(): Promise<LocalSettingsReadResponse> {
