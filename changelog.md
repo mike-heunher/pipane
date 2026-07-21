@@ -1,5 +1,6 @@
 # Unreleased
 
+- Match the settings command center palette to the active color theme and light or dark mode.
 - Replace the sidebar burger and raw JSON editor with a compact categorized settings command center.
 - Default sessions to the root checkout until filesystem activity identifies a linked worktree.
 - Fit more slash commands in the autocomplete overview with compact single-line entries.

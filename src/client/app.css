@@ -2157,6 +2157,206 @@ markdown-block pre code {
 	background: #58a0a4;
 }
 
+/* Keep the compact command-center geometry independent from its palette.
+   These aliases make the modal follow both the selected color theme and mode. */
+.local-settings-panel {
+	--settings-bg: var(--background, #fff);
+	--settings-surface: var(--card, var(--settings-bg));
+	--settings-raised: var(--popover, var(--settings-surface));
+	--settings-subtle: color-mix(in srgb, var(--muted, #e5e7eb) 42%, var(--settings-bg));
+	--settings-hover: var(--accent, #e5e7eb);
+	--settings-border: var(--border, #d1d5db);
+	--settings-text: var(--foreground, #111);
+	--settings-muted-text: var(--muted-foreground, #6b7280);
+	--settings-primary: var(--primary, #2563eb);
+	--settings-primary-text: var(--primary-foreground, #fff);
+	--settings-primary-soft: color-mix(in srgb, var(--settings-primary) 16%, var(--settings-bg));
+	--settings-danger: var(--destructive, #dc2626);
+	--settings-danger-soft: color-mix(in srgb, var(--settings-danger) 13%, var(--settings-bg));
+	border-color: var(--settings-border);
+	background: var(--settings-bg);
+	color: var(--settings-text);
+	box-shadow: 0 28px 80px color-mix(in srgb, #000 48%, transparent);
+}
+
+.local-settings-header,
+.local-settings-footer {
+	border-color: var(--settings-border);
+	background: var(--settings-surface);
+}
+
+.local-settings-title-icon {
+	background: var(--settings-primary-soft);
+	color: var(--settings-primary);
+}
+
+.local-settings-subtitle,
+.local-settings-content-header p,
+.local-settings-section-hint,
+.local-settings-row-description,
+.local-settings-empty,
+.local-settings-file-label,
+.local-settings-file-meta,
+.local-settings-search-empty,
+.local-settings-nav-empty {
+	color: var(--settings-muted-text);
+}
+
+.local-settings-search,
+.local-settings-select,
+.local-settings-number,
+.local-settings-rule input,
+.local-settings-segmented,
+.local-settings-rules,
+.local-settings-file-card {
+	border-color: var(--settings-border);
+	background: var(--settings-raised);
+	color: var(--settings-text);
+}
+
+.local-settings-search:focus-within,
+.local-settings-select:focus,
+.local-settings-number:focus,
+.local-settings-rule input:focus {
+	border-color: var(--settings-primary);
+	box-shadow: 0 0 0 2px color-mix(in srgb, var(--settings-primary) 20%, transparent);
+}
+
+.local-settings-search,
+.local-settings-search input::placeholder,
+.local-settings-shortcut,
+.local-settings-nav-label,
+.local-settings-section-title,
+.local-settings-rule-index,
+.local-settings-rule-arrow,
+.local-settings-status {
+	color: var(--settings-muted-text);
+}
+
+.local-settings-search input,
+.local-settings-row-label,
+.local-settings-file-card code,
+.local-settings-search-empty strong {
+	color: var(--settings-text);
+}
+
+.local-settings-shortcut {
+	border-color: var(--settings-border);
+	background: var(--settings-subtle);
+}
+
+.local-settings-close {
+	color: var(--settings-muted-text);
+}
+
+.local-settings-close:hover:not(:disabled),
+.local-settings-nav-item:hover:not(:disabled),
+.local-settings-add-rule:hover:not(:disabled),
+.local-settings-inline-btn:hover:not(:disabled),
+.local-settings-btn:hover:not(:disabled) {
+	border-color: var(--settings-border);
+	background: var(--settings-hover);
+	color: var(--settings-text);
+}
+
+.local-settings-nav {
+	border-color: var(--settings-border);
+	background: var(--settings-subtle);
+}
+
+.local-settings-nav-item {
+	color: var(--settings-muted-text);
+}
+
+.local-settings-nav-item.is-active,
+.local-settings-segmented button.is-active {
+	background: var(--settings-primary-soft);
+	color: var(--settings-primary);
+}
+
+.local-settings-content {
+	background: var(--settings-bg);
+	scrollbar-color: var(--settings-border) transparent;
+}
+
+.local-settings-row,
+.local-settings-rule {
+	border-color: var(--settings-border);
+}
+
+.local-settings-toggle {
+	background: var(--input, var(--settings-border));
+}
+
+.local-settings-toggle::after {
+	background: var(--settings-bg);
+}
+
+.local-settings-toggle.is-on {
+	background: var(--settings-primary);
+}
+
+.local-settings-segmented button {
+	color: var(--settings-muted-text);
+}
+
+.local-settings-callout {
+	border-color: color-mix(in srgb, var(--settings-primary) 30%, var(--settings-border));
+	background: var(--settings-primary-soft);
+	color: var(--settings-muted-text);
+}
+
+.local-settings-rule-remove,
+.local-settings-inline-btn.is-danger {
+	border-color: color-mix(in srgb, var(--settings-danger) 45%, var(--settings-border));
+	color: var(--settings-danger);
+}
+
+.local-settings-rule-remove:hover:not(:disabled) {
+	background: var(--settings-danger-soft);
+	color: var(--settings-danger);
+}
+
+.local-settings-add-rule,
+.local-settings-inline-btn,
+.local-settings-btn {
+	border-color: var(--settings-border);
+	background: var(--settings-surface);
+	color: var(--settings-text);
+}
+
+.local-settings-add-rule {
+	color: var(--settings-primary);
+}
+
+.local-settings-status.is-valid::before,
+.local-settings-status.is-loading::before {
+	background: var(--settings-primary);
+}
+
+.local-settings-status.is-dirty::before {
+	background: var(--chart-3, #d79921);
+}
+
+.local-settings-status.is-error {
+	color: var(--settings-danger);
+}
+
+.local-settings-status.is-error::before {
+	background: var(--settings-danger);
+}
+
+.local-settings-btn-primary,
+.local-settings-btn-primary:hover:not(:disabled) {
+	border-color: var(--settings-primary);
+	background: var(--settings-primary);
+	color: var(--settings-primary-text);
+}
+
+.local-settings-btn-primary:hover:not(:disabled) {
+	filter: brightness(1.08);
+}
+
 .local-settings-panel button:focus-visible,
 .local-settings-panel input:focus-visible,
 .local-settings-panel select:focus-visible {
@@ -2209,7 +2409,7 @@ markdown-block pre code {
 		overflow-x: auto;
 		padding: 0.45rem;
 		border-right: 0;
-		border-bottom: 1px solid #393c37;
+		border-bottom: 1px solid var(--settings-border);
 	}
 
 	.local-settings-nav-label,
