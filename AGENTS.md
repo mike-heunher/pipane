@@ -2,7 +2,9 @@
 
 ## Completing Changes
 
-Once a change is finished, solid, and verified, commit it to Git rather than leaving completed work uncommitted. Do not commit partial or known-broken work.
+Once an implementation change is finished, solid, and verified, commit it to Git rather than leaving completed work uncommitted. Do not commit partial or known-broken work.
+
+Do not treat architecture or design discussion as repository work. Do not create or commit design documents unless the user explicitly asks for that document in the codebase.
 
 For every fixed bug or added/improved feature, add one line under `Unreleased` in `changelog.md`; when cutting a release, move those entries under a dated release heading and leave `Unreleased` empty.
 
