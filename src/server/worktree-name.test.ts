@@ -47,10 +47,13 @@ describe("resolveWorktreeName", () => {
 		expect(resolveWorktreeName(nested)).toBe("root");
 	});
 
-	it("uses the linked worktree directory name", () => {
+	it("defaults to root until a linked worktree file is accessed", () => {
 		const { worktree } = makeRepoWithWorktree();
+		const cwd = path.join(worktree, "src");
 
-		expect(resolveWorktreeName(path.join(worktree, "src"))).toBe("project--wt-fix-login");
+		expect(resolveWorktreeName(cwd)).toBe("root");
+		expect(resolveWorktreeName(cwd, [path.join(cwd, "feature.ts")]))
+			.toBe("project--wt-fix-login");
 	});
 
 	it("prefers recent same-repository tool activity over the session cwd", () => {

@@ -151,6 +151,25 @@ describe("SessionIndex", () => {
 		expect(sessions.find((session) => session.id === "sess-b")?.worktreeName).toBe("project--wt-feature");
 	});
 
+	it("defaults a linked session cwd to root before file-tool activity", async () => {
+		const repo = path.join(agentDir, "checkouts", "project");
+		const worktreeName = "project--wt-feature";
+		const worktree = path.join(agentDir, "checkouts", worktreeName);
+		const worktreeGitDir = path.join(repo, ".git", "worktrees", worktreeName);
+		mkdirSync(worktree, { recursive: true });
+		mkdirSync(worktreeGitDir, { recursive: true });
+		writeFileSync(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
+		writeFileSync(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
+
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "new.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "sess-new", cwd: worktree, timestamp: "2026-01-01T10:00:00.000Z" },
+		]);
+
+		const index = new SessionIndex({ agentDir, extractorVersion: "worktree-default-v1" });
+		expect((await index.listSessions())[0].worktreeName).toBe("root");
+	});
+
 	it("detects an existing worktree from completed file-tool activity end to end", async () => {
 		const repo = path.join(agentDir, "checkouts", "project");
 		const worktreeName = "project--wt-feature";

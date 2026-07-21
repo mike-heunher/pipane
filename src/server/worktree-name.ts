@@ -124,18 +124,21 @@ export function createWorktreeNameResolver(): WorktreeNameResolver {
 			}
 		}
 
-		return checkoutName(cwdCheckout);
+		// The session cwd says where Pi was launched, not which checkout the
+		// conversation is actively using. Until successful same-repository file
+		// activity provides evidence, treat the session as root.
+		return "root";
 	};
 }
 
 /**
  * Return a short label for the Git checkout a session is actively using.
  *
- * Pi cannot change its process cwd persistently, so recent successful
- * read/write/edit paths override the recorded cwd when they belong to the same
- * repository. Linked worktrees are recognized by their commondir pointer.
- * Removed worktrees naturally stop matching because their .git metadata is no
- * longer present.
+ * Pi cannot change its process cwd persistently, so the recorded cwd only
+ * identifies the repository. Recent successful read/write/edit paths identify
+ * its active checkout; without one, the label defaults to root. Linked
+ * worktrees are recognized by their commondir pointer. Removed worktrees
+ * naturally stop matching because their .git metadata is no longer present.
  */
 export function resolveWorktreeName(
 	cwd: string,

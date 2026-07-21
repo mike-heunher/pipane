@@ -422,7 +422,7 @@ describe("session-picker", () => {
 			expect(getWorktreeName(getSessionItems(el)[0])).toBe("root");
 		});
 
-		it("inherits known worktree metadata for optimistic sessions in the same cwd", async () => {
+		it("defaults optimistic sessions to root instead of inheriting a worktree", async () => {
 			const agent = new MockAgent();
 			agent.setSessions([
 				createSession({
@@ -436,7 +436,7 @@ describe("session-picker", () => {
 			const el = await createPicker(agent);
 			const item = getSessionItems(el).find((candidate) => getSessionName(candidate) === "Optimistic session")!;
 
-			expect(getWorktreeName(item)).toBe("project--wt-feature");
+			expect(getWorktreeName(item)).toBe("root");
 		});
 	});
 

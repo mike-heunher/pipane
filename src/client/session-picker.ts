@@ -875,7 +875,7 @@ export class SessionPicker extends LitElement {
 					s.firstMessage.toLowerCase().includes(query) ||
 					s.cwd.toLowerCase().includes(query) ||
 					(s.cwdDisplay?.toLowerCase().includes(query) ?? false) ||
-					(s.worktreeName?.toLowerCase().includes(query) ?? false),
+					(s.worktreeName ?? "root").toLowerCase().includes(query),
 			);
 		}
 
@@ -1324,7 +1324,6 @@ export class SessionPicker extends LitElement {
 			? group.sessions
 			: group.sessions.slice(0, defaultLimit);
 		const hiddenCount = totalCount - visibleSessions.length;
-		const groupWorktreeName = group.sessions.find((session) => session.worktreeName)?.worktreeName;
 
 		return html`
 			<div class="group-header" title=${group.cwd}>
@@ -1342,7 +1341,7 @@ export class SessionPicker extends LitElement {
 					const status = this.agent.getSessionStatus(s.path);
 					const effectiveStatus = status ?? "idle";
 					const isPinned = this.pinnedSessions.has(s.path);
-					const worktreeName = s.worktreeName ?? groupWorktreeName;
+					const worktreeName = s.worktreeName ?? "root";
 					const sessionTitle = [
 						s.cwd,
 						worktreeName ? `Worktree: ${worktreeName}` : "",
