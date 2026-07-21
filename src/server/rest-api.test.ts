@@ -30,6 +30,9 @@ describe("REST session path confinement", () => {
 	let projectRoot: string;
 	let previewPath: string;
 	let projectEscapePath: string;
+	let mentionedOutsidePath: string;
+	let relativeMentionedOutsidePath: string;
+	let unmentionedOutsidePath: string;
 	let server: Server;
 	let baseUrl: string;
 
@@ -46,8 +49,15 @@ describe("REST session path confinement", () => {
 		projectRoot = path.join(tmpDir, "projects", "project-a");
 		previewPath = path.join(projectRoot, "docs", "guide.md");
 		projectEscapePath = path.join(projectRoot, "outside.md");
+		mentionedOutsidePath = path.join(tmpDir, "shared", "review notes.md");
+		relativeMentionedOutsidePath = path.join(tmpDir, "shared", "relative.md");
+		unmentionedOutsidePath = path.join(tmpDir, "shared", "secret.md");
 		mkdirSync(path.dirname(previewPath), { recursive: true });
+		mkdirSync(path.dirname(mentionedOutsidePath), { recursive: true });
 		writeFileSync(previewPath, "# Guide\n\nProject documentation.\n");
+		writeFileSync(mentionedOutsidePath, "# Review notes\n");
+		writeFileSync(relativeMentionedOutsidePath, "# Relative review\n");
+		writeFileSync(unmentionedOutsidePath, "private\n");
 		writeFileSync(path.join(tmpDir, "outside.md"), "private\n");
 		symlinkSync(path.join(tmpDir, "outside.md"), projectEscapePath);
 
@@ -64,7 +74,25 @@ describe("REST session path confinement", () => {
 				id: "message-1",
 				parentId: null,
 				timestamp: "2026-01-01T00:00:01.000Z",
-				message: { role: "user", content: "hello", timestamp: 1 },
+				message: {
+					role: "user",
+					content: `Open \`${path.relative(projectRoot, relativeMentionedOutsidePath)}\`.`,
+					timestamp: 1,
+				},
+			},
+			{
+				type: "message",
+				id: "message-2",
+				parentId: "message-1",
+				timestamp: "2026-01-01T00:00:02.000Z",
+				message: {
+					role: "assistant",
+					content: [{
+						type: "text",
+						text: `Review \`${mentionedOutsidePath}\`; ignore \`${unmentionedOutsidePath}.backup\`.`,
+					}],
+					timestamp: 2,
+				},
 			},
 		].map((entry) => JSON.stringify(entry)).join("\n") + "\n";
 		writeFileSync(sessionPath, sessionLines);
@@ -113,7 +141,10 @@ describe("REST session path confinement", () => {
 		const messages = await requestSessionEndpoint("/api/sessions/fork-messages", sessionPath);
 		expect(messages.status).toBe(200);
 		expect(await messages.json()).toEqual({
-			messages: [{ entryId: "message-1", text: "hello" }],
+			messages: [{
+				entryId: "message-1",
+				text: `Open \`${path.relative(projectRoot, relativeMentionedOutsidePath)}\`.`,
+			}],
 		});
 	});
 
@@ -153,8 +184,21 @@ describe("REST session path confinement", () => {
 		});
 	});
 
-	it("rejects file previews that escape the supplied session cwd", async () => {
-		for (const candidate of [path.join(projectRoot, "..", "..", "outside.md"), projectEscapePath]) {
+	it("retrieves outside-CWD files explicitly mentioned in the conversation", async () => {
+		for (const candidate of [mentionedOutsidePath, relativeMentionedOutsidePath]) {
+			const query = new URLSearchParams({ sessionPath, path: candidate });
+			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({ path: candidate });
+		}
+	});
+
+	it("rejects file previews that escape the CWD without an exact conversation mention", async () => {
+		for (const candidate of [
+			path.join(projectRoot, "..", "..", "outside.md"),
+			projectEscapePath,
+			unmentionedOutsidePath,
+		]) {
 			const query = new URLSearchParams({ sessionPath, path: candidate });
 			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
 			expect(response.status).toBe(403);

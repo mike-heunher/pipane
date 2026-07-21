@@ -9,6 +9,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watchFil
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
+import { conversationMentionsFile } from "./conversation-file-access.js";
 import { SessionIndex } from "./session-index.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { SessionPathError, SessionPathGuard } from "./session-path.js";
@@ -229,8 +230,16 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 				? req.query.path
 				: path.resolve(root, req.query.path);
 			const resolved = realpathSync(requested);
-			if (!isPathInside(root, resolved)) {
-				res.status(403).json({ error: "File is outside the session working directory" });
+			if (!isPathInside(root, resolved) && !conversationMentionsFile({
+				sessionPath,
+				sessionCwd,
+				rawRequestPath: req.query.path,
+				requestedPath: requested,
+				resolvedPath: resolved,
+			})) {
+				res.status(403).json({
+					error: "File is outside the session working directory and was not mentioned in the conversation",
+				});
 				return;
 			}
 
