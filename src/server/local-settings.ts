@@ -32,6 +32,8 @@ export interface LocalSettings {
 	};
 	messages?: {
 		initialCount: number;
+		hideOlderThinking: boolean;
+		keepThinkingParts: number;
 	};
 }
 
@@ -423,15 +425,31 @@ function validateSettingsObject(value: any, errors: string[]): LocalSettings | n
 	}
 
 	// Validate messages (optional)
-	let messagesConfig: { initialCount: number } | undefined;
+	let messagesConfig: LocalSettings["messages"];
 	if (value.messages !== undefined) {
 		const mc = value.messages;
 		if (!mc || typeof mc !== "object" || Array.isArray(mc)) {
 			errors.push("messages must be an object");
-		} else if (typeof mc.initialCount !== "number" || !Number.isFinite(mc.initialCount) || mc.initialCount < 0 || Math.floor(mc.initialCount) !== mc.initialCount) {
-			errors.push("messages.initialCount must be a non-negative integer");
 		} else {
-			messagesConfig = { initialCount: mc.initialCount };
+			const initialCount = mc.initialCount;
+			const hideOlderThinking = mc.hideOlderThinking === undefined ? false : mc.hideOlderThinking;
+			const keepThinkingParts = mc.keepThinkingParts === undefined ? 3 : mc.keepThinkingParts;
+			if (typeof initialCount !== "number" || !Number.isFinite(initialCount) || initialCount < 0 || Math.floor(initialCount) !== initialCount) {
+				errors.push("messages.initialCount must be a non-negative integer");
+			}
+			if (typeof hideOlderThinking !== "boolean") {
+				errors.push("messages.hideOlderThinking must be a boolean");
+			}
+			if (typeof keepThinkingParts !== "number" || !Number.isFinite(keepThinkingParts) || keepThinkingParts < 0 || Math.floor(keepThinkingParts) !== keepThinkingParts) {
+				errors.push("messages.keepThinkingParts must be a non-negative integer");
+			}
+			if (
+				typeof initialCount === "number" && Number.isFinite(initialCount) && initialCount >= 0 && Math.floor(initialCount) === initialCount
+				&& typeof hideOlderThinking === "boolean"
+				&& typeof keepThinkingParts === "number" && Number.isFinite(keepThinkingParts) && keepThinkingParts >= 0 && Math.floor(keepThinkingParts) === keepThinkingParts
+			) {
+				messagesConfig = { initialCount, hideOlderThinking, keepThinkingParts };
+			}
 		}
 	}
 

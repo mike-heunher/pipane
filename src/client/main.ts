@@ -75,6 +75,8 @@ let conversationTouchY: number | undefined;
 let canvasFeatureEnabled = false;
 let sessionsPerProject = 5;
 let messagesInitialCount = 50;
+let hideOlderThinking = false;
+let keepThinkingParts = 3;
 let pendingHardKillOfferFor: string | null = null;
 let updateNotices: UpdateNotice[] = [];
 let updatingTarget: UpdateTarget | null = null;
@@ -90,6 +92,12 @@ function applyBackendSettings(payload: { settings?: any }): void {
 	}
 	if (typeof payload.settings?.messages?.initialCount === "number") {
 		messagesInitialCount = payload.settings.messages.initialCount;
+	}
+	hideOlderThinking = payload.settings?.messages?.hideOlderThinking === true;
+	if (typeof payload.settings?.messages?.keepThinkingParts === "number") {
+		keepThinkingParts = payload.settings.messages.keepThinkingParts;
+	} else {
+		keepThinkingParts = 3;
 	}
 }
 
@@ -780,6 +788,8 @@ const renderApp = () => {
 										.toolCallTimings=${agent?.toolCallTimings ?? {}}
 										.sessionPath=${agent?.sessionFile ?? ""}
 										.initialCount=${messagesInitialCount}
+										.hideOlderThinking=${hideOlderThinking}
+										.keepThinkingParts=${keepThinkingParts}
 									></pi-message-list>
 								</div>
 							</div>

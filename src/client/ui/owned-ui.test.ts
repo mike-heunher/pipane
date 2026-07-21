@@ -263,6 +263,57 @@ describe("owned message and tool rendering", () => {
 		expect(list.querySelectorAll("user-message")).toHaveLength(2);
 	});
 
+	it("hides all but the most recent configured thinking parts", async () => {
+		const list = new PiMessageList();
+		list.hideOlderThinking = true;
+		list.keepThinkingParts = 2;
+		list.messages = [
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "oldest" },
+					{ type: "text", text: "First answer" },
+				],
+			},
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "middle" },
+					{ type: "text", text: "Second answer" },
+				],
+			},
+			{
+				role: "assistant",
+				content: [
+					{ type: "thinking", thinking: "recent" },
+					{ type: "text", text: "Final answer" },
+					{ type: "thinking", thinking: "newest" },
+				],
+			},
+		] as any;
+		document.body.appendChild(list);
+		await list.updateComplete;
+		await settle();
+
+		expect(Array.from(list.querySelectorAll<ThinkingBlock>("thinking-block"), (part) => part.content))
+			.toEqual(["recent", "newest"]);
+		expect(list.textContent).toContain("First answer");
+
+		list.keepThinkingParts = 1;
+		await list.updateComplete;
+		expect(Array.from(list.querySelectorAll<ThinkingBlock>("thinking-block"), (part) => part.content))
+			.toEqual(["newest"]);
+
+		list.keepThinkingParts = 0;
+		await list.updateComplete;
+		expect(list.querySelectorAll("thinking-block")).toHaveLength(0);
+
+		list.hideOlderThinking = false;
+		await list.updateComplete;
+		expect(Array.from(list.querySelectorAll<ThinkingBlock>("thinking-block"), (part) => part.content))
+			.toEqual(["oldest", "middle", "recent", "newest"]);
+	});
+
 	it("renders elapsed time in the output-card corner independently of usage", async () => {
 		const list = new PiMessageList();
 		list.messages = [

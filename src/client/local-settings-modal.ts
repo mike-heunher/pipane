@@ -21,6 +21,8 @@ export interface LocalSettingsFormValue {
 	};
 	messages: {
 		initialCount: number;
+		hideOlderThinking: boolean;
+		keepThinkingParts: number;
 	};
 }
 
@@ -37,7 +39,11 @@ const DEFAULT_SETTINGS: LocalSettingsFormValue = {
 		showTokenUsage: true,
 	},
 	toolCollapse: { keepOpen: 3 },
-	messages: { initialCount: 50 },
+	messages: {
+		initialCount: 50,
+		hideOlderThinking: false,
+		keepThinkingParts: 3,
+	},
 };
 
 type SettingsCategory = "appearance" | "sidebar" | "messages" | "tools" | "canvas" | "advanced";
@@ -61,7 +67,7 @@ const ICONS = {
 const CATEGORIES: CategoryDefinition[] = [
 	{ id: "appearance", label: "Appearance", icon: ICONS.appearance, keywords: "theme color light dark system token usage" },
 	{ id: "sidebar", label: "Sidebar", icon: ICONS.sidebar, keywords: "project session count path title filter regex" },
-	{ id: "messages", label: "Messages", icon: ICONS.messages, keywords: "conversation initial count jsonl viewer history" },
+	{ id: "messages", label: "Messages", icon: ICONS.messages, keywords: "conversation initial count jsonl viewer history thinking reasoning hide recent parts" },
 	{ id: "tools", label: "Tool calls", icon: ICONS.tools, keywords: "collapse expanded keep open recent" },
 	{ id: "canvas", label: "Canvas", icon: ICONS.canvas, keywords: "panel enabled tool output" },
 	{ id: "advanced", label: "Advanced", icon: ICONS.advanced, keywords: "settings file path reset defaults version" },
@@ -70,7 +76,7 @@ const CATEGORIES: CategoryDefinition[] = [
 const CATEGORY_DESCRIPTIONS: Record<SettingsCategory, string> = {
 	appearance: "Choose Pipane's color theme, light mode, and usage display.",
 	sidebar: "Control how projects and sessions are organized.",
-	messages: "Choose how much conversation history is loaded at first.",
+	messages: "Control conversation history and thinking visibility.",
 	tools: "Control how completed tool calls collapse in the timeline.",
 	canvas: "Configure the optional panel for rich tool output.",
 	advanced: "Inspect local configuration details or restore every default.",
@@ -110,6 +116,12 @@ function normalizeSettings(raw: any): LocalSettingsFormValue {
 	}
 	if (Number.isInteger(raw?.messages?.initialCount) && raw.messages.initialCount >= 0) {
 		value.messages.initialCount = raw.messages.initialCount;
+	}
+	if (typeof raw?.messages?.hideOlderThinking === "boolean") {
+		value.messages.hideOlderThinking = raw.messages.hideOlderThinking;
+	}
+	if (Number.isInteger(raw?.messages?.keepThinkingParts) && raw.messages.keepThinkingParts >= 0) {
+		value.messages.keepThinkingParts = raw.messages.keepThinkingParts;
 	}
 	return value;
 }
@@ -406,6 +418,19 @@ export function openLocalSettingsDialog(opts: {
 				(value) => { settings.messages.initialCount = value; },
 			));
 
+			const thinking = addSection("Thinking visibility");
+			addRow(thinking, "Hide older thinking", "Hide all thinking parts except the most recent number kept below.", toggle(
+				settings.messages.hideOlderThinking,
+				"Hide older thinking",
+				(value) => { settings.messages.hideOlderThinking = value; },
+			));
+			addRow(thinking, "Thinking parts kept visible", "Only used when older thinking is hidden. Use 0 to hide every thinking part.", numberInput(
+				settings.messages.keepThinkingParts,
+				0,
+				"Thinking parts kept visible",
+				(value) => { settings.messages.keepThinkingParts = value; },
+			));
+
 			const diagnostics = addSection("Diagnostics");
 			const jsonlButton = createElement("button", "local-settings-inline-btn", opts.isJsonlVisible ? "Close viewer" : "Open viewer");
 			jsonlButton.type = "button";
@@ -521,6 +546,9 @@ export function openLocalSettingsDialog(opts: {
 			}
 			if (!Number.isInteger(settings.messages.initialCount) || settings.messages.initialCount < 0) {
 				errors.push("Messages loaded initially must be a non-negative whole number.");
+			}
+			if (!Number.isInteger(settings.messages.keepThinkingParts) || settings.messages.keepThinkingParts < 0) {
+				errors.push("Thinking parts kept visible must be a non-negative whole number.");
 			}
 			if (!Number.isInteger(settings.toolCollapse.keepOpen) || settings.toolCollapse.keepOpen < 0) {
 				errors.push("Keep recent calls open must be a non-negative whole number.");

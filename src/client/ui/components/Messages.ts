@@ -154,6 +154,7 @@ export class AssistantMessage extends LitElement {
 	@property({ type: Object }) toolCallTimings: Readonly<ToolCallTimings> = {};
 	@property({ type: Object }) toolResultsById?: Map<string, ToolResultMessageType>;
 	@property({ type: Boolean }) isStreaming: boolean = false;
+	@property({ type: Number }) hiddenThinkingParts = 0;
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
@@ -167,14 +168,18 @@ export class AssistantMessage extends LitElement {
 	override render() {
 		// Render content in the order it appears
 		const orderedParts: TemplateResult[] = [];
+		let thinkingPartsSeen = 0;
 
 		for (const chunk of this.message.content) {
 			if (chunk.type === "text" && chunk.text.trim() !== "") {
 				orderedParts.push(html`<markdown-block .content=${linkifyPreviewableInlineCode(escapeStrikethrough(chunk.text))}></markdown-block>`);
 			} else if (chunk.type === "thinking" && chunk.thinking.trim() !== "") {
-				orderedParts.push(
-					html`<thinking-block .content=${chunk.thinking} .isStreaming=${this.isStreaming}></thinking-block>`,
-				);
+				if (thinkingPartsSeen >= this.hiddenThinkingParts) {
+					orderedParts.push(
+						html`<thinking-block .content=${chunk.thinking} .isStreaming=${this.isStreaming}></thinking-block>`,
+					);
+				}
+				thinkingPartsSeen++;
 			} else if (chunk.type === "toolCall") {
 				const pending = this.pendingToolCalls?.has(chunk.id) ?? false;
 				const result = this.toolResultsById?.get(chunk.id);

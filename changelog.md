@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add an opt-in conversation setting that hides all but the most recent configured thinking parts.
 - Keep status-bar context usage visible when per-message token usage is hidden.
 - Treat stale update actions from other open clients as already complete instead of showing a contradictory error.
 - Upload arbitrary non-image attachments to temporary backend files and pass their paths to the agent over local or remote connections.

@@ -20,6 +20,15 @@ import type { ToolCallTimings } from "../../../shared/tool-runtime.js";
 import { renderMessage } from "../message-registry.js";
 import "./Messages.js";
 
+function countThinkingParts(message: AgentMessage): number {
+	if (message.role !== "assistant") return 0;
+	let count = 0;
+	for (const part of message.content) {
+		if (part.type === "thinking" && part.thinking.trim() !== "") count++;
+	}
+	return count;
+}
+
 @customElement("pi-message-list")
 export class PiMessageList extends LitElement {
 	@property({ type: Array }) messages: AgentMessage[] = [];
@@ -29,6 +38,8 @@ export class PiMessageList extends LitElement {
 	@property({ type: String }) sessionPath = "";
 	/** 0 disables truncation. */
 	@property({ type: Number }) initialCount = 0;
+	@property({ type: Boolean }) hideOlderThinking = false;
+	@property({ type: Number }) keepThinkingParts = 3;
 
 	private visibleCount = 0;
 
@@ -87,6 +98,12 @@ export class PiMessageList extends LitElement {
 	private buildRenderItems(toolResultsById: Map<string, any>): Array<{ key: string; template: TemplateResult; messageIndex: number }> {
 		const items: Array<{ key: string; template: TemplateResult; messageIndex: number }> = [];
 		let index = 0;
+		const keepThinkingParts = Number.isFinite(this.keepThinkingParts)
+			? Math.max(0, Math.floor(this.keepThinkingParts))
+			: 0;
+		let thinkingPartsToHide = this.hideOlderThinking
+			? Math.max(0, this.messages.reduce((total, message) => total + countThinkingParts(message), 0) - keepThinkingParts)
+			: 0;
 
 		for (const msg of this.messages) {
 			// Skip standalone toolResult — rendered inline via assistant-message
@@ -111,6 +128,8 @@ export class PiMessageList extends LitElement {
 				// Determine if THIS specific message is the one currently streaming
 				// (it would be the last assistant message when isStreaming is true)
 				const isThisMessageStreaming = this.isStreaming && this.isLastAssistantMessage(msg);
+				const hiddenThinkingParts = Math.min(thinkingPartsToHide, countThinkingParts(msg));
+				thinkingPartsToHide -= hiddenThinkingParts;
 
 				items.push({
 					key: `msg:${index}`,
@@ -120,6 +139,7 @@ export class PiMessageList extends LitElement {
 						.pendingToolCalls=${this.pendingToolCalls}
 						.toolCallTimings=${this.toolCallTimings}
 						.toolResultsById=${toolResultsById}
+						.hiddenThinkingParts=${hiddenThinkingParts}
 					></assistant-message>`,
 					messageIndex: index,
 				});

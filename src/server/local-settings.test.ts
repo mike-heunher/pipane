@@ -330,33 +330,42 @@ describe("local-settings", () => {
 		});
 	});
 
-	describe("message truncation setting", () => {
-		it("accepts and persists a non-negative initial count", () => {
+	describe("message display settings", () => {
+		it("accepts and persists conversation and thinking limits", () => {
 			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
 			const saved = store.save(JSON.stringify({
 				version: 1,
 				sidebar: { cwdTitle: { filters: [] } },
-				messages: { initialCount: 50 },
+				messages: { initialCount: 50, hideOlderThinking: true, keepThinkingParts: 2 },
 			}));
 			expect(saved.valid).toBe(true);
 			expect(new LocalSettingsStore({ homeDir: tmpDir, settingsPath }).settings.messages)
-				.toEqual({ initialCount: 50 });
+				.toEqual({ initialCount: 50, hideOlderThinking: true, keepThinkingParts: 2 });
 		});
 
-		it("allows zero to disable truncation", () => {
+		it("defaults thinking hiding off for existing message settings", () => {
 			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
 			const result = store.validate(JSON.stringify({
 				version: 1,
 				sidebar: { cwdTitle: { filters: [] } },
 				messages: { initialCount: 0 },
 			}));
-			expect(result.settings?.messages).toEqual({ initialCount: 0 });
+			expect(result.settings?.messages).toEqual({
+				initialCount: 0,
+				hideOlderThinking: false,
+				keepThinkingParts: 3,
+			});
 		});
 
 		it.each([
 			["a non-object", "invalid"],
-			["a negative count", { initialCount: -1 }],
-			["a fractional count", { initialCount: 2.5 }],
+			["a negative initial count", { initialCount: -1 }],
+			["a fractional initial count", { initialCount: 2.5 }],
+			["a non-boolean thinking toggle", { initialCount: 50, hideOlderThinking: "yes" }],
+			["a null thinking toggle", { initialCount: 50, hideOlderThinking: null }],
+			["a negative thinking count", { initialCount: 50, keepThinkingParts: -1 }],
+			["a null thinking count", { initialCount: 50, keepThinkingParts: null }],
+			["a fractional thinking count", { initialCount: 50, keepThinkingParts: 2.5 }],
 		])("rejects %s", (_label, messages) => {
 			const store = new LocalSettingsStore({ homeDir: tmpDir, settingsPath });
 			const result = store.validate(JSON.stringify({

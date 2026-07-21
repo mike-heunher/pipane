@@ -99,6 +99,13 @@ describe("local settings command center", () => {
 		const initialCount = panel.querySelector<HTMLInputElement>('input[aria-label="Messages loaded initially"]')!;
 		initialCount.value = "30";
 		initialCount.dispatchEvent(new Event("input", { bubbles: true }));
+		const hideOlderThinking = panel.querySelector<HTMLButtonElement>('button[aria-label="Hide older thinking"]')!;
+		expect(hideOlderThinking.getAttribute("aria-checked")).toBe("false");
+		hideOlderThinking.click();
+		const keepThinkingParts = panel.querySelector<HTMLInputElement>('input[aria-label="Thinking parts kept visible"]')!;
+		expect(keepThinkingParts.value).toBe("3");
+		keepThinkingParts.value = "2";
+		keepThinkingParts.dispatchEvent(new Event("input", { bubbles: true }));
 
 		panel.querySelector<HTMLButtonElement>(".local-settings-btn-primary")!.click();
 		await closed;
@@ -108,7 +115,11 @@ describe("local settings command center", () => {
 		expect(saved.sidebar.sessionsPerProject).toBe(9);
 		expect(saved.sidebar.cwdTitle.filters).toEqual([{ pattern: "^~/dev/", replacement: "dev/" }]);
 		expect(saved.appearance).toEqual({ colorTheme: "default", darkMode: "dark", showTokenUsage: false });
-		expect(saved.messages.initialCount).toBe(30);
+		expect(saved.messages).toEqual({
+			initialCount: 30,
+			hideOlderThinking: true,
+			keepThinkingParts: 2,
+		});
 		expect(saved.toolCollapse.keepOpen).toBe(4);
 		expect(onSaved).toHaveBeenCalledWith(saved);
 	});
