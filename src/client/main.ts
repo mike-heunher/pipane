@@ -7,13 +7,16 @@ if ("serviceWorker" in navigator) {
 
 import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
+import { live } from "lit/directives/live.js";
 import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
 import { ConversationScrollController } from "./conversation-scroll.js";
+import { conversationDraftKey, ConversationDraftStore } from "./conversation-drafts.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import "./session-picker.js";
 import "./ui/index.js";
 import type { MessageEditor } from "./ui/components/MessageEditor.js";
+import type { Attachment } from "./ui/utils/attachment-utils.js";
 import { mergeSlashCommands, type SlashCommandSuggestion } from "./slash-commands.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
@@ -79,6 +82,7 @@ let updatingTarget: UpdateTarget | null = null;
 let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
 let slashCommandRequest = 0;
+const conversationDrafts = new ConversationDraftStore<Attachment>();
 
 function applyBackendSettings(payload: { settings?: any }): void {
 	canvasFeatureEnabled = payload.settings?.canvas?.enabled === true;
@@ -103,6 +107,18 @@ function toggleTokenUsage() {
 
 function getMessageEditor(): MessageEditor | null {
 	return document.querySelector("message-editor") as MessageEditor | null;
+}
+
+function currentConversationDraftKey(): string {
+	return conversationDraftKey(agent.sessionFile, agent.sessionId);
+}
+
+function clearCurrentConversationDraft(): void {
+	conversationDrafts.clear(currentConversationDraftKey());
+	const editor = getMessageEditor();
+	if (!editor) return;
+	editor.value = "";
+	editor.attachments = [];
 }
 
 function slashCommandScope(): string {
@@ -131,8 +147,7 @@ function handleEditorKeyDown(event: KeyboardEvent): boolean {
 
 	const value = editor.value;
 	const attachments = editor.attachments;
-	editor.value = "";
-	editor.attachments = [];
+	clearCurrentConversationDraft();
 	void handleForkAndPrompt(value, attachments);
 	return true;
 }
@@ -167,7 +182,7 @@ function handleStopClick(): void {
 	agent.abort();
 }
 
-function handleSend(input: string, attachments?: any[]) {
+function handleSend(input: string, attachments?: Attachment[]) {
 	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
 	const docTexts: string[] = [];
 
@@ -185,12 +200,8 @@ function handleSend(input: string, attachments?: any[]) {
 		? (input ? input + "\n\n" + docTexts.join("\n\n") : docTexts.join("\n\n"))
 		: input;
 
-	// Clear the editor after capturing the input
-	const editor = getMessageEditor();
-	if (editor) {
-		editor.value = "";
-		editor.attachments = [];
-	}
+	// Clear only this conversation's editor after capturing the input.
+	clearCurrentConversationDraft();
 
 	conversationScroll.pinToBottom();
 	agent.prompt(fullInput, images.length > 0 ? images : undefined).catch((err: unknown) => {
@@ -608,6 +619,8 @@ const renderApp = () => {
 	const state = agent?.state;
 	const messages = state?.messages ?? [];
 	const isStreaming = state?.isStreaming ?? false;
+	const draftKey = currentConversationDraftKey();
+	const draft = conversationDrafts.get(draftKey);
 
 	const burgerMenuCallbacks = {
 		onToggleTokenUsage: () => { toggleTokenUsage(); renderApp(); },
@@ -713,6 +726,8 @@ const renderApp = () => {
 							<div class="shrink-0 border-t border-border">
 								<div class="max-w-3xl mx-auto px-2">
 									<message-editor
+										.value=${live(draft.value)}
+										.attachments=${live(draft.attachments)}
 										.isStreaming=${isStreaming}
 										.allowSendDuringStreaming=${true}
 										.currentModel=${state?.model}
@@ -721,7 +736,9 @@ const renderApp = () => {
 										.showModelSelector=${true}
 										.showThinkingSelector=${false}
 										.slashCommands=${slashCommands}
-										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
+										.onInput=${(value: string) => conversationDrafts.setValue(draftKey, value)}
+										.onFilesChange=${(files: Attachment[]) => conversationDrafts.setAttachments(draftKey, files)}
+										.onSend=${(input: string, attachments?: Attachment[]) => handleSend(input, attachments)}
 										.onAbort=${handleStopClick}
 										.onModelSelect=${handleModelSelect}
 										.onKeyDown=${handleEditorKeyDown}
@@ -777,7 +794,7 @@ const renderApp = () => {
 /**
  * Fork the current session and prompt in the new fork.
  */
-async function handleForkAndPrompt(input: string, attachments?: any[]) {
+async function handleForkAndPrompt(input: string, attachments?: Attachment[]) {
 	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
 	const docTexts: string[] = [];
 
@@ -952,6 +969,7 @@ async function initApp() {
 		}
 
 		if (result.text) {
+			conversationDrafts.setValue(currentConversationDraftKey(), result.text);
 			const editor = document.querySelector("message-editor") as any;
 			if (editor) {
 				editor.value = result.text;
