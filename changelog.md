@@ -1,5 +1,6 @@
 # Unreleased
 
+- Keep the conversation pinned to its live tail across background-tab layout updates unless the user explicitly scrolls away.
 - Keep draft text and attachments pinned to the conversation where they were entered.
 - Let users scroll away from streaming conversation and tool output without being snapped back to the bottom.
 - Render HTML and styled Marked Markdown previews in script-enabled isolated iframes.

@@ -47,7 +47,10 @@ export class ConversationScrollController {
 
 	handleScroll(target: ConversationScrollTarget): void {
 		if (this.programmaticScrollSettling || this.forceNextScroll) return;
-		this.following = this.distanceFromBottom(target) < BOTTOM_THRESHOLD_PX;
+		// Layout and scroll anchoring can emit off-bottom scroll events while a
+		// background tab's animation frames are suspended. Only explicit input
+		// handlers may detach; ordinary scroll events can only resume at the tail.
+		if (this.distanceFromBottom(target) < BOTTOM_THRESHOLD_PX) this.following = true;
 	}
 
 	scrollToBottomIfNeeded(getTarget: () => ConversationScrollTarget | null): void {

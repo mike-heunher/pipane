@@ -6,6 +6,7 @@
  * full pipeline: UI → WebSocket → pipane server → pi RPC → mock LLM → back to UI.
  */
 
+import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import type { E2EHarness } from "./harness.js";
 import { test, expect } from "./real-stack-fixture.js";
@@ -346,6 +347,55 @@ test.describe("Real stack e2e", () => {
 		await expect.poll(() => scrollArea.evaluate((element) =>
 			element.scrollHeight - element.scrollTop - element.clientHeight,
 		)).toBeGreaterThan(100);
+	});
+
+	test("background streaming stays pinned without user scroll intent", async ({ page, harness }) => {
+		const response = Array.from({ length: 500 }, (_, index) => `background_word_${index}`).join(" ");
+		harness.setScenarios([
+			{ match: "stream while hidden", chunks: textChunks(response) },
+		]);
+
+		await gotoFreshSession(page, harness);
+		await page.addStyleTag({
+			content: "#chat-scroll-area > div { padding-top: 1400px !important; }",
+		});
+
+		const textarea = page.locator("message-editor textarea").first();
+		await textarea.fill("stream while hidden");
+		await textarea.press("Enter");
+
+		const responseMessage = page.locator("assistant-message").last();
+		const scrollArea = page.locator("#chat-scroll-area");
+		await expect(responseMessage).toContainText("background_word_20", { timeout: 15000 });
+		await expect.poll(() => scrollArea.evaluate((element) =>
+			element.scrollHeight - element.scrollTop - element.clientHeight,
+		)).toBeLessThan(10);
+
+		const sessionFile = await page.evaluate(() => {
+			const picker = document.querySelector("session-picker") as any;
+			return picker?.agent?.sessionFile as string | undefined;
+		});
+		expect(sessionFile).toBeTruthy();
+
+		const cdp = await page.context().newCDPSession(page);
+		await cdp.send("Page.setWebLifecycleState", { state: "frozen" });
+		try {
+			await expect.poll(() => {
+				try {
+					return readFileSync(sessionFile!, "utf8").includes("background_word_499");
+				} catch {
+					return false;
+				}
+			}, { timeout: 15000 }).toBe(true);
+		} finally {
+			await cdp.send("Page.setWebLifecycleState", { state: "active" });
+			await cdp.detach();
+		}
+
+		await expect(responseMessage).toContainText("background_word_499", { timeout: 15000 });
+		await expect.poll(() => scrollArea.evaluate((element) =>
+			element.scrollHeight - element.scrollTop - element.clientHeight,
+		)).toBeLessThan(10);
 	});
 
 	test("session appears in picker after prompt", async ({ page, harness }) => {

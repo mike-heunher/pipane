@@ -54,6 +54,18 @@ describe("ConversationScrollController", () => {
 		expect(target.scrollTop).toBe(1_000);
 	});
 
+	it("stays pinned through off-bottom layout events while a frame is queued", () => {
+		const { controller, frames } = setup();
+		const target = scrollTarget();
+
+		controller.scrollToBottomIfNeeded(() => target);
+		target.scrollHeight = 1_200;
+		controller.handleScroll(target);
+		frames.flush();
+
+		expect(target.scrollTop).toBe(1_200);
+	});
+
 	it("cancels a queued scroll as soon as the user intends to scroll up", () => {
 		const { controller, frames } = setup();
 		const target = scrollTarget({ scrollTop: 500 });

@@ -50,6 +50,7 @@ import {
 const agent: BackendClient = new WsAgentAdapter();
 initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
+document.addEventListener("keydown", handleConversationKeyDown);
 const isMobile = () => window.innerWidth <= 768;
 let wasMobile = isMobile();
 let mobileSidebarOpen = false;
@@ -504,6 +505,21 @@ function handleScroll(event: Event): void {
 
 function handleConversationWheel(event: WheelEvent): void {
 	if (event.deltaY < 0) conversationScroll.pauseForUser();
+}
+
+function handleConversationKeyDown(event: KeyboardEvent): void {
+	if (event.defaultPrevented) return;
+	const fromInteractiveControl = event.composedPath().some((element) =>
+		element instanceof HTMLElement
+		&& (element.isContentEditable || element.matches("input, textarea, select, button, [role='textbox']")),
+	);
+	if (fromInteractiveControl) return;
+
+	const scrollsUp = event.key === "ArrowUp"
+		|| event.key === "PageUp"
+		|| event.key === "Home"
+		|| (event.key === " " && event.shiftKey);
+	if (scrollsUp) conversationScroll.pauseForUser();
 }
 
 function handleConversationTouchStart(event: TouchEvent): void {
