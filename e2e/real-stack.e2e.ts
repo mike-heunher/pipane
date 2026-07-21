@@ -236,9 +236,10 @@ test.describe("Real stack e2e", () => {
 
 		await gotoFreshSession(page, harness);
 
-		// Open JSONL viewer via burger menu
-		await page.locator("session-picker").getByTitle("Menu").click();
-		await page.getByText("JSONL viewer").click();
+		// Open the JSONL viewer from the categorized settings command center.
+		await page.locator("session-picker").getByTitle("Settings").click();
+		await page.locator(".local-settings-nav-item", { hasText: "Messages" }).click();
+		await page.getByRole("button", { name: "Open viewer" }).click();
 		await expect(page.locator(".jsonl-panel")).toBeVisible();
 
 		const editor = page.locator("message-editor");

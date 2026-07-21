@@ -1,5 +1,6 @@
 # Unreleased
 
+- Replace the sidebar burger and raw JSON editor with a compact categorized settings command center.
 - Default sessions to the root checkout until filesystem activity identifies a linked worktree.
 - Fit more slash commands in the autocomplete overview with compact single-line entries.
 - Keep the conversation pinned to its live tail across background-tab layout updates unless the user explicitly scrolls away.

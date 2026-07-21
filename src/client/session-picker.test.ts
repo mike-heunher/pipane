@@ -93,6 +93,22 @@ beforeEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("session-picker", () => {
+	it("places a settings gear beside New project", async () => {
+		const agent = new MockAgent();
+		const onOpenSettings = vi.fn();
+		const el = await createPicker(agent);
+		(el as any).settingsMenu = { onOpenSettings, isDevMode: false };
+		await el.updateComplete;
+
+		const headerActions = el.shadowRoot!.querySelector(".header-right")!;
+		expect(headerActions.textContent).toContain("NEW PROJECT");
+		const settings = headerActions.querySelector<HTMLButtonElement>('button[title="Settings"]');
+		expect(settings).not.toBeNull();
+		expect(el.shadowRoot!.querySelector('button[title="Menu"]')).toBeNull();
+		settings!.click();
+		expect(onOpenSettings).toHaveBeenCalledOnce();
+	});
+
 	describe("sorting by lastUserPromptTime", () => {
 		it("sorts sessions with most recent user prompt first", async () => {
 			const agent = new MockAgent();

@@ -5,7 +5,7 @@ if ("serviceWorker" in navigator) {
 	});
 }
 
-import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
+import { initThemes, getShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
 import { live } from "lit/directives/live.js";
 import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
@@ -97,14 +97,6 @@ function applyBackendSettings(payload: { settings?: any }): void {
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
-
-// Token usage visibility — backed by settings.json via theme-selector
-function isTokenUsageHidden(): boolean {
-	return !getShowTokenUsage();
-}
-function toggleTokenUsage() {
-	setShowTokenUsage(!getShowTokenUsage());
-}
 
 function getMessageEditor(): MessageEditor | null {
 	return document.querySelector("message-editor") as MessageEditor | null;
@@ -480,7 +472,15 @@ async function openLocalSettingsModal() {
 	try {
 		await openLocalSettingsDialog({
 			api: agent,
-			onSaved: () => {
+			isJsonlVisible: isJsonlPanelVisible(),
+			onToggleJsonl: () => {
+				if (isFilePreviewVisible()) closeFilePreview();
+				toggleJsonlPanel();
+				renderApp();
+			},
+			onSaved: async (settings) => {
+				applyBackendSettings({ settings });
+				await resyncAppearanceFromServer();
 				loadAutoCollapseSettings(agent);
 				renderApp();
 				const picker = document.querySelector("session-picker") as any;
@@ -638,16 +638,8 @@ const renderApp = () => {
 	const draftKey = currentConversationDraftKey();
 	const draft = conversationDrafts.get(draftKey);
 
-	const burgerMenuCallbacks = {
-		onToggleTokenUsage: () => { toggleTokenUsage(); renderApp(); },
+	const settingsMenuCallbacks = {
 		onOpenSettings: () => { void openLocalSettingsModal(); },
-		onToggleJsonl: () => {
-			if (isFilePreviewVisible()) closeFilePreview();
-			toggleJsonlPanel();
-			renderApp();
-		},
-		isTokenUsageHidden: isTokenUsageHidden(),
-		isJsonlVisible: isJsonlPanelVisible(),
 		isDevMode,
 	};
 
@@ -658,7 +650,7 @@ const renderApp = () => {
 				${!isMobile()
 					? html`
 						<div class="shrink-0 border-r border-border bg-background overflow-hidden" style="width: 280px;">
-							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
+							<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .settingsMenu=${settingsMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
 						</div>
 					`
 					: ""}
@@ -784,7 +776,7 @@ const renderApp = () => {
 		const mobileOverlay = html`
 			<div class="sidebar-mobile-overlay">
 				<div class="sidebar-panel shrink-0 border-r border-border bg-background overflow-hidden">
-					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .burgerMenu=${burgerMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
+					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .settingsMenu=${settingsMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
 				</div>
 				<div class="sidebar-mobile-backdrop" @click=${() => { mobileSidebarOpen = false; renderApp(); }}></div>
 			</div>

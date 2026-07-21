@@ -225,6 +225,15 @@ test.describe("UI visual goldens", () => {
 		await captureAndCompare(page.locator("session-picker"), "session-list.png");
 	});
 
+	test("settings command center", async ({ page }) => {
+		await page.goto(`http://localhost:${mock.port}`);
+		await openMainSession(page);
+		await page.locator("session-picker").getByTitle("Settings").click();
+		await expect(page.locator(".local-settings-panel")).toBeVisible();
+		await expect(page.locator(".local-settings-status.is-valid")).toBeVisible();
+		await captureAndCompare(page, "settings-command-center.png");
+	});
+
 	test("tool renderers", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
 		await openMainSession(page);
