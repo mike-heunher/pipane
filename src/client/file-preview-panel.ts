@@ -64,6 +64,94 @@ export function isPreviewableFileHref(rawHref: string): boolean {
 	return PREVIEWABLE_FILE_PATTERN.test(pathValue) || MARKDOWN_FILE_PATTERN.test(pathValue);
 }
 
+function isAutoLinkableFileHref(rawHref: string): boolean {
+	if (!isPreviewableFileHref(rawHref)) return false;
+	const pathValue = stripLinkSuffix(rawHref);
+	return PREVIEWABLE_FILE_PATTERN.test(pathValue) || MARKDOWN_FILE_PATTERN.test(pathValue);
+}
+
+function encodeMarkdownHref(rawHref: string): string | null {
+	try {
+		return encodeURI(rawHref)
+			.replaceAll("(", "%28")
+			.replaceAll(")", "%29");
+	} catch {
+		return null;
+	}
+}
+
+function isInsideMarkdownLinkLabel(markdown: string, start: number, end: number): boolean {
+	const lineStart = markdown.lastIndexOf("\n", start - 1) + 1;
+	const labelPrefix = markdown.slice(lineStart, start);
+	const openingBracket = labelPrefix.lastIndexOf("[");
+	if (openingBracket < 0 || labelPrefix.slice(openingBracket + 1).includes("]")) return false;
+
+	const lineEndIndex = markdown.indexOf("\n", end);
+	const lineEnd = lineEndIndex < 0 ? markdown.length : lineEndIndex;
+	return /^[^\]]*\]\s*(?:\(|\[)/.test(markdown.slice(end, lineEnd));
+}
+
+function linkifyInlineCode(markdown: string): string {
+	return markdown.replace(/(`+)([^`\n]+)\1/g, (match, _delimiter: string, value: string, offset: number) => {
+		const rawHref = value.trim();
+		if (rawHref !== value || !isAutoLinkableFileHref(rawHref)) return match;
+		if (/[\t\r\n<>]/.test(rawHref) || /\s(?:&&|\|\||[<>]|--?\w)/.test(rawHref)) return match;
+
+		// Do not rewrite code that is already part of an explicit Markdown link.
+		if (isInsideMarkdownLinkLabel(markdown, offset, offset + match.length)) return match;
+
+		const encodedHref = encodeMarkdownHref(rawHref);
+		return encodedHref ? `[${match}](${encodedHref})` : match;
+	});
+}
+
+/**
+ * Turn previewable local paths written as inline code into Markdown links.
+ * Fenced examples remain source code, while the generated anchors are handled
+ * by the delegated preview listener in main.ts.
+ */
+export function linkifyPreviewableInlineCode(markdown: string): string {
+	let result = "";
+	let plainStart = 0;
+	let lineStart = 0;
+
+	while (lineStart < markdown.length) {
+		const lineEndIndex = markdown.indexOf("\n", lineStart);
+		const lineEnd = lineEndIndex < 0 ? markdown.length : lineEndIndex;
+		const line = markdown.slice(lineStart, lineEnd);
+		const openingFence = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+		if (!openingFence) {
+			lineStart = lineEndIndex < 0 ? markdown.length : lineEnd + 1;
+			continue;
+		}
+
+		result += linkifyInlineCode(markdown.slice(plainStart, lineStart));
+		const marker = openingFence[1][0];
+		const minimumLength = openingFence[1].length;
+		let fenceEnd = markdown.length;
+		let candidateStart = lineEndIndex < 0 ? markdown.length : lineEnd + 1;
+		while (candidateStart < markdown.length) {
+			const candidateEndIndex = markdown.indexOf("\n", candidateStart);
+			const candidateEnd = candidateEndIndex < 0 ? markdown.length : candidateEndIndex;
+			const candidate = markdown.slice(candidateStart, candidateEnd);
+			const closingFence = /^ {0,3}(`+|~+)[ \t]*$/.exec(candidate);
+			if (closingFence
+				&& closingFence[1][0] === marker
+				&& closingFence[1].length >= minimumLength) {
+				fenceEnd = candidateEndIndex < 0 ? markdown.length : candidateEnd + 1;
+				break;
+			}
+			candidateStart = candidateEndIndex < 0 ? markdown.length : candidateEnd + 1;
+		}
+
+		result += markdown.slice(lineStart, fenceEnd);
+		plainStart = fenceEnd;
+		lineStart = fenceEnd;
+	}
+
+	return result + linkifyInlineCode(markdown.slice(plainStart));
+}
+
 export function resolveFileHref(rawHref: string, baseDirectory: string): string | null {
 	if (!isPreviewableFileHref(rawHref) || !baseDirectory.startsWith("/")) return null;
 	let href = rawHref.trim();
@@ -184,7 +272,7 @@ function renderPanel(): void {
 		: previewError
 			? html`<div class="file-preview-state is-error" role="alert">${previewError}</div>`
 			: isMarkdownFile(previewPath)
-				? html`<markdown-block .content=${previewContent}></markdown-block>`
+				? html`<markdown-block .content=${linkifyPreviewableInlineCode(previewContent)}></markdown-block>`
 				: html`<pre class="file-preview-source"><code>${previewContent}</code></pre>`;
 
 	render(html`

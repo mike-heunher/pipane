@@ -2,6 +2,7 @@ import { icon } from "@mariozechner/mini-lit/dist/icons.js";
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import { html } from "lit";
 import { Check, ChevronRight, Loader, Shrink } from "lucide";
+import { linkifyPreviewableInlineCode } from "../file-preview-panel.js";
 import { registerMessageRenderer } from "./message-registry.js";
 import { escapeStrikethrough } from "./utils/markdown.js";
 
@@ -72,7 +73,7 @@ registerMessageRenderer("compactionSummary" as any, {
 					</summary>
 					<div class="compaction-summary-body">
 						<div class="compaction-summary-label">Compaction summary</div>
-						<markdown-block .content=${escapeStrikethrough(summary)}></markdown-block>
+						<markdown-block .content=${linkifyPreviewableInlineCode(escapeStrikethrough(summary))}></markdown-block>
 					</div>
 				</details>
 			</div>

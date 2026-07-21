@@ -3,6 +3,7 @@ import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import { html, LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ChevronRight } from "lucide";
+import { linkifyPreviewableInlineCode } from "../../file-preview-panel.js";
 import { escapeStrikethrough } from "../utils/markdown.js";
 
 @customElement("thinking-block")
@@ -42,7 +43,7 @@ export class ThinkingBlock extends LitElement {
 					<span class="${shimmerClasses}">${label}</span>
 				</div>
 				${this.isExpanded
-					? html`<markdown-block .content=${escapeStrikethrough(this.content)} .isThinking=${true}></markdown-block>`
+					? html`<markdown-block .content=${linkifyPreviewableInlineCode(escapeStrikethrough(this.content))} .isThinking=${true}></markdown-block>`
 					: ""}
 			</div>
 		`;

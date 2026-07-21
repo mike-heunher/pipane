@@ -5,6 +5,7 @@ import {
 	initFilePreview,
 	isFilePreviewVisible,
 	isPreviewableFileHref,
+	linkifyPreviewableInlineCode,
 	openFilePreviewLink,
 	resolveFileHref,
 } from "./file-preview-panel.js";
@@ -42,6 +43,19 @@ describe("linked file preview", () => {
 			.toBe("/work/project/api.md");
 		expect(resolveFileHref("file:///work/project/README.md#top", "/ignored"))
 			.toBe("/work/project/README.md");
+	});
+
+	it("linkifies previewable inline-code paths without changing examples or existing links", () => {
+		expect(linkifyPreviewableInlineCode("Open `/tmp/project/guide.md` now."))
+			.toBe("Open [`/tmp/project/guide.md`](/tmp/project/guide.md) now.");
+		expect(linkifyPreviewableInlineCode("Open `docs/guide (draft).md`."))
+			.toBe("Open [`docs/guide (draft).md`](docs/guide%20%28draft%29.md).");
+		expect(linkifyPreviewableInlineCode("Already [open `linked.md` here](linked.md)."))
+			.toBe("Already [open `linked.md` here](linked.md).");
+		expect(linkifyPreviewableInlineCode("Endpoint `/api/files/content`; run `npm test`."))
+			.toBe("Endpoint `/api/files/content`; run `npm test`.");
+		expect(linkifyPreviewableInlineCode("```text\n/tmp/project/guide.md\n```"))
+			.toBe("```text\n/tmp/project/guide.md\n```");
 	});
 
 	it("loads and renders markdown in the right-hand pane", async () => {

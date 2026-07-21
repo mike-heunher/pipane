@@ -1,5 +1,6 @@
 # Unreleased
 
+- Automatically turn inline-code local file paths into clickable preview links.
 - Prevent session revision recovery storms during high-volume tool output.
 - Add a fast, atomic local production deployment command with health checks and rollback.
 - Open linked local files from conversation output in a right-hand pane with rendered Markdown previews.

@@ -15,7 +15,7 @@ async function startServer() {
 			created: "2026-07-21T12:00:00.000Z",
 			modified: "2026-07-21T12:01:00.000Z",
 			lastUserPromptTime: "2026-07-21T12:01:00.000Z",
-			messageCount: 2,
+			messageCount: 3,
 			firstMessage: "Show the project guide",
 		}],
 		states: {
@@ -26,6 +26,12 @@ async function startServer() {
 						role: "assistant",
 						content: [{ type: "text", text: "Open the [project guide](docs/guide.md)." }],
 						timestamp: 2,
+						stopReason: "end_turn",
+					},
+					{
+						role: "assistant",
+						content: [{ type: "text", text: `Or open \`${DETAILS_PATH}\` directly.` }],
+						timestamp: 3,
 						stopReason: "end_turn",
 					},
 				],
@@ -55,6 +61,11 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		await panel.getByRole("link", { name: "More details" }).click();
 		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 		await expect(panel.getByRole("heading", { name: "Details" })).toBeVisible();
+
+		const inlinePathLink = page.getByRole("link", { name: DETAILS_PATH });
+		await expect(inlinePathLink.locator("code")).toHaveText(DETAILS_PATH);
+		await inlinePathLink.click();
+		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 
 		await panel.getByRole("button", { name: "Close file preview" }).click();
 		await expect(panel).toBeHidden();
