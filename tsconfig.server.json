@@ -13,6 +13,6 @@
 		"rootDir": "src",
 		"declaration": false
 	},
-	"include": ["src/server/**/*", "src/shared/**/*"],
-	"exclude": ["src/server/**/*.test.ts", "src/shared/**/*.test.ts"]
+	"include": ["src/server/**/*", "src/rendezvous/**/*", "src/shared/**/*"],
+	"exclude": ["src/server/**/*.test.ts", "src/rendezvous/**/*.test.ts", "src/shared/**/*.test.ts"]
 }

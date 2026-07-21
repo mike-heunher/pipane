@@ -37,6 +37,27 @@ Every `session_sync` message includes a non-negative `revision`. Revisions incre
 
 The existing hash and patch fields remain in v1. Revisions make ordering and recovery explicit without pre-empting the future semantic-update protocol.
 
+## Rendezvous signaling protocol
+
+The control-plane contract lives in `src/shared/rendezvous-protocol.ts` and is independently versioned by `RENDEZVOUS_PROTOCOL_VERSION`, currently `1`. The standalone rendezvous process exposes:
+
+- `/v1/rendezvous/backend` for persistent outbound backend registration and signaling
+- `/v1/rendezvous/browser` for one browser/backend signaling route
+
+Every frame is validated JSON containing `protocolVersion` and a `type` discriminant. Rendezvous forwards ICE descriptions/candidates only; application frames never pass through it.
+
+### Backend registration
+
+The server sends a fresh random `challenge`. A backend responds with `register_backend`, containing its P-256 public key, metadata, and an ES256 signature over the domain-separated challenge. The rendezvous derives `backendId` from the SHA-256 fingerprint of the canonical public key and replies with `registered`. Backend identities persist in a mode-`0600` local file and survive process restarts.
+
+Registered backends receive `connection_request`, `signal`, and `connection_closed`. They send `signal` or `close_connection`. The backend client automatically reconnects its outbound WebSocket with bounded exponential backoff and repeats challenge authentication.
+
+### Browser signaling
+
+A browser sends `connect_backend` with a `backendId`. If that backend is online, both peers receive an opaque connection id. Either peer may then send a validated `signal` containing an SDP offer/answer or ICE candidate. A connection id is scoped to exactly its browser socket and registered backend; cross-route signaling is rejected.
+
+The answer-side WebRTC implementation uses a reliable ordered DataChannel with label `pipane` and subprotocol `pipane.v1`. The deterministic browser test establishes a real Chromium-to-Node DataChannel through this signaling protocol. Until authenticated pairing is implemented, the shipped backend registration closes browser connection requests before application access is granted.
+
 ## Pi subprocess RPC protocol
 
 `src/server/pi-rpc-protocol.ts` defines the typed subset of Pi RPC commands used by pipane and validates all corresponding responses, agent/session events, and extension UI requests before they reach session state.
@@ -47,4 +68,4 @@ Pi RPC uses strict JSONL framing. Records are split only on LF; Unicode line sep
 
 ## Compatibility policy
 
-A breaking WebSocket contract change must increment `WS_PROTOCOL_VERSION` and update both decoders and contract tests. Additive fields may be introduced without a version increment when old peers can safely ignore them. New discriminants require explicit validation and exhaustive handling on both sides.
+A breaking browser/backend contract change must increment `WS_PROTOCOL_VERSION`; a breaking rendezvous control-plane change must increment `RENDEZVOUS_PROTOCOL_VERSION`. Update both decoders and contract tests. Additive fields may be introduced without a version increment when old peers can safely ignore them. New discriminants require explicit validation and exhaustive handling on both sides.

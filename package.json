@@ -28,7 +28,8 @@
 		"node": ">=22.19.0"
 	},
 	"bin": {
-		"pipane": "bin/pipane.js"
+		"pipane": "bin/pipane.js",
+		"pipane-rendezvous": "bin/pipane-rendezvous.js"
 	},
 	"files": [
 		"dist/",
@@ -45,8 +46,10 @@
 		"deploy:prod": "./deploy-prod.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
+		"dev:rendezvous": "tsx watch src/rendezvous/server.ts",
 		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && concurrently --raw --kill-others-on-fail \"vite build\" \"tsc -p tsconfig.server.json\"",
 		"start": "NODE_ENV=production node dist/server/server/server.js",
+		"start:rendezvous": "NODE_ENV=production node dist/server/rendezvous/server.js",
 		"prod": "./prod.sh",
 		"check": "tsc --noEmit",
 		"test": "npm run test:unit",
@@ -78,6 +81,7 @@
 		"lit": "^3.3.1",
 		"lucide": "^0.544.0",
 		"marked": "^18.0.5",
+		"node-datachannel": "^0.32.3",
 		"pdfjs-dist": "5.4.394",
 		"ws": "^8.18.0",
 		"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"

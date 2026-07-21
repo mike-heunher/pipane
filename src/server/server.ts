@@ -23,7 +23,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { encodeServerMessage } from "../shared/ws-protocol.js";
+import { encodeServerMessage, WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 import { resolvePiLaunch } from "./pi-launch.js";
 import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
@@ -36,6 +36,8 @@ import { UpdateManager } from "./update-manager.js";
 import { registerUpdateApi } from "./update-api.js";
 import { SessionPathGuard } from "./session-path.js";
 import { AuthGuard } from "./auth-guard.js";
+import { loadOrCreateBackendIdentity } from "./backend-identity.js";
+import { BackendRendezvousClient } from "./rendezvous-client.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -64,6 +66,7 @@ const PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
 const PI_MAX_PROCESSES = parseInt(process.env.PI_MAX_PROCESSES || "24", 10);
 const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 const USAGE_EXTENSION_ENABLED = process.env.PIPANE_USAGE_EXTENSION !== "0";
+const RENDEZVOUS_URL = process.env.PIPANE_RENDEZVOUS_URL;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,6 +80,40 @@ const PKG_VERSION: string = (() => {
 	}
 })();
 const PKG_NAME = "pipane";
+
+function startRendezvousRegistration(): void {
+	if (!RENDEZVOUS_URL) return;
+	const identity = loadOrCreateBackendIdentity(process.env.PIPANE_BACKEND_IDENTITY_FILE);
+	const client = new BackendRendezvousClient({
+		url: RENDEZVOUS_URL,
+		identity,
+		metadata: {
+			name: process.env.PIPANE_BACKEND_NAME || hostname(),
+			softwareVersion: PKG_VERSION,
+			protocolVersions: [WS_PROTOCOL_VERSION],
+		},
+	});
+	client.onConnectionRequest((connectionId) => {
+		// The control plane is available first; authenticated WebRTC arrives in
+		// the next increment, so never leave an unauthenticated route hanging.
+		client.closeConnection(connectionId, "Backend data channel is not enabled yet");
+	});
+	client.onError((error) => {
+		console.warn("[rendezvous]", error instanceof Error ? error.message : error.message);
+	});
+	void client.start().then((backendId) => {
+		const appUrl = new URL(process.env.PIPANE_APP_URL || RENDEZVOUS_URL);
+		if (appUrl.protocol === "ws:") appUrl.protocol = "http:";
+		if (appUrl.protocol === "wss:") appUrl.protocol = "https:";
+		appUrl.pathname = `/backend/${backendId}`;
+		appUrl.search = "";
+		appUrl.hash = "";
+		log(`  Backend: ${backendId}`);
+		log(`  Web:     ${appUrl.toString()}`);
+	}).catch((error) => {
+		console.warn("[rendezvous] registration stopped:", error);
+	});
+}
 
 const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("base64url");
 const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
@@ -339,6 +376,7 @@ if (PI_AVAILABLE) {
 }
 
 server.listen(REQUESTED_PORT, () => {
+	startRendezvousRegistration();
 	const address = server.address();
 	const port = address && typeof address !== "string" ? address.port : REQUESTED_PORT;
 	const authUrl = `http://${PUBLIC_HOSTNAME}:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;

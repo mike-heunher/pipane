@@ -12,6 +12,7 @@ describe("global npm CLI packaging", () => {
 		expect(pkg.private).toBe(false);
 		expect(pkg.name).toBe("pipane");
 		expect(pkg.bin?.["pipane"]).toBe("bin/pipane.js");
+		expect(pkg.bin?.["pipane-rendezvous"]).toBe("bin/pipane-rendezvous.js");
 		expect(pkg.scripts?.prepack).toBe("npm run build");
 		expect(pkg.files).toContain("dist/");
 		expect(pkg.files).toContain("bin/");
@@ -20,11 +21,17 @@ describe("global npm CLI packaging", () => {
 		expect(pkg.files).not.toContain("patches/");
 	});
 
-	it("launcher resolves the built server entry", () => {
-		const output = execFileSync(process.execPath, [path.join(repoRoot, "bin/pipane.js")], {
-			env: { ...process.env, PIPANE_PRINT_ENTRY: "1" },
+	it("launchers resolve their built server entries", () => {
+		const env = { ...process.env, PIPANE_PRINT_ENTRY: "1" };
+		const backendOutput = execFileSync(process.execPath, [path.join(repoRoot, "bin/pipane.js")], {
+			env,
 			encoding: "utf8",
 		}).trim();
-		expect(output).toBe(path.join(repoRoot, "dist/server/server/server.js"));
+		const rendezvousOutput = execFileSync(process.execPath, [path.join(repoRoot, "bin/pipane-rendezvous.js")], {
+			env,
+			encoding: "utf8",
+		}).trim();
+		expect(backendOutput).toBe(path.join(repoRoot, "dist/server/server/server.js"));
+		expect(rendezvousOutput).toBe(path.join(repoRoot, "dist/server/rendezvous/server.js"));
 	});
 });
