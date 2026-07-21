@@ -289,8 +289,11 @@ export class SessionJsonl {
 	 * @param clientVersion - The client's last known version
 	 * @returns SyncOp to send, or null if nothing changed
 	 */
-	computeSyncOp(clientJson: string, clientHash: string, clientVersion: number): SyncOp | null {
-		if (this._version === clientVersion && clientHash === this._hash) return null;
+	computeSyncOp(clientJson: string, clientHash: string, _clientVersion: number): SyncOp | null {
+		// Some Pi lifecycle events advance the internal version without changing
+		// the serialized state. Do not emit a same-revision empty delta: wire
+		// revisions describe observable state changes, not internal event counts.
+		if (clientHash === this._hash) return null;
 		return computeSyncOp(clientJson, this._json, clientHash, this._hash);
 	}
 

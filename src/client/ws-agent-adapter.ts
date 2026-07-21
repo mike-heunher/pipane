@@ -196,6 +196,8 @@ export class WsAgentAdapter {
 	private _syncHash = "";
 	/** Last applied authoritative session revision. */
 	private _syncRevision: number | undefined;
+	/** Scope currently waiting for a recovery/initial full snapshot. */
+	private _awaitingFullSync: { sessionPath: string; sessionNonce: number } | undefined;
 
 	// ── session_sync frame queue ──────────────────────────────────────────
 	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
@@ -517,10 +519,9 @@ export class WsAgentAdapter {
 	private async onReconnected() {
 		// Re-subscribe to the current session to get fresh state
 		if (this._sessionPath && this._sessionStatus !== "virtual") {
-			this._syncJson = "";
-			this._syncHash = "";
-			this._syncRevision = undefined;
-			this.subscribeToSession(this._sessionPath);
+			// A request associated with the old socket can never complete here.
+			this._awaitingFullSync = undefined;
+			void this.requestFullSessionSync(this._sessionPath);
 		}
 		this.refreshSessionStatuses();
 	}
@@ -567,6 +568,20 @@ export class WsAgentAdapter {
 		} catch (err) {
 			console.error("Failed to subscribe to session:", err);
 		}
+	}
+
+	/** Reset the sync base and request exactly one authoritative full snapshot. */
+	private async requestFullSessionSync(sessionPath: string): Promise<void> {
+		const scope = { sessionPath, sessionNonce: this._sessionNonce };
+		if (this._awaitingFullSync?.sessionPath === scope.sessionPath
+			&& this._awaitingFullSync.sessionNonce === scope.sessionNonce) return;
+
+		this._awaitingFullSync = scope;
+		this._syncJson = "";
+		this._syncHash = "";
+		this._syncRevision = undefined;
+		this.clearSessionSyncQueue();
+		await this.subscribeToSession(sessionPath);
 	}
 
 	private handleProtocolError(error: ProtocolDecodeError): void {
@@ -671,7 +686,7 @@ export class WsAgentAdapter {
 					}
 					this._sessionStatus = "attached";
 					this._state.isStreaming = true;
-					void this.subscribeToSession(data.sessionPath);
+					void this.requestFullSessionSync(data.sessionPath);
 					this.emitStatusChange();
 				}
 				if (!this._optimisticSessions.has(data.sessionPath)) {
@@ -707,9 +722,16 @@ export class WsAgentAdapter {
 	 * retained and applied in order because its baseHash depends on the prior op.
 	 */
 	private enqueueSessionSync(syncMsg: ScopedSessionSync): void {
+		const awaitingThisScope = this._awaitingFullSync !== undefined
+			&& this._awaitingFullSync.sessionPath === syncMsg.__sessionPath
+			&& this._awaitingFullSync.sessionNonce === syncMsg.__sessionNonce;
 		if (syncMsg.op === "full") {
+			if (awaitingThisScope) this._awaitingFullSync = undefined;
 			this._pendingSessionSyncs = [syncMsg];
 		} else {
+			// Deltas already in flight before the server processes our recovery
+			// subscription have no usable base. Drop them without requesting again.
+			if (awaitingThisScope) return;
 			this._pendingSessionSyncs.push(syncMsg);
 		}
 		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
@@ -774,10 +796,7 @@ export class WsAgentAdapter {
 					expected: nextRevision === undefined ? "full snapshot" : nextRevision + 1,
 					actual: message.revision,
 				});
-				this._syncJson = "";
-				this._syncHash = "";
-				this._syncRevision = undefined;
-				void this.subscribeToSession(syncSessionPath);
+				void this.requestFullSessionSync(syncSessionPath);
 				return;
 			}
 			nextRevision = message.revision;
@@ -805,10 +824,7 @@ export class WsAgentAdapter {
 		if (!result) {
 			// Hash verification failed — request a full sync by re-subscribing.
 			console.error("[ws-adapter] Sync verification failed, re-subscribing");
-			this._syncJson = "";
-			this._syncHash = "";
-			this._syncRevision = undefined;
-			this.subscribeToSession(syncSessionPath);
+			void this.requestFullSessionSync(syncSessionPath);
 			return;
 		}
 
@@ -1137,7 +1153,7 @@ export class WsAgentAdapter {
 					const parts = filename.split("_");
 					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 					this._sessionStatus = "attached";
-					this.subscribeToSession(newSessionPath);
+					void this.requestFullSessionSync(newSessionPath);
 					this.emitSessionChange();
 					this.emitStatusChange();
 				}
@@ -1562,15 +1578,12 @@ export class WsAgentAdapter {
 		this._state.isStreaming = false;
 		this._pendingToolCallIds.clear();
 		this._toolCallTimings = {};
-		this._syncJson = "";
-		this._syncHash = "";
-		this._syncRevision = undefined;
-		this.clearSessionSyncQueue();
+		this._awaitingFullSync = undefined;
 		this._state.error = undefined;
 
 		// Subscribe to this session on the server — it will push session_sync
 		// with the full state.
-		await this.subscribeToSession(sessionPath);
+		await this.requestFullSessionSync(sessionPath);
 		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
 
 		// If the session is currently running on the server, restore streaming state
@@ -1616,6 +1629,7 @@ export class WsAgentAdapter {
 		this._syncJson = "";
 		this._syncHash = "";
 		this._syncRevision = undefined;
+		this._awaitingFullSync = undefined;
 		this.clearSessionSyncQueue();
 		this._state.error = undefined;
 

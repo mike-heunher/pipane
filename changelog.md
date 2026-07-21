@@ -1,5 +1,6 @@
 # Unreleased
 
+- Prevent session revision recovery storms during high-volume tool output.
 - Add a fast, atomic local production deployment command with health checks and rollback.
 - Open linked local files from conversation output in a right-hand pane with rendered Markdown previews.
 - Reduce full verification wall time with parallel checks, shared E2E harnesses, and opt-in browser artifacts.

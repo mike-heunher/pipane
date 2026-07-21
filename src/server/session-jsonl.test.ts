@@ -326,6 +326,22 @@ describe("SessionJsonl", () => {
 			expect(op).toBeNull();
 		});
 
+		it("does not emit an empty delta when only the internal version changes", () => {
+			const session = new SessionJsonl({
+				messages: [],
+				model: null,
+				thinkingLevel: "off",
+			});
+			const clientJson = session.json;
+			const clientHash = session.hash;
+			const clientVersion = session.version;
+
+			expect(session.applyEvent({ type: "agent_start" } as any)).toBe(true);
+			expect(session.version).toBe(clientVersion + 1);
+			expect(session.hash).toBe(clientHash);
+			expect(session.computeSyncOp(clientJson, clientHash, clientVersion)).toBeNull();
+		});
+
 		it("returns full sync for fresh client", () => {
 			const session = new SessionJsonl({
 				messages: [{ role: "user", content: "hi" } as any],

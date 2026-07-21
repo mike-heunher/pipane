@@ -105,17 +105,19 @@ describe("WsAgentAdapter burst session sync", () => {
 		expect(error).not.toHaveBeenCalledWith("[ws-adapter] Sync verification failed, re-subscribing");
 	});
 
-	it("recovers with a full subscription when a session revision is skipped", async () => {
+	it("requests one full snapshot and drops stale deltas when a revision is skipped", async () => {
 		vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
 		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 		const { adapter, sent } = createAdapter();
 		const a = adapter as any;
 		const first = sessionState("one");
 		const second = sessionState("two");
+		const third = sessionState("three");
 		const firstHash = await computeHash(first);
 		const secondHash = await computeHash(second);
+		const thirdHash = await computeHash(third);
 
-		deliver(adapter, { op: "full", data: first, hash: firstHash });
+		deliver(adapter, { revision: 1, op: "full", data: first, hash: firstHash });
 		await a.flushSessionSyncQueue();
 		deliver(adapter, {
 			revision: 3,
@@ -126,19 +128,49 @@ describe("WsAgentAdapter burst session sync", () => {
 		});
 		await a.flushSessionSyncQueue();
 
-		const subscribe = sent.find((message) => message.type === "subscribe_session");
-		expect(subscribe).toMatchObject({
+		// Updates already in flight before the server handles the subscription
+		// must neither trigger more subscriptions nor enter the hash queue.
+		for (const revision of [4, 5]) {
+			deliver(adapter, {
+				revision,
+				op: "delta",
+				patches: computePatches(first, second),
+				baseHash: firstHash,
+				hash: secondHash,
+			});
+			await a.flushSessionSyncQueue();
+		}
+
+		const subscriptions = sent.filter((message) => message.type === "subscribe_session");
+		expect(subscriptions).toHaveLength(1);
+		expect(subscriptions[0]).toMatchObject({
 			protocolVersion: WS_PROTOCOL_VERSION,
 			sessionPath: SESSION_PATH,
 		});
+		expect(consoleError).toHaveBeenCalledTimes(1);
 		expect(consoleError).toHaveBeenCalledWith(
 			"[ws-adapter] Session revision gap, re-subscribing",
 			expect.objectContaining({ expected: 2, actual: 3 }),
 		);
+
+		// The first full snapshot ends recovery; dependent deltas resume normally.
+		deliver(adapter, { revision: 6, op: "full", data: second, hash: secondHash });
+		deliver(adapter, {
+			revision: 7,
+			op: "delta",
+			patches: computePatches(second, third),
+			baseHash: secondHash,
+			hash: thirdHash,
+		});
+		await a.flushSessionSyncQueue();
+		expect(a._syncRevision).toBe(7);
+		expect(a._syncJson).toBe(third);
+		expect(sent.filter((message) => message.type === "subscribe_session")).toHaveLength(1);
+
 		(adapter as any).handleMessage(JSON.stringify({
 			protocolVersion: WS_PROTOCOL_VERSION,
 			type: "response",
-			id: subscribe.id,
+			id: subscriptions[0].id,
 			command: "subscribe_session",
 			success: true,
 			data: {},

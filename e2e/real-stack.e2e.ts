@@ -80,6 +80,7 @@ test.describe("Real stack e2e", () => {
 			if (
 				text.includes("[jsonl-sync] Base hash mismatch")
 				|| text.includes("[ws-adapter] Sync verification failed")
+				|| text.includes("[ws-adapter] Session revision gap")
 				|| text.includes("[ws-adapter] Ignoring delta while awaiting full sync")
 			) {
 				syncFailures.push(text);
