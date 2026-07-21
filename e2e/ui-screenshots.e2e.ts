@@ -175,10 +175,9 @@ function createMockServer(): Promise<MockPipaneServer> {
 }
 
 async function captureAndCompare(target: Locator | Page, name: string) {
-	if (captureLatest) {
-		await target.screenshot({ path: path.join(LATEST_DIR, name), animations: "disabled" });
-	}
-	await expect(target as any).toHaveScreenshot(name, { animations: "disabled", maxDiffPixelRatio: 0.015 });
+	const screenshot = await target.screenshot({ animations: "disabled" });
+	if (captureLatest) fs.writeFileSync(path.join(LATEST_DIR, name), screenshot);
+	await expect(screenshot).toMatchSnapshot(name, { maxDiffPixelRatio: 0.015 });
 }
 
 async function waitForSessionItems(page: Page) {
@@ -203,6 +202,7 @@ async function openMainSession(page: Page) {
 }
 
 test.describe("UI visual goldens", () => {
+	test.describe.configure({ mode: captureLatest ? "default" : "parallel" });
 	test.use({ viewport: { width: 1440, height: 900 } });
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
 

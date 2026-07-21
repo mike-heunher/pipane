@@ -42,6 +42,8 @@ export interface Scenario {
 	hasToolResults?: boolean;
 	/** Ordered SSE chunks to stream back. */
 	chunks: MockChunk[];
+	/** Delay between chunks; override only when a test must observe mid-stream state. */
+	chunkDelayMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,8 +258,9 @@ export function createMockLlmServer(
 				};
 				res.write(`data: ${JSON.stringify(data)}\n\n`);
 
-				// Small delay between chunks for realism
-				setTimeout(sendNext, 5);
+				// Yield between chunks so transport and UI queues remain observable without
+				// making every deterministic response pay a human-scale streaming delay.
+				setTimeout(sendNext, scenario.chunkDelayMs ?? 1);
 			};
 
 			sendNext();

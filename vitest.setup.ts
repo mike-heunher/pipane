@@ -1,5 +1,19 @@
 import { afterAll, afterEach, beforeEach } from "vitest";
 
+// Vitest's VM pools expose Web Crypto but do not copy its CryptoKey constructor
+// onto the isolated global. Browsers and regular Node contexts provide it.
+if (typeof globalThis.CryptoKey === "undefined") {
+	const probeKeys = await globalThis.crypto.subtle.generateKey(
+		{ name: "ECDSA", namedCurve: "P-256" },
+		false,
+		["sign", "verify"],
+	);
+	Object.defineProperty(globalThis, "CryptoKey", {
+		configurable: true,
+		value: probeKeys.privateKey.constructor,
+	});
+}
+
 const originalConsoleError = console.error;
 const originalConsoleWarn = console.warn;
 const originalFetch = globalThis.fetch;

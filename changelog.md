@@ -1,5 +1,6 @@
 # Unreleased
 
+- Reduce full verification runtime with VM-thread coverage, incremental typechecks, parallel E2E cases, and faster deterministic fixtures.
 - Highlight the sidebar settings icon with a soft theme-colored accent tile.
 - Match the settings command center palette to the active color theme and light or dark mode.
 - Replace the sidebar burger and raw JSON editor with a compact categorized settings command center.

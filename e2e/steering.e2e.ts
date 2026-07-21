@@ -15,6 +15,7 @@ import { test, expect } from "./real-stack-fixture.js";
 import { toolCallChunks, textChunks, type Scenario } from "./mock-llm-server.js";
 
 test.describe("Steering queue e2e", () => {
+	test.describe.configure({ mode: "parallel" });
 	test.use({ viewport: { width: 1440, height: 900 } });
 
 	async function gotoFreshSession(page: Page, harness: E2EHarness) {
@@ -56,7 +57,7 @@ test.describe("Steering queue e2e", () => {
 				chunks: toolCallChunks(
 					"call_slow_1",
 					"bash",
-					{ command: "sleep 1 && echo done" },
+					{ command: "sleep 0.4 && echo done" },
 				),
 			},
 			{

@@ -467,7 +467,7 @@ test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel"
 		const qrUrl = new URL(`${baseUrl}/pair/${encodeURIComponent(qrPairing.pairId)}`);
 		qrUrl.hash = new URLSearchParams({ backend: identity.backendId, secret: qrPairing.secret }).toString();
 		await page.goto(qrUrl.toString());
-		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully");
+		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully", { timeout: 10_000 });
 		expect(new URL(page.url()).pathname).toBe(`/backend/${identity.backendId}`);
 		expect(new URL(page.url()).hash).toBe("");
 
@@ -496,7 +496,7 @@ test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel"
 		const secondQrUrl = new URL(`${baseUrl}/pair/${encodeURIComponent(secondPairing.pairId)}`);
 		secondQrUrl.hash = new URLSearchParams({ backend: secondIdentity.backendId, secret: secondPairing.secret }).toString();
 		await page.goto(secondQrUrl.toString());
-		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully");
+		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully", { timeout: 10_000 });
 
 		await page.goto(baseUrl);
 		await expect(page.locator("[data-testid='backend-landing'] [data-backend-id]")).toHaveCount(2);

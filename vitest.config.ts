@@ -11,6 +11,11 @@ export default defineConfig({
 	},
 	test: {
 		environment: "happy-dom",
+		// Reuse each VM worker's environment across files; per-test guards in the
+		// setup file still reset network/console state and catch leaked activity.
+		pool: "vmThreads",
+		maxWorkers: 4,
+		isolate: false,
 		include: ["src/**/*.test.ts"],
 		setupFiles: ["./vitest.setup.ts"],
 		// Increase timeout for Lit component rendering

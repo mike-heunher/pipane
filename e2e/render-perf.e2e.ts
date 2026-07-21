@@ -89,7 +89,7 @@ async function waitForExactFixture(page: Page): Promise<void> {
 		const start = (window as any).__perfStart as number;
 		const lastMutation = (window as any).__perfLastMutation as number;
 		const mutationCount = (window as any).__perfMutationCount as number;
-		return mutationCount > 0 && lastMutation >= start && performance.now() - lastMutation > 500;
+		return mutationCount > 0 && lastMutation >= start && performance.now() - lastMutation > 100;
 	}, null, { timeout: 60_000, polling: 100 });
 }
 

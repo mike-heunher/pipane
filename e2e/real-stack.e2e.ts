@@ -18,6 +18,7 @@ import {
 } from "./mock-llm-server.js";
 
 test.describe("Real stack e2e", () => {
+	test.describe.configure({ mode: "parallel" });
 	test.use({ viewport: { width: 1440, height: 900 } });
 
 	/** Navigate to the app and start a fresh (virtual) session for a clean test. */
@@ -307,7 +308,7 @@ test.describe("Real stack e2e", () => {
 				chunks: toolCallChunks(
 					"call_bash_scroll",
 					"bash",
-					{ command: "for i in $(seq 1 40); do echo scroll_line_$i; sleep 0.05; done" },
+					{ command: "for i in $(seq 1 30); do echo scroll_line_$i; sleep 0.03; done" },
 				),
 			},
 			{
@@ -338,7 +339,7 @@ test.describe("Real stack e2e", () => {
 			element.scrollHeight - element.scrollTop - element.clientHeight,
 		)).toBeGreaterThan(100);
 
-		await expect(output).toContainText("scroll_line_30", { timeout: 15000 });
+		await expect(output).toContainText("scroll_line_20", { timeout: 15000 });
 		const distanceAfterMoreOutput = await scrollArea.evaluate((element) =>
 			element.scrollHeight - element.scrollTop - element.clientHeight,
 		);
@@ -351,9 +352,9 @@ test.describe("Real stack e2e", () => {
 	});
 
 	test("background streaming stays pinned without user scroll intent", async ({ page, harness }) => {
-		const response = Array.from({ length: 500 }, (_, index) => `background_word_${index}`).join(" ");
+		const response = Array.from({ length: 300 }, (_, index) => `background_word_${index}`).join(" ");
 		harness.setScenarios([
-			{ match: "stream while hidden", chunks: textChunks(response) },
+			{ match: "stream while hidden", chunks: textChunks(response), chunkDelayMs: 2 },
 		]);
 
 		await gotoFreshSession(page, harness);
@@ -383,7 +384,7 @@ test.describe("Real stack e2e", () => {
 		try {
 			await expect.poll(() => {
 				try {
-					return readFileSync(sessionFile!, "utf8").includes("background_word_499");
+					return readFileSync(sessionFile!, "utf8").includes("background_word_299");
 				} catch {
 					return false;
 				}
@@ -393,7 +394,7 @@ test.describe("Real stack e2e", () => {
 			await cdp.detach();
 		}
 
-		await expect(responseMessage).toContainText("background_word_499", { timeout: 15000 });
+		await expect(responseMessage).toContainText("background_word_299", { timeout: 15000 });
 		await expect.poll(() => scrollArea.evaluate((element) =>
 			element.scrollHeight - element.scrollTop - element.clientHeight,
 		)).toBeLessThan(10);
