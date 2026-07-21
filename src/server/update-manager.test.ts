@@ -102,7 +102,7 @@ describe("UpdateManager", () => {
 		expect(manager.currentSnapshot.notices.some((notice) => notice.target === "pi")).toBe(true);
 	});
 
-	it("rejects missing and concurrent update requests", async () => {
+	it("rejects concurrent updates and treats stale update requests as already current", async () => {
 		let finishUpdate!: () => void;
 		const dependencies = makeDependencies({
 			fetchLatestVersion: vi.fn(async () => null),
@@ -119,7 +119,12 @@ describe("UpdateManager", () => {
 		await expect(manager.run("extensions")).rejects.toThrow("already running");
 		finishUpdate();
 		await running;
-		await expect(manager.run("pi")).rejects.toThrow("No pi update");
+		await expect(manager.run("pi")).resolves.toEqual({
+			target: "pi",
+			message: "Pi is already up to date.",
+			restartRequired: false,
+		});
+		expect(dependencies.runCommand).toHaveBeenCalledTimes(1);
 	});
 
 	it("honors offline and skip-version-check settings", async () => {

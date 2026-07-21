@@ -1,5 +1,6 @@
 # Unreleased
 
+- Treat stale update actions from other open clients as already complete instead of showing a contradictory error.
 - Upload arbitrary non-image attachments to temporary backend files and pass their paths to the agent over local or remote connections.
 - Reduce full verification runtime with VM-thread coverage, incremental typechecks, parallel E2E cases, and faster deterministic fixtures.
 - Highlight the sidebar settings icon with a soft theme-colored accent tile.

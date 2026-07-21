@@ -19,6 +19,11 @@ import {
 
 const UPDATE_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const MAX_COMMAND_OUTPUT = 16 * 1024;
+const NO_UPDATE_MESSAGES: Record<UpdateTarget, string> = {
+	pipane: "pipane is already up to date.",
+	pi: "Pi is already up to date.",
+	extensions: "Pi packages are already up to date.",
+};
 
 export interface PiLaunchCommand {
 	command: string;
@@ -225,7 +230,13 @@ export class UpdateManager {
 			throw new Error(`An update is already running for ${this.activeUpdate}.`);
 		}
 		const notice = this.snapshot.notices.find((candidate) => candidate.target === target);
-		if (!notice) throw new Error(`No ${target} update is currently available.`);
+		if (!notice) {
+			return {
+				target,
+				message: NO_UPDATE_MESSAGES[target],
+				restartRequired: false,
+			};
+		}
 
 		this.activeUpdate = target;
 		try {
