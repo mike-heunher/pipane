@@ -318,18 +318,21 @@ function renderContextUsage(
 	usage: TokenUsageSummary | undefined,
 	statuses: ProviderStatus[],
 ) {
-	if (usage?.contextPercent == null || !usage.contextWindowLabel) return "";
-	const percent = Math.max(0, usage.contextPercent);
+	if (usage?.contextPercent === undefined || !usage.contextWindowLabel) return "";
+	const isUnknown = usage.contextPercent === null;
+	const percent = Math.max(0, usage.contextPercent ?? 0);
 	const fillPercent = Math.min(100, percent);
 	const tone = contextUsageTone(percent);
-	const description = `Context window: ${percent}% used of ${usage.contextWindowLabel}`;
+	const description = isUnknown
+		? `Context window usage is unknown after compaction (${usage.contextWindowLabel} window)`
+		: `Context window: ${percent}% used of ${usage.contextWindowLabel}`;
 	return renderStatusMetric("context", `${description}. Click for session details.`, html`
-		<span class="status-context is-${tone}">
+		<span class="status-context is-${tone} ${isUnknown ? "is-unknown" : ""}">
 			<span class="status-context-label">context</span>
 			<span class="status-context-track" aria-hidden="true">
 				<span class="status-context-fill" style=${`width: ${fillPercent}%`}></span>
 			</span>
-			<span class="status-context-percent">${percent}%</span>
+			<span class="status-context-percent">${isUnknown ? "?" : `${percent}%`}</span>
 		</span>
 	`, statuses, usage);
 }
@@ -347,8 +350,8 @@ function renderStatusDetailsCard(statuses: ProviderStatus[], usage: TokenUsageSu
 			${usage ? html`
 				<div class="status-detail-row"><span>Input tokens</span><span>${usage.input.toLocaleString()}</span></div>
 				<div class="status-detail-row"><span>Output tokens</span><span>${usage.output.toLocaleString()}</span></div>
-				${usage.contextPercent != null && usage.contextWindowLabel
-					? html`<div class="status-detail-row"><span>Context</span><span>${usage.contextPercent}% / ${usage.contextWindowLabel}</span></div>`
+				${usage.contextPercent !== undefined && usage.contextWindowLabel
+					? html`<div class="status-detail-row"><span>Context</span><span>${usage.contextPercent === null ? "?" : `${usage.contextPercent}%`} / ${usage.contextWindowLabel}</span></div>`
 					: ""}
 				<div class="status-detail-row"><span>Session cost</span><span>${usage.costLabel}</span></div>
 			` : ""}
@@ -411,16 +414,10 @@ async function openLocalSettingsModal() {
 	}
 }
 
-// Cache the last summary to avoid flicker while a session switch briefly clears messages.
-let lastTokenUsageSummary: TokenUsageSummary | undefined;
-
 function getTokenUsageSummary(): TokenUsageSummary | undefined {
 	if (!agent) return undefined;
 	const state = agent.state;
-	const summary = computeTokenUsageSummary(state.messages, state.model?.contextWindow);
-	if (summary === null) return lastTokenUsageSummary;
-	lastTokenUsageSummary = summary;
-	return summary;
+	return computeTokenUsageSummary(state.messages, state.model?.contextWindow);
 }
 
 function handleScroll(e: Event) {

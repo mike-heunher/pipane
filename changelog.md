@@ -5,3 +5,4 @@
 - Infer active Pi session worktrees from recent successful filesystem tool activity.
 - Add actionable web notifications for pipane, Pi, and managed Pi package updates.
 - Dismiss session usage details when clicking outside the popup.
+- Keep conversation token usage visible across in-flight and all-zero JSONL states.

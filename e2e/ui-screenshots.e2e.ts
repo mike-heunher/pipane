@@ -437,6 +437,14 @@ test.describe("UI visual goldens", () => {
 			steeringQueue: [],
 		});
 
+		const context = page.locator(".status-context");
+		await expect(context).toBeVisible();
+		await expect(context.locator(".status-context-percent")).toHaveText("?");
+		await expect(page.locator(".status-metric-details.is-context > summary")).toHaveAttribute(
+			"title",
+			"Context window usage is unknown after compaction (200k window). Click for session details.",
+		);
+
 		const compaction = page.locator(".compaction-event.is-complete");
 		await expect(compaction).toBeVisible();
 		await expect(compaction.locator(".compaction-title")).toHaveText("Conversation compacted");
@@ -447,5 +455,36 @@ test.describe("UI visual goldens", () => {
 		await expect(compaction.locator("details")).toHaveAttribute("open", "");
 		await expect(compaction.locator("markdown-block")).toContainText("Finish the auth migration");
 		await captureAndCompare(compaction, "compaction-expanded.png");
+	});
+
+	test("context usage stays visible during an all-zero streaming response", async ({ page }) => {
+		mock.sendSessionState(SESSION_PATH, {
+			messages: toolMessages,
+			isStreaming: false,
+			pendingToolCalls: [],
+			toolCallTimings: completedToolCallTimings,
+			steeringQueue: [],
+		});
+		await page.goto(`http://localhost:${mock.port}`);
+		await openMainSession(page);
+
+		const context = page.locator(".status-context");
+		await expect(context.locator(".status-context-percent")).toHaveText("76%");
+
+		mock.sendSessionState(SESSION_PATH, {
+			messages: [
+				...toolMessages,
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "Working…" }],
+					usage: usage(0, 0, 0, 0),
+					timestamp: 5000,
+				},
+			],
+			isStreaming: true,
+		});
+
+		await expect(context).toBeVisible();
+		await expect(context.locator(".status-context-percent")).toHaveText("76%");
 	});
 });

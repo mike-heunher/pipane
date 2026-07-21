@@ -15,6 +15,7 @@ export interface UsageInfo {
 export interface TokenUsageMessage {
 	role: string;
 	usage?: UsageInfo;
+	stopReason?: string;
 }
 
 export interface TokenUsageSummary {
@@ -22,7 +23,8 @@ export interface TokenUsageSummary {
 	output: number;
 	cost: number;
 	costLabel: string;
-	contextPercent?: number;
+	/** `null` means compaction made the current size unknown until the next response. */
+	contextPercent?: number | null;
 	contextWindowLabel?: string;
 }
 
@@ -36,18 +38,34 @@ function formatCost(cost: number): string {
 	return `$${cost < 0.01 ? cost.toFixed(4) : cost < 1 ? cost.toFixed(3) : cost.toFixed(2)}`;
 }
 
+function contextTokens(usage: UsageInfo): number {
+	if (usage.totalTokens && usage.totalTokens > 0) return usage.totalTokens;
+	return (usage.input ?? usage.inputTokens ?? 0)
+		+ (usage.output ?? usage.outputTokens ?? 0)
+		+ (usage.cacheRead ?? 0)
+		+ (usage.cacheWrite ?? 0);
+}
+
+function isValidContextUsage(message: TokenUsageMessage): message is TokenUsageMessage & { usage: UsageInfo } {
+	return message.role === "assistant"
+		&& message.stopReason !== "aborted"
+		&& message.stopReason !== "error"
+		&& message.usage !== undefined
+		&& contextTokens(message.usage) > 0;
+}
+
 /**
  * Compute the status-bar summary.
  *
- * `null` means the message list is temporarily empty and the caller should keep
- * its cached value. `undefined` means a non-empty conversation has no usage.
+ * In-flight, aborted, and failed assistant messages carry an all-zero usage
+ * object. Ignore those placeholders for context accounting so the last valid
+ * value remains visible throughout a turn. When the model has a context window,
+ * return a zero summary before its first response so the metric is always shown.
  */
 export function computeTokenUsageSummary(
 	messages: readonly TokenUsageMessage[],
 	contextWindow?: number,
-): TokenUsageSummary | null | undefined {
-	if (messages.length === 0) return null;
-
+): TokenUsageSummary | undefined {
 	const totals = messages
 		.filter((message) => message.role === "assistant")
 		.reduce((result, message) => {
@@ -62,32 +80,36 @@ export function computeTokenUsageSummary(
 			return result;
 		}, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 });
 
-	if (!(totals.input || totals.output || totals.cacheRead || totals.cacheWrite || totals.cost)) {
-		return undefined;
-	}
+	const hasTotals = Boolean(totals.input || totals.output || totals.cacheRead || totals.cacheWrite || totals.cost);
+	if (!hasTotals && !(contextWindow && contextWindow > 0)) return undefined;
 
-	let lastUsage: UsageInfo | undefined;
+	let lastContextTokens = 0;
+	let latestCompactionIndex = -1;
 	for (let index = messages.length - 1; index >= 0; index--) {
-		const message = messages[index];
-		if (message.role === "assistant" && message.usage) {
-			lastUsage = message.usage;
+		if (messages[index].role === "compactionSummary") {
+			latestCompactionIndex = index;
 			break;
 		}
 	}
-	const lastTotal = lastUsage
-		? lastUsage.totalTokens
-			?? (lastUsage.input ?? lastUsage.inputTokens ?? 0)
-				+ (lastUsage.output ?? lastUsage.outputTokens ?? 0)
-		: 0;
+	for (let index = messages.length - 1; index > latestCompactionIndex; index--) {
+		const message = messages[index];
+		if (isValidContextUsage(message)) {
+			lastContextTokens = contextTokens(message.usage);
+			break;
+		}
+	}
+	const contextIsUnknown = latestCompactionIndex >= 0 && lastContextTokens === 0;
 
 	return {
 		input: totals.input,
 		output: totals.output,
 		cost: totals.cost,
 		costLabel: formatCost(totals.cost),
-		contextPercent: lastTotal && contextWindow
-			? Math.round((lastTotal / contextWindow) * 100)
+		contextPercent: contextWindow && contextWindow > 0
+			? contextIsUnknown
+				? null
+				: Math.round((lastContextTokens / contextWindow) * 100)
 			: undefined,
-		contextWindowLabel: contextWindow ? formatTokenCount(contextWindow) : undefined,
+		contextWindowLabel: contextWindow && contextWindow > 0 ? formatTokenCount(contextWindow) : undefined,
 	};
 }
