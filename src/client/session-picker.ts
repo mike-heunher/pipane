@@ -97,17 +97,21 @@ export class SessionPicker extends LitElement {
 			height: 1.55rem;
 			padding: 0;
 			border: 1px solid transparent;
-			border-radius: 0.3rem;
-			background: transparent;
-			color: var(--picker-muted);
+			border-radius: 0.45rem;
+			background: var(--picker-active-bg);
+			color: var(--picker-active);
 			cursor: pointer;
-			transition: background 0.15s, border-color 0.15s, color 0.15s;
+			transition: background 0.15s, color 0.15s;
 		}
 
 		.settings-btn:hover {
-			border-color: var(--picker-border);
-			background: var(--picker-hover);
-			color: var(--picker-text);
+			background: color-mix(in srgb, var(--picker-active) 20%, transparent);
+			color: color-mix(in srgb, var(--picker-active) 75%, var(--picker-text));
+		}
+
+		.settings-btn:focus-visible {
+			outline: 2px solid var(--picker-active);
+			outline-offset: 2px;
 		}
 
 		.header-title {
@@ -1116,9 +1120,9 @@ export class SessionPicker extends LitElement {
 							title="Settings"
 							aria-label="Settings"
 						>
-							<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
 								<circle cx="12" cy="12" r="3"></circle>
-								<path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-1.42 1.42-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55V20h-2v-.49A1.7 1.7 0 0 0 12.38 18a1.7 1.7 0 0 0-1.88.34l-.06.06-1.42-1.42.06-.06A1.7 1.7 0 0 0 9.42 15a1.7 1.7 0 0 0-1.55-1.03H7.4v-2h.47a1.7 1.7 0 0 0 1.55-1.03 1.7 1.7 0 0 0-.34-1.88L9.02 9l1.42-1.42.06.06a1.7 1.7 0 0 0 1.88.34A1.7 1.7 0 0 0 13.41 6.4V6h2v.4a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 1.42 1.42-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.45v2h-.45A1.7 1.7 0 0 0 19.4 15Z"></path>
 							</svg>
 						</button>
 					</div>
