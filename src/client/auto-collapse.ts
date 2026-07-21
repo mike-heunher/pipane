@@ -97,13 +97,13 @@ export function runAutoCollapse() {
 }
 
 /**
- * Fetch the toolCollapse.keepOpen setting from the server and apply it.
+ * Fetch the toolCollapse.keepOpen setting from the backend and apply it.
  */
-export async function loadAutoCollapseSettings(): Promise<void> {
+export async function loadAutoCollapseSettings(
+	api: { getLocalSettings(): Promise<{ settings: any }> },
+): Promise<void> {
 	try {
-		const res = await fetch("/api/settings/local");
-		if (!res.ok) return;
-		const data = await res.json();
+		const data = await api.getLocalSettings();
 		const ko = data?.settings?.toolCollapse?.keepOpen;
 		if (typeof ko === "number" && Number.isFinite(ko) && ko >= 0) {
 			keepOpen = ko;

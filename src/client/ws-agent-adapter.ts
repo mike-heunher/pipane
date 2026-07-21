@@ -17,6 +17,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
+import type { UpdateTarget } from "../shared/updates.js";
 import {
 	assertNever,
 	decodeServerMessage,
@@ -35,7 +36,28 @@ import {
 	toCompactModelRef,
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
+import type {
+	BackendClient,
+	BackendClientState,
+	PiInstallRequiredInfo,
+	SessionInfoDTO,
+	SessionStatus,
+} from "./backend-client.js";
+import { HttpBackendApi, type BackendApi } from "./backend-api.js";
+import type { FrameTransport } from "./frame-transport.js";
 import { PIPANE_SLASH_COMMANDS } from "./slash-commands.js";
+import {
+	WebSocketFrameTransport,
+	type WebSocketLike,
+} from "./websocket-frame-transport.js";
+
+export type {
+	BackendClientState as AdapterState,
+	PiInstallRequiredInfo,
+	SessionInfoDTO,
+	SessionStatus,
+} from "./backend-client.js";
+export type AdapterSocket = WebSocketLike;
 
 const PROVIDER_USAGE_STATUS_KEY = "provider-usage";
 
@@ -44,16 +66,6 @@ function usageProviderForModel(model: any): string | undefined {
 	if (provider.includes("codex")) return "codex";
 	if (provider.includes("anthropic")) return "anthropic";
 	return undefined;
-}
-
-export type SessionStatus = "virtual" | "detached" | "attached";
-
-export interface AdapterState {
-	model: any;
-	thinkingLevel: ThinkingLevelValue;
-	messages: AgentMessage[];
-	isStreaming: boolean;
-	error?: string;
 }
 
 type SessionSyncChanges = {
@@ -73,44 +85,29 @@ interface PendingRequest {
 	reject: (error: Error) => void;
 }
 
-export interface PiInstallRequiredInfo {
-	command: string;
-	installable: boolean;
-	installing: boolean;
-	message: string;
-}
-
-export type AdapterSocket = Pick<
-	WebSocket,
-	"readyState" | "send" | "close" | "onopen" | "onerror" | "onclose" | "onmessage"
->;
-
 export interface WsAgentAdapterOptions {
-	/** Existing socket for deterministic tests; production normally uses createWebSocket. */
+	/** Carrier override for WebRTC and deterministic transport tests. */
+	transport?: FrameTransport;
+	/** Existing WebSocket for legacy deterministic tests. */
 	socket?: AdapterSocket;
 	createWebSocket?: (url: string) => AdapterSocket;
+	/** Semantic request client; fetch remains as a compatibility shortcut for tests. */
+	api?: BackendApi;
 	fetch?: typeof globalThis.fetch;
 	requestFrame?: (callback: FrameRequestCallback) => number;
 }
 
-export class WsAgentAdapter {
-	private ws: AdapterSocket | null = null;
-	private readonly createWebSocket: (url: string) => AdapterSocket;
-	private readonly fetch: typeof globalThis.fetch;
+export class WsAgentAdapter implements BackendClient {
+	private readonly transport: FrameTransport;
+	private readonly api: BackendApi;
 	private readonly requestFrame: (callback: FrameRequestCallback) => number;
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
 	private pendingRequests = new Map<string, PendingRequest>();
 	private requestId = 0;
-
-	// ── Auto-reconnect state ───────────────────────────────────────────────
-	private _wsUrl: string | undefined;
-	private _reconnecting = false;
-	private _reconnectAttempt = 0;
-	private _reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private _connectionListeners = new Set<(connected: boolean) => void>();
 
-	private _state: AdapterState = {
+	private _state: BackendClientState = {
 		model: undefined as any,
 		thinkingLevel: "off",
 		messages: [],
@@ -214,22 +211,23 @@ export class WsAgentAdapter {
 	private _statusListeners = new Set<() => void>();
 
 	constructor(options: WsAgentAdapterOptions = {}) {
-		this.createWebSocket = options.createWebSocket ?? ((url) => new WebSocket(url));
-		this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+		this.transport = options.transport ?? new WebSocketFrameTransport({
+			socket: options.socket,
+			createWebSocket: options.createWebSocket,
+		});
+		this.api = options.api ?? new HttpBackendApi({ fetch: options.fetch });
 		this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
-		if (options.socket) {
-			this.ws = options.socket;
-			this.ws.onmessage = (event) => this.handleMessage(String(event.data));
-		}
+		this.transport.onFrame((frame) => this.handleMessage(frame));
+		this.transport.onConnectionChange((event) => this.handleTransportConnectionChange(event.connected, event.reconnected));
 	}
 
-	get state(): AdapterState { return this._state; }
+	get state(): BackendClientState { return this._state; }
 	get sessionId(): string { return this._sessionId; }
 	get sessionFile(): string | undefined { return this._sessionPath; }
 	get sessionName(): string | undefined { return this._sessionName; }
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
-	get isConnected(): boolean { return this.ws?.readyState === 1; }
-	get isReconnecting(): boolean { return this._reconnecting; }
+	get isConnected(): boolean { return this.transport.isConnected; }
+	get isReconnecting(): boolean { return this.transport.isReconnecting; }
 
 	onConnectionChange(fn: (connected: boolean) => void): () => void {
 		this._connectionListeners.add(fn);
@@ -414,9 +412,8 @@ export class WsAgentAdapter {
 
 	// ── Connection ─────────────────────────────────────────────────────────
 
-	async connect(url: string): Promise<void> {
-		this._wsUrl = url;
-		await this.connectWs(url, false);
+	async connect(endpoint: string): Promise<void> {
+		await this.transport.connect(endpoint);
 
 		// When the tab regains focus, sync state in case events were missed
 		// or updates didn't render while backgrounded.
@@ -427,91 +424,34 @@ export class WsAgentAdapter {
 		});
 	}
 
-	/**
-	 * Internal WebSocket connect. On initial connect, rejects on error.
-	 * On reconnect, resolves silently (caller handles retry).
-	 */
-	private connectWs(url: string, isReconnect: boolean): Promise<void> {
-		return new Promise<void>((resolve, reject) => {
-			const ws = this.createWebSocket(url);
-
-			ws.onopen = () => {
-				this.ws = ws;
-				this._reconnecting = false;
-				this._reconnectAttempt = 0;
-				if (!isReconnect) {
-					this._sessionStatus = "virtual";
-				}
-				console.log(`[ws-adapter] WebSocket ${isReconnect ? "re" : ""}connected`);
-				this.emitConnectionChange(true);
-
-				if (isReconnect) {
-					// Re-sync state after reconnect
-					this.onReconnected();
-				}
-				resolve();
-			};
-
-			ws.onerror = () => {
-				if (!isReconnect) reject(new Error("WebSocket error"));
-				// On reconnect, onerror is followed by onclose which handles retry
-			};
-
-			ws.onclose = () => {
-				const wasConnected = this.ws === ws;
-				if (this.ws === ws) {
-					this.ws = null;
-				}
-
-				// Reject all pending requests — they'll never get a response
-				for (const pending of this.pendingRequests.values()) {
-					pending.reject(new Error("WebSocket disconnected"));
-				}
-				this.pendingRequests.clear();
-
-				// A sent edit may have failed before its acknowledgement; allow the
-				// reconnect snapshot to restore truth. Keep genuinely unsent edits.
-				if (this._pendingControl?.phase === "sent") {
-					this.rollbackSentControl(this._pendingControl.revision);
-				} else if (this._pendingControl?.phase === "acknowledged") {
-					this._pendingControl = undefined;
-				}
-
-				if (wasConnected) {
-					console.log("[ws-adapter] WebSocket disconnected, will reconnect...");
-					this.emitConnectionChange(false);
-				}
-
-				// Schedule reconnect (both for initial connect failure during
-				// reconnect attempts and for unexpected disconnects)
-				if (isReconnect || wasConnected) {
-					this.scheduleReconnect();
-				}
-			};
-
-			ws.onmessage = (ev) => this.handleMessage(ev.data);
-		});
+	disconnect(): void {
+		this.transport.close();
 	}
 
-	private scheduleReconnect() {
-		if (this._reconnectTimer) return; // already scheduled
-		this._reconnecting = true;
-		this._reconnectAttempt++;
+	private handleTransportConnectionChange(connected: boolean, reconnected: boolean): void {
+		if (connected) {
+			if (!reconnected) this._sessionStatus = "virtual";
+			else this.onReconnected();
+		} else {
+			this.handleTransportDisconnected();
+		}
+		this.emitConnectionChange(connected);
+	}
 
-		// Exponential backoff: 500ms, 1s, 2s, 4s, ... capped at 10s
-		const delay = Math.min(500 * Math.pow(2, this._reconnectAttempt - 1), 10000);
-		console.log(`[ws-adapter] Reconnecting in ${delay}ms (attempt ${this._reconnectAttempt})...`);
+	private handleTransportDisconnected(): void {
+		// Requests written to the old carrier can never receive a response.
+		for (const pending of this.pendingRequests.values()) {
+			pending.reject(new Error("Backend transport disconnected"));
+		}
+		this.pendingRequests.clear();
 
-		this._reconnectTimer = setTimeout(async () => {
-			this._reconnectTimer = undefined;
-			if (!this._wsUrl) return;
-			try {
-				await this.connectWs(this._wsUrl, true);
-			} catch {
-				// connectWs only rejects on initial connect, not reconnect
-				// onclose handler will schedule next retry
-			}
-		}, delay);
+		// A sent edit may have failed before its acknowledgement; allow the
+		// reconnect snapshot to restore truth. Keep genuinely unsent edits.
+		if (this._pendingControl?.phase === "sent") {
+			this.rollbackSentControl(this._pendingControl.revision);
+		} else if (this._pendingControl?.phase === "acknowledged") {
+			this._pendingControl = undefined;
+		}
 	}
 
 	/**
@@ -591,7 +531,7 @@ export class WsAgentAdapter {
 		console.error(`[ws-adapter] ${message}`);
 		this._state.error = message;
 		this.emitStatusChange();
-		if (error.code === "unsupported_version") this.ws?.close(1002, "Unsupported protocol version");
+		if (error.code === "unsupported_version") this.transport.close(1002, "Unsupported protocol version");
 	}
 
 	private handleMessage(raw: string): void {
@@ -880,8 +820,8 @@ export class WsAgentAdapter {
 	private send<Payload extends ClientCommandPayload>(
 		command: Payload,
 	): Promise<CommandResponseData<Payload["type"]>> {
-		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-			return Promise.reject(new Error("WebSocket not connected"));
+		if (!this.transport.isConnected) {
+			return Promise.reject(new Error("Backend transport is not connected"));
 		}
 
 		const id = `req_${++this.requestId}`;
@@ -905,7 +845,7 @@ export class WsAgentAdapter {
 				reject: (error) => { clearTimeout(timeout); reject(error); },
 			});
 
-			this.ws!.send(encodeClientCommand(command, id));
+			this.transport.send(encodeClientCommand(command, id));
 		});
 	}
 
@@ -1437,10 +1377,47 @@ export class WsAgentAdapter {
 	/** Get user messages from the current session for the fork selector. */
 	async getForkMessages(): Promise<Array<{ entryId: string; text: string }>> {
 		if (!this._sessionPath) return [];
-		const res = await this.fetch(`/api/sessions/fork-messages?path=${encodeURIComponent(this._sessionPath)}`);
-		if (!res.ok) throw new Error(`Failed to get fork messages: ${res.statusText}`);
-		const data = await res.json();
-		return data.messages ?? [];
+		return this.listForkMessages(this._sessionPath);
+	}
+
+	listForkMessages(sessionPath: string) {
+		return this.api.listForkMessages(sessionPath);
+	}
+
+	browseDirectory(path: string) {
+		return this.api.browseDirectory(path);
+	}
+
+	getRawSession(sessionPath: string) {
+		return this.api.getRawSession(sessionPath);
+	}
+
+	getFileContent(sessionPath: string, path: string) {
+		return this.api.getFileContent(sessionPath, path);
+	}
+
+	getLocalSettings() {
+		return this.api.getLocalSettings();
+	}
+
+	validateLocalSettings(content: string) {
+		return this.api.validateLocalSettings(content);
+	}
+
+	patchLocalSettings(patch: Record<string, unknown>) {
+		return this.api.patchLocalSettings(patch);
+	}
+
+	saveLocalSettings(content: string) {
+		return this.api.saveLocalSettings(content);
+	}
+
+	getUpdates() {
+		return this.api.getUpdates();
+	}
+
+	runUpdate(target: UpdateTarget) {
+		return this.api.runUpdate(target);
 	}
 
 	/** Fork the current session from a specific entry. Returns the new session path. */
@@ -1511,9 +1488,7 @@ export class WsAgentAdapter {
 	// ── Session management ─────────────────────────────────────────────────
 
 	async listSessions(): Promise<SessionInfoDTO[]> {
-		const res = await this.fetch("/api/sessions");
-		if (!res.ok) throw new Error(`Failed to list sessions: ${res.statusText}`);
-		const sessions: SessionInfoDTO[] = await res.json();
+		const sessions = await this.api.listSessions();
 
 		// Merge optimistic sessions: add any that aren't yet in the real list.
 		// When a real session exists but has an empty cwd (JSONL header not yet
@@ -1553,12 +1528,7 @@ export class WsAgentAdapter {
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		const res = await this.fetch("/api/sessions", {
-			method: "DELETE",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ path: sessionPath }),
-		});
-		if (!res.ok) throw new Error(`Failed to delete session: ${res.statusText}`);
+		await this.api.deleteSession(sessionPath);
 	}
 
 	/** Switch to an existing session (load messages from server cache) */
@@ -1671,18 +1641,3 @@ const path = {
 		return base;
 	},
 };
-
-export interface SessionInfoDTO {
-	id: string;
-	path: string;
-	cwd: string;
-	cwdDisplay?: string;
-	worktreeName?: string;
-	name?: string;
-	created: string;
-	modified: string;
-	/** ISO timestamp of the most recent user input prompt, if any. */
-	lastUserPromptTime?: string;
-	messageCount: number;
-	firstMessage: string;
-}

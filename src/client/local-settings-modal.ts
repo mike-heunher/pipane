@@ -1,16 +1,8 @@
-interface LocalSettingsReadResponse {
-	path: string;
-	exists: boolean;
-	errors: string[];
-	settings: any;
-	formatted: string;
-}
+import type {
+	BackendApi,
+	LocalSettingsValidationResponse,
+} from "./backend-api.js";
 
-interface LocalSettingsValidationResponse {
-	valid: boolean;
-	errors: string[];
-	formatted?: string;
-}
 
 const DEFAULT_SETTINGS = {
 	version: 1,
@@ -31,7 +23,10 @@ function defaultSettingsJson(): string {
 	return `${JSON.stringify(DEFAULT_SETTINGS, null, 2)}\n`;
 }
 
-export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): Promise<void> {
+export async function openLocalSettingsDialog(opts: {
+	api: Pick<BackendApi, "getLocalSettings" | "validateLocalSettings" | "saveLocalSettings">;
+	onSaved?: () => void;
+}): Promise<void> {
 	const overlay = document.createElement("div");
 	overlay.className = "local-settings-overlay";
 
@@ -210,16 +205,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 	const validateContent = async (): Promise<LocalSettingsValidationResponse | null> => {
 		setBusy(true);
 		try {
-			const res = await fetch("/api/settings/local/validate", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ content: textarea.value }),
-			});
-			const data = await res.json();
-			if (!res.ok) {
-				setStatus(data?.error || "Validation failed", "error");
-				return null;
-			}
+			const data = await opts.api.validateLocalSettings(textarea.value);
 			if (data.valid) {
 				if (typeof data.formatted === "string") textarea.value = data.formatted;
 				setStatus("Config is valid.", "ok");
@@ -242,15 +228,9 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 	saveBtn.addEventListener("click", async () => {
 		setBusy(true);
 		try {
-			const res = await fetch("/api/settings/local", {
-				method: "PUT",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ content: textarea.value }),
-			});
-			const data = await res.json();
-			if (!res.ok) {
-				const errors = Array.isArray(data?.errors) ? data.errors.join("\n") : data?.error || "Save failed";
-				setStatus(errors, "error");
+			const data = await opts.api.saveLocalSettings(textarea.value);
+			if (!data.valid) {
+				setStatus(data.errors?.join("\n") || "Save failed", "error");
 				return;
 			}
 			if (typeof data.formatted === "string") {
@@ -269,15 +249,7 @@ export async function openLocalSettingsDialog(opts?: { onSaved?: () => void }): 
 
 	setBusy(true);
 	try {
-		const res = await fetch("/api/settings/local");
-		const data = await res.json();
-		if (!res.ok) {
-			setStatus(data?.error || "Failed to load settings", "error");
-			pathLine.textContent = "~/.piweb/settings.json";
-			textarea.value = defaultSettingsJson();
-			return;
-		}
-		const payload = data as LocalSettingsReadResponse;
+		const payload = await opts.api.getLocalSettings();
 		pathLine.textContent = `${payload.path}${payload.exists ? "" : " (will be created on save)"}`;
 		textarea.value = payload.formatted || JSON.stringify(payload.settings ?? DEFAULT_SETTINGS, null, 2);
 		if (payload.errors?.length) {

@@ -7,6 +7,7 @@ if ("serviceWorker" in navigator) {
 
 import { initThemes, getShowTokenUsage, setShowTokenUsage, resyncAppearanceFromServer } from "./theme-selector.js";
 import { html, render } from "lit";
+import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import "./session-picker.js";
@@ -30,7 +31,7 @@ import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
-import type { UpdateNotice, UpdateRunResponse, UpdateTarget } from "../shared/updates.js";
+import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
 import {
 	updateConfirmationMessage,
 	updateNoticeDetail,
@@ -42,10 +43,9 @@ import {
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
 
-initThemes();
+const agent: BackendClient = new WsAgentAdapter();
+initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
-
-let agent: WsAgentAdapter;
 const isMobile = () => window.innerWidth <= 768;
 let wasMobile = isMobile();
 let mobileSidebarOpen = false;
@@ -66,7 +66,7 @@ let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
-let prefetchedSessions: import("./ws-agent-adapter.js").SessionInfoDTO[] | undefined;
+let prefetchedSessions: SessionInfoDTO[] | undefined;
 let autoScroll = true;
 let lastScrollTop = 0;
 let ignoreScrollEvents = false;
@@ -79,6 +79,16 @@ let updatingTarget: UpdateTarget | null = null;
 let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
 let slashCommandRequest = 0;
+
+function applyBackendSettings(payload: { settings?: any }): void {
+	canvasFeatureEnabled = payload.settings?.canvas?.enabled === true;
+	if (typeof payload.settings?.sidebar?.sessionsPerProject === "number") {
+		sessionsPerProject = payload.settings.sidebar.sessionsPerProject;
+	}
+	if (typeof payload.settings?.messages?.initialCount === "number") {
+		messagesInitialCount = payload.settings.messages.initialCount;
+	}
+}
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -239,7 +249,7 @@ function installFilePreviewLinkListener() {
 		const cwd = agent?.cwd;
 		const sessionPath = agent?.sessionFile;
 		if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;
-		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined)) return;
+		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent)) return;
 
 		event.preventDefault();
 		if (isCanvasVisible()) closeCanvas();
@@ -457,8 +467,9 @@ async function openLocalSettingsModal() {
 	localSettingsModalOpen = true;
 	try {
 		await openLocalSettingsDialog({
+			api: agent,
 			onSaved: () => {
-				loadAutoCollapseSettings();
+				loadAutoCollapseSettings(agent);
 				renderApp();
 				const picker = document.querySelector("session-picker") as any;
 				picker?.refreshSessions?.();
@@ -514,9 +525,7 @@ function scrollToBottomIfNeeded() {
 
 async function refreshUpdateNotices(): Promise<void> {
 	try {
-		const response = await fetch("/api/updates", { cache: "no-store" });
-		if (!response.ok) return;
-		const snapshot = await response.json() as { notices?: UpdateNotice[] };
+		const snapshot = await agent.getUpdates();
 		updateNotices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
 		renderApp();
 	} catch {
@@ -532,14 +541,7 @@ async function handleUpdateClick(notice: UpdateNotice): Promise<void> {
 	updateFeedback = null;
 	renderApp();
 	try {
-		const response = await fetch(`/api/updates/${notice.target}`, {
-			method: "POST",
-			headers: { "X-Pipane-Action": "update" },
-		});
-		const payload = await response.json().catch(() => ({})) as Partial<UpdateRunResponse> & { error?: string };
-		if (!response.ok || !payload.result || !payload.snapshot) {
-			throw new Error(payload.error || `Update failed (${response.status})`);
-		}
+		const payload = await agent.runUpdate(notice.target);
 		updateNotices = payload.snapshot.notices;
 		updateFeedback = { kind: "success", message: payload.result.message };
 	} catch (error) {
@@ -754,7 +756,7 @@ const renderApp = () => {
 		const canvasEl = document.getElementById("canvas-container");
 		if (canvasEl) initCanvas(canvasEl, renderApp);
 		const jsonlEl = document.getElementById("jsonl-container");
-		if (jsonlEl) initJsonlPanel(jsonlEl, renderApp);
+		if (jsonlEl) initJsonlPanel(jsonlEl, renderApp, agent);
 		const filePreviewEl = document.getElementById("file-preview-container");
 		if (filePreviewEl) initFilePreview(filePreviewEl, renderApp);
 	});
@@ -806,25 +808,7 @@ async function initApp() {
 		}
 	}, 300);
 
-	// Fetch local settings to check feature flags
-	try {
-		const settingsRes = await fetch("/api/settings/local");
-		if (settingsRes.ok) {
-			const settingsData = await settingsRes.json();
-			canvasFeatureEnabled = settingsData.settings?.canvas?.enabled === true;
-			if (typeof settingsData.settings?.sidebar?.sessionsPerProject === "number") {
-				sessionsPerProject = settingsData.settings.sidebar.sessionsPerProject;
-			}
-			if (typeof settingsData.settings?.messages?.initialCount === "number") {
-				messagesInitialCount = settingsData.settings.messages.initialCount;
-			}
-		}
-	} catch {
-		// Ignore — canvas stays disabled by default
-	}
-
-	// Connect WebSocket
-	agent = new WsAgentAdapter();
+	// Connect the selected carrier before making backend requests.
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
 
@@ -845,6 +829,13 @@ async function initApp() {
 
 	clearTimeout(connectingOverlayTimer);
 
+	try {
+		applyBackendSettings(await agent.getLocalSettings());
+		await resyncAppearanceFromServer();
+	} catch {
+		// Backend settings are optional; cached UI defaults remain usable.
+	}
+
 	const sessionsPrefetch = agent.listSessions().catch((err) => {
 		console.error("Failed to prefetch sessions:", err);
 		return undefined;
@@ -857,17 +848,7 @@ async function initApp() {
 	agent.onSessionsChanged(async (file) => {
 		if (file !== "__local_settings__") return;
 		try {
-			const res = await fetch("/api/settings/local");
-			if (res.ok) {
-				const data = await res.json();
-				canvasFeatureEnabled = data.settings?.canvas?.enabled === true;
-				if (typeof data.settings?.sidebar?.sessionsPerProject === "number") {
-					sessionsPerProject = data.settings.sidebar.sessionsPerProject;
-				}
-				if (typeof data.settings?.messages?.initialCount === "number") {
-					messagesInitialCount = data.settings.messages.initialCount;
-				}
-			}
+			applyBackendSettings(await agent.getLocalSettings());
 		} catch { /* ignore */ }
 		await resyncAppearanceFromServer();
 		renderApp();
@@ -976,7 +957,7 @@ async function initApp() {
 	window.addEventListener("pi-fork-request", handleForkRequest);
 
 	// Load auto-collapse settings
-	loadAutoCollapseSettings();
+	loadAutoCollapseSettings(agent);
 
 	// Load the full model catalog before restoring a session. Persisted sessions
 	// contain only provider/modelId refs, so restoration needs this metadata.

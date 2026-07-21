@@ -15,7 +15,6 @@ import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function createTestAdapter() {
-	const adapter = new WsAgentAdapter();
 	const sent: any[] = [];
 	let messageHandler: ((ev: { data: string }) => void) | null = null;
 
@@ -46,17 +45,12 @@ function createTestAdapter() {
 		onmessage: null as any,
 	};
 
-	(adapter as any).ws = mockWs;
-
 	Object.defineProperty(mockWs, "onmessage", {
 		set(fn) { messageHandler = fn; },
 		get() { return messageHandler; },
 	});
 
-	messageHandler = (ev: { data: string }) => {
-		(adapter as any).handleMessage(ev.data);
-	};
-
+	const adapter = new WsAgentAdapter({ socket: mockWs });
 	const simulateServerMessage = (msg: any) => {
 		messageHandler?.({ data: JSON.stringify({ protocolVersion: WS_PROTOCOL_VERSION, ...msg }) });
 	};

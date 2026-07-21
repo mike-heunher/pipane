@@ -5,11 +5,11 @@
  * without requiring a real WebSocket connection or pi-mono backend.
  */
 
-import type { SessionInfoDTO } from "../client/ws-agent-adapter.js";
+import type { SessionInfoDTO, SessionPickerBackendClient } from "../client/backend-client.js";
 
 export type SessionStatusValue = "running" | "done" | undefined;
 
-export class MockAgent {
+export class MockAgent implements SessionPickerBackendClient {
 	// ── Session state ──────────────────────────────────────────────────────
 	private _sessionId = "test-session-1";
 	private _sessions: SessionInfoDTO[] = [];
@@ -86,6 +86,10 @@ export class MockAgent {
 
 	async deleteSession(_sessionPath: string): Promise<void> {
 		// no-op in mock
+	}
+
+	async browseDirectory(path: string) {
+		return { path, dirs: [] };
 	}
 
 	// ── Test helpers ───────────────────────────────────────────────────────

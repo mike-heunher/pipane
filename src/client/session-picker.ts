@@ -10,7 +10,7 @@
 import { html, css, LitElement, nothing, render, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import type { WsAgentAdapter, SessionInfoDTO } from "./ws-agent-adapter.js";
+import type { SessionInfoDTO, SessionPickerBackendClient } from "./backend-client.js";
 import { getColorTheme, setColorTheme, getDarkMode, setDarkMode, type ColorTheme, type DarkMode } from "./theme-selector.js";
 
 export interface BurgerMenuCallbacks {
@@ -651,7 +651,7 @@ export class SessionPicker extends LitElement {
 	`;
 
 	@property({ attribute: false })
-	agent!: WsAgentAdapter;
+	agent!: SessionPickerBackendClient;
 
 	/**
 	 * Optional prefetched session list.  When provided, the picker skips
@@ -1064,9 +1064,7 @@ export class SessionPicker extends LitElement {
 	private async browseTo(dirPath: string) {
 		this.folderLoading = true;
 		try {
-			const res = await fetch(`/api/browse?path=${encodeURIComponent(dirPath)}`);
-			if (!res.ok) throw new Error("Failed to browse");
-			const data = await res.json();
+			const data = await this.agent.browseDirectory(dirPath);
 			this.folderPath = data.path;
 			this.folderDirs = data.dirs;
 		} catch (err) {

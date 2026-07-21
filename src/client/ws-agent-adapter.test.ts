@@ -12,6 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.js";
+import type { FrameTransport } from "./frame-transport.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 
@@ -154,6 +155,41 @@ describe("WsAgentAdapter transport injection", () => {
 
 		await expect(adapter.listSessions()).resolves.toEqual([]);
 		expect(fetchMock).toHaveBeenCalledWith("/api/sessions");
+	});
+
+	it("uses a carrier-neutral frame transport for protocol commands", async () => {
+		let frameListener: ((frame: string) => void) | undefined;
+		const transport: FrameTransport = {
+			isConnected: true,
+			isReconnecting: false,
+			connect: vi.fn(async () => {}),
+			send: vi.fn((raw) => {
+				const command = JSON.parse(raw);
+				frameListener?.(JSON.stringify({
+					protocolVersion: WS_PROTOCOL_VERSION,
+					type: "response",
+					id: command.id,
+					command: command.type,
+					success: true,
+					data: { models: [{ provider: "mock", id: "model" }] },
+				}));
+			}),
+			close: vi.fn(),
+			onFrame: (listener) => {
+				frameListener = listener;
+				return () => { frameListener = undefined; };
+			},
+			onConnectionChange: () => () => {},
+		};
+		const adapter = new WsAgentAdapter({ transport });
+
+		await adapter.connect("rtc://backend-one");
+		expect(await adapter.fetchAvailableModels()).toEqual([{ provider: "mock", id: "model" }]);
+		adapter.disconnect();
+
+		expect(transport.connect).toHaveBeenCalledWith("rtc://backend-one");
+		expect(transport.send).toHaveBeenCalledOnce();
+		expect(transport.close).toHaveBeenCalledOnce();
 	});
 });
 

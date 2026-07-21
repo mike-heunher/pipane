@@ -825,4 +825,4 @@ describe("session-picker", () => {
 });
 
 // Need this import for the type used in the show-more test
-import type { SessionInfoDTO } from "./ws-agent-adapter.js";
+import type { SessionInfoDTO } from "./backend-client.js";

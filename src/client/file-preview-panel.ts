@@ -1,10 +1,6 @@
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import { html, render } from "lit";
-
-interface FilePreviewPayload {
-	path: string;
-	content: string;
-}
+import type { BackendApi } from "./backend-api.js";
 
 let visible = false;
 let loading = false;
@@ -186,15 +182,10 @@ async function loadFile(
 	sessionPath: string,
 	filePath: string,
 	generation: number,
-	fetchImpl: typeof fetch,
+	api: Pick<BackendApi, "getFileContent">,
 ): Promise<void> {
 	try {
-		const query = new URLSearchParams({ sessionPath, path: filePath });
-		const response = await fetchImpl(`/api/files/content?${query}`, { cache: "no-store" });
-		const payload = await response.json().catch(() => ({})) as Partial<FilePreviewPayload> & { error?: string };
-		if (!response.ok || typeof payload.content !== "string") {
-			throw new Error(payload.error || `Failed to load file (${response.status})`);
-		}
+		const payload = await api.getFileContent(sessionPath, filePath);
 		if (generation !== requestGeneration) return;
 		previewPath = typeof payload.path === "string" ? payload.path : filePath;
 		previewContent = payload.content;
@@ -220,8 +211,8 @@ export function openFilePreviewLink(
 	rawHref: string,
 	cwd: string,
 	sessionPath: string,
-	baseFilePath?: string,
-	fetchImpl: typeof fetch = fetch,
+	baseFilePath: string | undefined,
+	api: Pick<BackendApi, "getFileContent">,
 ): boolean {
 	const baseDirectory = baseFilePath ? directoryName(baseFilePath) : cwd;
 	const resolved = resolveFileHref(rawHref, baseDirectory);
@@ -234,7 +225,7 @@ export function openFilePreviewLink(
 	previewError = "";
 	const generation = ++requestGeneration;
 	notifyChanged();
-	void loadFile(sessionPath, resolved, generation, fetchImpl);
+	void loadFile(sessionPath, resolved, generation, api);
 	return true;
 }
 

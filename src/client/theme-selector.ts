@@ -10,8 +10,12 @@
  * (avoids flash of wrong theme before the API responds).
  */
 
+import type { BackendApi } from "./backend-api.js";
+
 export type ColorTheme = "default" | "gruvbox";
 export type DarkMode = "light" | "dark" | "system";
+
+let api: Pick<BackendApi, "getLocalSettings" | "patchLocalSettings"> | undefined;
 
 // ── Fast cache for instant page-load application ──────────────────────────
 
@@ -85,11 +89,7 @@ export function setShowTokenUsage(show: boolean) {
 // ── Server persistence ────────────────────────────────────────────────────
 
 function patchAppearance(partial: Record<string, any>) {
-	fetch("/api/settings/local", {
-		method: "PATCH",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ appearance: partial }),
-	}).catch((err) => {
+	api?.patchLocalSettings({ appearance: partial }).catch((err) => {
 		console.error("Failed to persist appearance setting:", err);
 	});
 }
@@ -97,7 +97,8 @@ function patchAppearance(partial: Record<string, any>) {
 // ── Initialization ────────────────────────────────────────────────────────
 
 /** Initialize themes on page load using cached values, then sync from server */
-export function initThemes() {
+export function initThemes(backendApi: Pick<BackendApi, "getLocalSettings" | "patchLocalSettings">) {
+	api = backendApi;
 	// Apply immediately from cache (fast, no flash)
 	applyColorTheme(getColorTheme());
 	applyDarkMode(getDarkMode());
@@ -117,9 +118,8 @@ export function initThemes() {
 /** Fetch settings from server and update local cache + DOM if different */
 async function syncFromServer() {
 	try {
-		const res = await fetch("/api/settings/local");
-		if (!res.ok) return;
-		const data = await res.json();
+		if (!api) return;
+		const data = await api.getLocalSettings();
 		const appearance = data?.settings?.appearance;
 		if (!appearance) return;
 

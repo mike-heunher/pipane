@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpBackendApi } from "./backend-api.js";
 import {
 	closeFilePreview,
 	getFilePreviewPath,
@@ -65,7 +66,7 @@ describe("linked file preview", () => {
 			content: "# Guide\n\nRead **this**.",
 		}), { status: 200, headers: { "Content-Type": "application/json" } }));
 
-		expect(openFilePreviewLink("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, fetchMock as typeof fetch)).toBe(true);
+		expect(openFilePreviewLink("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }))).toBe(true);
 		expect(isFilePreviewVisible()).toBe(true);
 		expect(container.textContent).toContain("Loading file");
 		await settle();
@@ -86,7 +87,7 @@ describe("linked file preview", () => {
 			content: "const value = '<safe>';",
 		}), { status: 200, headers: { "Content-Type": "application/json" } }));
 
-		openFilePreviewLink("src/main.ts", "/work/project", "/sessions/test.jsonl", undefined, fetchMock as typeof fetch);
+		openFilePreviewLink("src/main.ts", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }));
 		await settle();
 
 		expect(container.querySelector("markdown-block")).toBeNull();
@@ -101,7 +102,7 @@ describe("linked file preview", () => {
 			{ status: 404, headers: { "Content-Type": "application/json" } },
 		));
 
-		openFilePreviewLink("missing.md", "/work/project", "/sessions/test.jsonl", undefined, fetchMock as typeof fetch);
+		openFilePreviewLink("missing.md", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }));
 		await settle();
 
 		expect(container.querySelector("[role=alert]")?.textContent).toContain("File not found");

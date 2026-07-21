@@ -10,7 +10,9 @@
  */
 
 import { html, render } from "lit";
+import type { BackendApi } from "./backend-api.js";
 
+let api: Pick<BackendApi, "getRawSession"> | undefined;
 let visible = false;
 let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
@@ -60,9 +62,14 @@ function closeJsonlPanel() {
 	onChangeCallback?.();
 }
 
-export function initJsonlPanel(el: HTMLElement, onChange: () => void) {
+export function initJsonlPanel(
+	el: HTMLElement,
+	onChange: () => void,
+	backendApi: Pick<BackendApi, "getRawSession">,
+) {
 	container = el;
 	onChangeCallback = onChange;
+	api = backendApi;
 	renderPanel();
 }
 
@@ -150,13 +157,8 @@ async function fetchAndRender() {
 	}
 
 	try {
-		const res = await fetch(`/api/sessions/raw?path=${encodeURIComponent(currentSessionPath)}`);
-		if (!res.ok) {
-			jsonlLines = [];
-			renderPanel();
-			return;
-		}
-		const text = await res.text();
+		if (!api) return;
+		const text = await api.getRawSession(currentSessionPath);
 		const newLines = text.split("\n").filter((l) => l.trim());
 		// Only re-render if content actually changed
 		if (newLines.length !== jsonlLines.length || newLines.some((l, i) => l !== jsonlLines[i])) {

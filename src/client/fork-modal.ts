@@ -9,7 +9,7 @@
 
 import { html, css, LitElement, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { WsAgentAdapter } from "./ws-agent-adapter.js";
+import type { ForkBackendClient } from "./backend-client.js";
 
 export interface ForkResult {
 	/** The text of the selected user message (to pre-fill editor). */
@@ -219,7 +219,7 @@ export class ForkModal extends LitElement {
 	`;
 
 	@property({ attribute: false })
-	agent!: WsAgentAdapter;
+	agent!: ForkBackendClient;
 
 	@state() private messages: Array<{ entryId: string; text: string }> = [];
 	@state() private loading = true;
@@ -230,7 +230,7 @@ export class ForkModal extends LitElement {
 	private onComplete?: (result: ForkResult | null) => void;
 
 	/** Open the modal. Returns the fork result or null if cancelled. */
-	open(agent: WsAgentAdapter): Promise<ForkResult | null> {
+	open(agent: ForkBackendClient): Promise<ForkResult | null> {
 		this.agent = agent;
 		this.loading = true;
 		this.forking = false;

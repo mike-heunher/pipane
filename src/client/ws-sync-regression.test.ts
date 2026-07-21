@@ -18,16 +18,21 @@ function sessionState(text: string) {
 }
 
 function createAdapter() {
-	const adapter = new WsAgentAdapter();
 	const sent: any[] = [];
+	const adapter = new WsAgentAdapter({
+		socket: {
+			readyState: WebSocket.OPEN,
+			send: vi.fn((raw: string) => {
+				sent.push(JSON.parse(raw));
+			}),
+			close: vi.fn(),
+			onopen: null,
+			onerror: null,
+			onclose: null,
+			onmessage: null,
+		},
+	});
 
-	(adapter as any).ws = {
-		readyState: WebSocket.OPEN,
-		send: vi.fn((raw: string) => {
-			sent.push(JSON.parse(raw));
-		}),
-		close: vi.fn(),
-	};
 	(adapter as any)._sessionPath = SESSION_PATH;
 	(adapter as any)._sessionNonce = 7;
 	(adapter as any)._sessionStatus = "attached";

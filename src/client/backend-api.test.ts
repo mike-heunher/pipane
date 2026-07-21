@@ -1,0 +1,110 @@
+import { describe, expect, it, vi } from "vitest";
+import { BackendApiError, HttpBackendApi } from "./backend-api.js";
+
+function jsonResponse(data: unknown, status = 200): Response {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: { "Content-Type": "application/json" },
+	});
+}
+
+describe("HttpBackendApi", () => {
+	it("maps session, file, and directory operations onto the current HTTP API", async () => {
+		const session = {
+			id: "one",
+			path: "/sessions/one.jsonl",
+			cwd: "/work",
+			created: "2026-01-01T00:00:00Z",
+			modified: "2026-01-01T00:00:00Z",
+			messageCount: 1,
+			firstMessage: "hello",
+		};
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(jsonResponse([session]))
+			.mockResolvedValueOnce(jsonResponse({ messages: [{ entryId: "entry", text: "hello" }] }))
+			.mockResolvedValueOnce(jsonResponse({ success: true }))
+			.mockResolvedValueOnce(jsonResponse({ path: "/work", dirs: [{ name: "src", path: "/work/src" }] }))
+			.mockResolvedValueOnce(new Response('{"type":"session"}\n'))
+			.mockResolvedValueOnce(jsonResponse({ path: "/work/README.md", content: "# Readme" }));
+		const api = new HttpBackendApi({ fetch: fetchMock });
+
+		expect(await api.listSessions()).toEqual([session]);
+		expect(await api.listForkMessages("/sessions/one.jsonl")).toEqual([{ entryId: "entry", text: "hello" }]);
+		await api.deleteSession("/sessions/one.jsonl");
+		expect(await api.browseDirectory("/work folder")).toEqual({
+			path: "/work",
+			dirs: [{ name: "src", path: "/work/src" }],
+		});
+		expect(await api.getRawSession("/sessions/one.jsonl")).toContain("session");
+		expect(await api.getFileContent("/sessions/one.jsonl", "/work/README.md")).toEqual({
+			path: "/work/README.md",
+			content: "# Readme",
+		});
+
+		expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/sessions");
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/sessions/fork-messages?path=%2Fsessions%2Fone.jsonl");
+		expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/sessions", {
+			method: "DELETE",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ path: "/sessions/one.jsonl" }),
+		});
+		expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/browse?path=%2Fwork%20folder");
+		expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/sessions/raw?path=%2Fsessions%2Fone.jsonl");
+		expect(fetchMock).toHaveBeenNthCalledWith(
+			6,
+			"/api/files/content?sessionPath=%2Fsessions%2Fone.jsonl&path=%2Fwork%2FREADME.md",
+			{ cache: "no-store" },
+		);
+	});
+
+	it("maps settings and update operations without exposing fetch to callers", async () => {
+		const settings = { path: "/settings.json", exists: true, errors: [], settings: {}, formatted: "{}\n" };
+		const validation = { valid: true, errors: [], formatted: "{}\n" };
+		const snapshot = { checkedAt: "2026-01-01T00:00:00Z", notices: [] };
+		const update = {
+			result: { target: "pi", message: "updated", restartRequired: false },
+			snapshot,
+		};
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(jsonResponse(settings))
+			.mockResolvedValueOnce(jsonResponse(validation))
+			.mockResolvedValueOnce(jsonResponse(validation))
+			.mockResolvedValueOnce(jsonResponse(validation))
+			.mockResolvedValueOnce(jsonResponse(snapshot))
+			.mockResolvedValueOnce(jsonResponse(update));
+		const api = new HttpBackendApi({ fetch: fetchMock });
+
+		expect(await api.getLocalSettings()).toEqual(settings);
+		expect(await api.validateLocalSettings("{}")).toEqual(validation);
+		expect(await api.patchLocalSettings({ appearance: { darkMode: "dark" } })).toEqual(validation);
+		expect(await api.saveLocalSettings("{}")).toEqual(validation);
+		expect(await api.getUpdates()).toEqual(snapshot);
+		expect(await api.runUpdate("pi")).toEqual(update);
+
+		expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/settings/local/validate", expect.objectContaining({ method: "POST" }));
+		expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/settings/local", expect.objectContaining({ method: "PATCH" }));
+		expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/settings/local", expect.objectContaining({ method: "PUT" }));
+		expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/updates", { cache: "no-store" });
+		expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/updates/pi", {
+			method: "POST",
+			headers: { "X-Pipane-Action": "update" },
+		});
+	});
+
+	it("returns structured validation failures and throws useful request errors", async () => {
+		const invalid = { valid: false, errors: ["bad setting"] };
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(jsonResponse(invalid, 400))
+			.mockResolvedValueOnce(jsonResponse({ error: "not allowed" }, 403))
+			.mockResolvedValueOnce(new Response("not json", { status: 500 }));
+		const api = new HttpBackendApi({ fetch: fetchMock });
+
+		expect(await api.validateLocalSettings("bad")).toEqual(invalid);
+		await expect(api.listSessions()).rejects.toEqual(
+			expect.objectContaining<Partial<BackendApiError>>({ message: "not allowed", status: 403 }),
+		);
+		await expect(api.getRawSession("/missing.jsonl")).rejects.toEqual(
+			expect.objectContaining<Partial<BackendApiError>>({ message: "Failed to load raw session", status: 500 }),
+		);
+	});
+});
