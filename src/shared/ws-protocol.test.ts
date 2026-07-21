@@ -28,7 +28,7 @@ const clientCommands = [
 	{ type: "fork", sessionPath: "/sessions/a.jsonl", entryId: "entry-1" },
 	{ type: "fork_prompt", sessionPath: "/sessions/a.jsonl", message: "branch", model, images: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
 	{ type: "set_session_name", sessionPath: "/sessions/a.jsonl", name: "typed-protocol" },
-	{ type: "get_commands" },
+	{ type: "get_commands", sessionPath: "/sessions/a.jsonl", cwd: "/project-a" },
 	{ type: "reload_processes" },
 ] as const;
 
@@ -47,7 +47,7 @@ const successResponses: ServerMessagePayload[] = [
 	{ type: "response", id: "req-1", command: "fork", success: true, data: { text: "hello", cancelled: false, newSessionPath: "/sessions/b.jsonl" } },
 	{ type: "response", id: "req-1", command: "fork_prompt", success: true, data: { newSessionPath: "/sessions/b.jsonl" } },
 	{ type: "response", id: "req-1", command: "set_session_name", success: true, data: {} },
-	{ type: "response", id: "req-1", command: "get_commands", success: true, data: { commands: [{ name: "help", source: "extension" }] } },
+	{ type: "response", id: "req-1", command: "get_commands", success: true, data: { commands: [{ name: "help", source: "extension", sourceInfo: { scope: "project" } }] } },
 	{ type: "response", id: "req-1", command: "reload_processes", success: true, data: { killed: 1, draining: 2 } },
 ];
 

@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add fuzzy slash-command autocomplete with inline help for built-in and Pi-provided commands.
 - Allow previewing files outside the session working directory when their exact paths appear in the conversation.
 - Automatically turn inline-code local file paths into clickable preview links.
 - Prevent session revision recovery storms during high-volume tool output.

@@ -27,6 +27,8 @@ export interface SlashCommandInfo extends Record<string, unknown> {
 	name: string;
 	description?: string;
 	source: "extension" | "prompt" | "skill";
+	/** Current Pi versions expose provenance here; legacy fields remain accepted. */
+	sourceInfo?: Record<string, unknown>;
 	location?: string;
 	path?: string;
 }
@@ -70,7 +72,7 @@ export type ClientCommand = CommandEnvelope & (
 		images?: WireImage[];
 	} & SessionCommand)
 	| ({ type: "set_session_name"; name: string } & SessionCommand)
-	| { type: "get_commands" }
+	| { type: "get_commands"; sessionPath?: string; cwd?: string }
 	| { type: "reload_processes" }
 );
 
@@ -417,8 +419,11 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 			case "get_available_models":
 			case "get_default_model":
 			case "get_session_statuses":
-			case "get_commands":
 			case "reload_processes":
+				break;
+			case "get_commands":
+				optionalString(command.sessionPath, "$command.sessionPath");
+				optionalString(command.cwd, "$command.cwd");
 				break;
 			case "subscribe_session":
 			case "abort":
@@ -475,6 +480,7 @@ function validateSlashCommands(value: unknown, path: string): void {
 		if (!['extension', 'prompt', 'skill'].includes(String(command.source))) {
 			fail(`${path}[${index}].source`, "expected extension, prompt, or skill");
 		}
+		if (command.sourceInfo !== undefined) record(command.sourceInfo, `${path}[${index}].sourceInfo`);
 		optionalString(command.location, `${path}[${index}].location`);
 		optionalString(command.path, `${path}[${index}].path`);
 	});

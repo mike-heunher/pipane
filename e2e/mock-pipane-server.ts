@@ -183,6 +183,12 @@ export class MockPipaneServer {
 			case "get_session_statuses":
 				respond({ statuses: this.sessionStatuses });
 				break;
+			case "get_commands":
+				respond({ commands: [
+					{ name: "project-review", description: "Review the current project", source: "prompt", sourceInfo: { scope: "project" } },
+					{ name: "skill:search", description: "Search the web", source: "skill", sourceInfo: { scope: "user" } },
+				] });
+				break;
 			case "subscribe_session":
 				if (command.sessionPath) this.sendSessionState(command.sessionPath, undefined, ws);
 				respond();

@@ -1173,6 +1173,30 @@ describe("WsAgentAdapter prompt routing", () => {
 	});
 
 	describe("slash commands", () => {
+		it("requests discovered commands for the active session", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			await adapter.fetchCommands();
+
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "get_commands",
+				sessionPath,
+			}));
+		});
+
+		it("requests discovered commands for a virtual session cwd", async () => {
+			const { adapter, sent } = createTestAdapter();
+			adapter.setCwd("/tmp/project-a");
+
+			await adapter.fetchCommands();
+
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "get_commands",
+				cwd: "/tmp/project-a",
+			}));
+		});
+
 		it("keeps /compact pending beyond the generic 30-second command timeout", async () => {
 			vi.useFakeTimers();
 			try {

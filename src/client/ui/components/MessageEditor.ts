@@ -7,6 +7,11 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { Brain, Loader2, Paperclip, Send, Square } from "lucide";
 import { type Attachment, loadAttachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
+import {
+	filterSlashCommands,
+	slashCommandSourceLabel,
+	type SlashCommandSuggestion,
+} from "../../slash-commands.js";
 import "./AttachmentTile.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
@@ -23,6 +28,7 @@ export class MessageEditor extends LitElement {
 	set value(val: string) {
 		const oldValue = this._value;
 		this._value = val;
+		if (!val.startsWith("/") || /\s/.test(val.slice(1))) this.slashMenuOpen = false;
 		this.requestUpdate("value", oldValue);
 	}
 
@@ -38,6 +44,7 @@ export class MessageEditor extends LitElement {
 	@property() onModelSelect?: () => void;
 	@property() onThinkingChange?: (level: "off" | "minimal" | "low" | "medium" | "high") => void;
 	@property() onFilesChange?: (files: Attachment[]) => void;
+	@property({ attribute: false }) slashCommands: SlashCommandSuggestion[] = [];
 	/** Called before built-in key handling. Return true when the event was handled. */
 	@property() onKeyDown?: (event: KeyboardEvent) => boolean;
 	/** Allow steering messages to be sent while the current agent turn is running. */
@@ -52,21 +59,84 @@ export class MessageEditor extends LitElement {
 
 	@state() processingFiles = false;
 	@state() isDragging = false;
+	@state() private slashMenuOpen = false;
+	@state() private selectedSlashCommand = 0;
 	private fileInputRef = createRef<HTMLInputElement>();
 
 	protected override createRenderRoot(): HTMLElement | DocumentFragment {
 		return this;
 	}
 
+	private slashQuery(value = this.value): string | undefined {
+		if (!value.startsWith("/")) return undefined;
+		const query = value.slice(1);
+		return /\s/.test(query) ? undefined : query;
+	}
+
+	private matchingSlashCommands(): SlashCommandSuggestion[] {
+		const query = this.slashQuery();
+		return query === undefined ? [] : filterSlashCommands(this.slashCommands, query);
+	}
+
 	private handleTextareaInput = (e: Event) => {
 		const textarea = e.target as HTMLTextAreaElement;
 		this.value = textarea.value;
+		this.selectedSlashCommand = 0;
+		this.slashMenuOpen = this.slashQuery() !== undefined;
 		this.onInput?.(this.value);
 	};
+
+	private scrollSelectedSlashCommandIntoView(): void {
+		void this.updateComplete.then(() => {
+			this.querySelector<HTMLElement>(`#slash-command-option-${this.selectedSlashCommand}`)
+				?.scrollIntoView({ block: "nearest" });
+		});
+	}
+
+	private selectSlashCommand(command: SlashCommandSuggestion): void {
+		this.value = `/${command.name}${command.acceptsArguments ? " " : ""}`;
+		this.slashMenuOpen = false;
+		this.selectedSlashCommand = 0;
+		this.onInput?.(this.value);
+		void this.updateComplete.then(() => {
+			const textarea = this.textareaRef.value;
+			if (!textarea) return;
+			textarea.focus();
+			textarea.setSelectionRange(this.value.length, this.value.length);
+		});
+	}
+
+	private handleSlashMenuKeyDown(e: KeyboardEvent): boolean {
+		if (!this.slashMenuOpen) return false;
+		const commands = this.matchingSlashCommands();
+
+		if (e.key === "Escape") {
+			e.preventDefault();
+			this.slashMenuOpen = false;
+			return true;
+		}
+		if (commands.length === 0) return false;
+
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			e.preventDefault();
+			const direction = e.key === "ArrowDown" ? 1 : -1;
+			this.selectedSlashCommand = (this.selectedSlashCommand + direction + commands.length) % commands.length;
+			this.scrollSelectedSlashCommandIntoView();
+			return true;
+		}
+		if ((e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey)
+			|| (e.key === "Tab" && !e.shiftKey)) {
+			e.preventDefault();
+			this.selectSlashCommand(commands[this.selectedSlashCommand] ?? commands[0]);
+			return true;
+		}
+		return false;
+	}
 
 	private handleKeyDown = (e: KeyboardEvent) => {
 		// Ignore key events during IME composition (e.g. CJK input).
 		if (e.isComposing || e.key === "Process") return;
+		if (this.handleSlashMenuKeyDown(e)) return;
 		if (this.onKeyDown?.(e)) return;
 
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -242,6 +312,37 @@ export class MessageEditor extends LitElement {
 		}
 	}
 
+	private renderSlashCommandMenu() {
+		if (!this.slashMenuOpen) return "";
+		const commands = this.matchingSlashCommands();
+		return html`
+			<div class="slash-command-menu" id="slash-command-menu" role="listbox" aria-label="Slash commands">
+				${commands.length > 0
+					? commands.map((command, index) => html`
+						<button
+							type="button"
+							id=${`slash-command-option-${index}`}
+							class="slash-command-option ${index === this.selectedSlashCommand ? "is-selected" : ""}"
+							role="option"
+							aria-selected=${index === this.selectedSlashCommand ? "true" : "false"}
+							@mousedown=${(event: MouseEvent) => event.preventDefault()}
+							@click=${() => this.selectSlashCommand(command)}
+							@mouseenter=${() => { this.selectedSlashCommand = index; }}
+						>
+							<span class="slash-command-copy">
+								<span class="slash-command-name">/${command.name}${command.argumentHint ? html` <span>${command.argumentHint}</span>` : ""}</span>
+								<span class="slash-command-description">${command.description || "No help text available"}</span>
+							</span>
+							<span class=${`slash-command-source slash-command-source-${command.source}`}>
+								${slashCommandSourceLabel(command.source)}
+							</span>
+						</button>
+					`)
+					: html`<div class="slash-command-empty">No matching commands</div>`}
+			</div>
+		`;
+	}
+
 	override render() {
 		// Check if current model supports thinking/reasoning
 		const model = this.currentModel;
@@ -264,6 +365,8 @@ export class MessageEditor extends LitElement {
 				`
 						: ""
 				}
+
+				${this.renderSlashCommandMenu()}
 
 				<!-- Attachments -->
 				${
@@ -294,6 +397,10 @@ export class MessageEditor extends LitElement {
 						@input=${this.handleTextareaInput}
 						@keydown=${this.handleKeyDown}
 						@paste=${this.handlePaste}
+						aria-autocomplete="list"
+						aria-controls="slash-command-menu"
+						aria-expanded=${this.slashMenuOpen ? "true" : "false"}
+						aria-activedescendant=${this.slashMenuOpen ? `slash-command-option-${this.selectedSlashCommand}` : ""}
 						${ref(this.textareaRef)}
 					></textarea>
 					<div class="message-editor-input-actions">

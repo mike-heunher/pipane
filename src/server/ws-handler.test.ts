@@ -604,6 +604,73 @@ describe("WsHandler session path confinement", () => {
 	});
 });
 
+describe("WsHandler slash command discovery", () => {
+	it("uses the canonical session cwd for project-scoped commands", async () => {
+		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-commands-"));
+		try {
+			const sessionsRoot = path.join(tmpDir, "agent", "sessions");
+			const projectDir = path.join(tmpDir, "project");
+			const sessionPath = path.join(sessionsRoot, "session.jsonl");
+			mkdirSync(sessionsRoot, { recursive: true });
+			mkdirSync(projectDir, { recursive: true });
+			writeFileSync(sessionPath, `${JSON.stringify({ type: "session", cwd: projectDir })}\n`);
+
+			const proc = { id: 51 };
+			const release = vi.fn();
+			const acquire = vi.fn(() => ({ process: proc, release }));
+			const sendRpcChecked = vi.fn(async () => ({
+				success: true,
+				data: { commands: [{ name: "project-review", source: "prompt" }] },
+			}));
+			const { handler } = makeHandler({
+				sessionPaths: new SessionPathGuard(sessionsRoot),
+				acquire,
+				sendRpcChecked,
+			});
+			const { ws, sent } = makeWs();
+
+			await handler.handleGetCommands(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "commands",
+				type: "get_commands",
+				sessionPath: `${sessionsRoot}${path.sep}unused${path.sep}..${path.sep}session.jsonl`,
+			});
+
+			expect(acquire).toHaveBeenCalledWith(projectDir);
+			expect(sendRpcChecked).toHaveBeenCalledWith(proc, { type: "get_commands" });
+			expect(release).toHaveBeenCalledOnce();
+			expect(sent).toContainEqual(expect.objectContaining({
+				id: "commands",
+				success: true,
+				data: { commands: [{ name: "project-review", source: "prompt" }] },
+			}));
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses the selected cwd for a virtual conversation", async () => {
+		const proc = { id: 52 };
+		const release = vi.fn();
+		const acquire = vi.fn(() => ({ process: proc, release }));
+		const { handler } = makeHandler({
+			acquire,
+			sendRpcChecked: vi.fn(async () => ({ success: true, data: { commands: [] } })),
+		});
+		const { ws } = makeWs();
+
+		await handler.handleGetCommands(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "virtual-commands",
+			type: "get_commands",
+			cwd: "/tmp/project-a",
+		});
+
+		expect(acquire).toHaveBeenCalledWith("/tmp/project-a");
+		expect(release).toHaveBeenCalledOnce();
+	});
+});
+
 describe("WsHandler extension statuses", () => {
 	it("normalizes and broadcasts session and provider snapshots", () => {
 		const { handler, registry, emitProcessEvent } = makeHandler();

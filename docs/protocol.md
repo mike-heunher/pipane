@@ -14,7 +14,7 @@ The server rejects invalid JSON, unsupported versions, unknown commands, and inv
 
 The v1 command union covers installation, session subscription, prompting and steering, steering removal, abort and hard kill, compaction, model and command discovery, session statuses, fork and fork/prompt, session naming, and process reload.
 
-`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it.
+`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills.
 
 ### Server messages
 

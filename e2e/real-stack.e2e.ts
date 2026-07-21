@@ -48,6 +48,25 @@ test.describe("Real stack e2e", () => {
 		}
 	}
 
+	test("fuzzy-completes slash commands without executing the selection", async ({ page, harness }) => {
+		await gotoFreshSession(page, harness);
+
+		const editor = page.locator("message-editor");
+		const textarea = editor.locator("textarea").first();
+		await textarea.fill("/cpct");
+
+		const menu = editor.locator(".slash-command-menu");
+		await expect(menu).toBeVisible();
+		await expect(menu.locator(".slash-command-option")).toHaveCount(1);
+		await expect(menu).toContainText("/compact [instructions]");
+		await expect(menu).toContainText("Compact conversation history");
+
+		await textarea.press("Enter");
+		await expect(textarea).toHaveValue("/compact ");
+		await expect(menu).toBeHidden();
+		await expect(page.locator("compaction-summary")).toHaveCount(0);
+	});
+
 	test("can send a prompt and see the response", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: /.*/, chunks: textChunks("Hello! I can help you with your project.") },

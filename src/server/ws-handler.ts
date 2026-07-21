@@ -782,7 +782,16 @@ export class WsHandler {
 	}
 
 	private async handleGetCommands(ws: WebSocket, command: CommandOf<"get_commands">): Promise<void> {
-		const lease = await this.acquireAnyProcess();
+		let cwd = command.cwd || this.defaultCwd;
+		if (command.sessionPath) {
+			const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
+			const sessionCwd = getSessionCwd(sessionPath);
+			cwd = sessionCwd && existsSync(sessionCwd) ? sessionCwd : this.defaultCwd;
+		}
+
+		// Project prompts and skills are loaded when Pi starts, so command discovery
+		// must use a process for the conversation's cwd rather than any idle worker.
+		const lease = await this.acquireProcess(cwd);
 		try {
 			const response = await this.pool.sendRpcChecked(lease.process, { type: "get_commands" });
 			this.sendSuccess(ws, command.id, "get_commands", {

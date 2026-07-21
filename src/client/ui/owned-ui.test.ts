@@ -8,6 +8,7 @@ import { formatToolRuntime, ToolRuntime } from "./components/Messages.js";
 import { ThinkingBlock } from "./components/ThinkingBlock.js";
 import { getToolRenderer, renderTool } from "./tool-registry.js";
 import { escapeStrikethrough } from "./utils/markdown.js";
+import { mergeSlashCommands } from "../slash-commands.js";
 
 async function settle(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, 0));
@@ -113,6 +114,63 @@ describe("owned message editor", () => {
 		Object.defineProperty(event, "isComposing", { value: true });
 		editor.querySelector("textarea")!.dispatchEvent(event);
 		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("fuzzy-filters slash commands with help and inserts a selection without sending", async () => {
+		const editor = new MessageEditor();
+		editor.slashCommands = mergeSlashCommands([
+			{ name: "project-review", description: "Review the current project", source: "prompt" },
+			{ name: "skill:search", description: "Search the web", source: "skill" },
+		]);
+		const onSend = vi.fn();
+		editor.onSend = onSend;
+		document.body.appendChild(editor);
+		await editor.updateComplete;
+
+		const textarea = editor.querySelector("textarea")!;
+		textarea.value = "/pjrv";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		await editor.updateComplete;
+
+		const options = editor.querySelectorAll(".slash-command-option");
+		expect(options).toHaveLength(1);
+		expect(options[0].textContent).toContain("/project-review");
+		expect(options[0].textContent).toContain("Review the current project");
+		expect(options[0].textContent).toContain("Prompt");
+
+		(options[0] as HTMLButtonElement).click();
+		await editor.updateComplete;
+		expect(textarea.value).toBe("/project-review ");
+		expect(editor.querySelector(".slash-command-menu")).toBeNull();
+		expect(onSend).not.toHaveBeenCalled();
+
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		expect(onSend).toHaveBeenCalledWith("/project-review ", []);
+	});
+
+	it("supports slash-menu keyboard navigation and lets Escape dismiss before aborting", async () => {
+		const editor = new MessageEditor();
+		editor.isStreaming = true;
+		editor.slashCommands = mergeSlashCommands([]);
+		const onAbort = vi.fn();
+		editor.onAbort = onAbort;
+		document.body.appendChild(editor);
+		await editor.updateComplete;
+
+		const textarea = editor.querySelector("textarea")!;
+		textarea.value = "/";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+		await editor.updateComplete;
+		expect(textarea.value).toBe("/new");
+
+		textarea.value = "/";
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+		await editor.updateComplete;
+		expect(editor.querySelector(".slash-command-menu")).toBeNull();
+		expect(onAbort).not.toHaveBeenCalled();
 	});
 });
 

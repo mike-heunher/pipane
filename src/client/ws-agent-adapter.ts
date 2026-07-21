@@ -27,6 +27,7 @@ import {
 	type CommandResponseData,
 	type ProtocolDecodeError,
 	type SessionSyncMessage,
+	type SlashCommandInfo,
 } from "../shared/ws-protocol.js";
 import {
 	clampThinkingLevel,
@@ -34,6 +35,7 @@ import {
 	toCompactModelRef,
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
+import { PIPANE_SLASH_COMMANDS } from "./slash-commands.js";
 
 const PROVIDER_USAGE_STATUS_KEY = "provider-usage";
 
@@ -1198,10 +1200,13 @@ export class WsAgentAdapter {
 		return "";
 	}
 
-	/** Fetch available slash commands from the server (extensions, prompts, skills) */
-	async fetchCommands(): Promise<Array<{ name: string; description?: string; source: string; location?: string }>> {
+	/** Fetch slash commands for the active session's project context. */
+	async fetchCommands(): Promise<SlashCommandInfo[]> {
 		try {
-			const data = await this.send({ type: "get_commands" });
+			const context = this._sessionPath
+				? { sessionPath: this._sessionPath }
+				: { cwd: this._pendingCwd };
+			const data = await this.send({ type: "get_commands", ...context });
 			return data?.commands ?? [];
 		} catch {
 			return [];
@@ -1214,12 +1219,10 @@ export class WsAgentAdapter {
 			"",
 			"| Command | Description |",
 			"|---------|-------------|",
-			"| `/help` | Show this help |",
-			"| `/new` | Start a new session |",
-			"| `/fork` | Fork session from a previous message |",
-			"| `/compact [instructions]` | Compact conversation history |",
-			"| `/name <name>` | Set session display name |",
-			"| `/reload` | Restart all pooled pi RPC processes |",
+			...PIPANE_SLASH_COMMANDS.map((command) => {
+				const usage = command.argumentHint ? ` ${command.argumentHint}` : "";
+				return `| \`/${command.name}${usage}\` | ${command.description} |`;
+			}),
 		];
 
 		// Fetch extension commands, prompt templates, and skills from pi

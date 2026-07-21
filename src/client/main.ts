@@ -12,6 +12,7 @@ import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.
 import "./session-picker.js";
 import "./ui/index.js";
 import type { MessageEditor } from "./ui/components/MessageEditor.js";
+import { mergeSlashCommands, type SlashCommandSuggestion } from "./slash-commands.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
@@ -76,6 +77,8 @@ let pendingHardKillOfferFor: string | null = null;
 let updateNotices: UpdateNotice[] = [];
 let updatingTarget: UpdateTarget | null = null;
 let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
+let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
+let slashCommandRequest = 0;
 
 const isDevMode = Boolean((import.meta as ImportMeta & { env?: { DEV?: boolean } }).env?.DEV);
 
@@ -90,6 +93,23 @@ function toggleTokenUsage() {
 
 function getMessageEditor(): MessageEditor | null {
 	return document.querySelector("message-editor") as MessageEditor | null;
+}
+
+function slashCommandScope(): string {
+	return agent.sessionFile ? `session:${agent.sessionFile}` : `cwd:${agent.cwd ?? ""}`;
+}
+
+async function refreshSlashCommands(): Promise<void> {
+	const request = ++slashCommandRequest;
+	const scope = slashCommandScope();
+	// Never show project commands from the previously selected conversation.
+	slashCommands = mergeSlashCommands([]);
+	renderApp();
+
+	const commands = await agent.fetchCommands();
+	if (request !== slashCommandRequest || scope !== slashCommandScope()) return;
+	slashCommands = mergeSlashCommands(commands);
+	renderApp();
 }
 
 function handleEditorKeyDown(event: KeyboardEvent): boolean {
@@ -686,6 +706,7 @@ const renderApp = () => {
 										.showAttachmentButton=${true}
 										.showModelSelector=${true}
 										.showThinkingSelector=${false}
+										.slashCommands=${slashCommands}
 										.onSend=${(input: string, attachments?: any[]) => handleSend(input, attachments)}
 										.onAbort=${handleStopClick}
 										.onModelSelect=${handleModelSelect}
@@ -866,6 +887,7 @@ async function initApp() {
 		// Auto-close sidebar overlay on mobile after session switch
 		if (isMobile()) mobileSidebarOpen = false;
 		renderApp();
+		void refreshSlashCommands();
 		requestAnimationFrame(() => {
 			const editor = document.querySelector("message-editor") as any;
 			const textarea = editor?.shadowRoot?.querySelector("textarea") ?? editor?.textareaRef?.value;
