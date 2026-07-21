@@ -23,6 +23,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { encodeServerMessage } from "../shared/ws-protocol.js";
 import { resolvePiLaunch } from "./pi-launch.js";
 import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
@@ -152,7 +153,7 @@ registerRestApi(app, {
 	onLocalSettingsReloaded: () => {
 		wss.clients.forEach((client) => {
 			if (client.readyState === WebSocket.OPEN) {
-				client.send(JSON.stringify({
+				client.send(encodeServerMessage({
 					type: "sessions_changed",
 					file: "__local_settings__",
 				}));
@@ -311,7 +312,7 @@ function startSessionsWatcher(): FSWatcher | null {
 			// Also notify all WS clients about the file change (for sidebar refresh)
 			wss.clients.forEach((client) => {
 				if (client.readyState === WebSocket.OPEN) {
-					client.send(JSON.stringify({
+					client.send(encodeServerMessage({
 						type: "sessions_changed",
 						file: fullPath,
 					}));

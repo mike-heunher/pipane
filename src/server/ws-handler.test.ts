@@ -7,6 +7,7 @@ import { WebSocket } from "ws";
 import { SessionJsonl } from "./session-jsonl.js";
 import { SessionRegistry } from "./session-registry.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
+import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 import { WsHandler } from "./ws-handler.js";
 import { SessionPathGuard } from "./session-path.js";
 
@@ -81,6 +82,73 @@ function makeWs() {
 	};
 }
 
+describe("WsHandler protocol boundary", () => {
+	it("returns structured errors for malformed JSON, unknown commands, and version mismatches", async () => {
+		const { handler } = makeHandler();
+		const { ws, sent } = makeWs();
+
+		await handler.handleMessage(ws, "{");
+		await handler.handleMessage(ws, JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "unknown-1",
+			type: "unknown_command",
+		}));
+		await handler.handleMessage(ws, JSON.stringify({
+			protocolVersion: 99,
+			id: "version-1",
+			type: "get_session_statuses",
+		}));
+
+		expect(sent).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: null,
+				code: "invalid_json",
+			}),
+			expect.objectContaining({ id: "unknown-1", code: "unknown_command" }),
+			expect.objectContaining({ id: "version-1", code: "unsupported_version" }),
+		]));
+	});
+
+	it("publishes monotonic revisions for changed session snapshots", () => {
+		const { handler } = makeHandler();
+		const { ws, sent } = makeWs();
+		const sessionPath = "/tmp/revision.jsonl";
+		handler.clients.set(ws, {
+			subscribedSession: sessionPath,
+			lastVersion: 0,
+			lastJson: "",
+			lastHash: "",
+		});
+
+		handler.pushSnapshotToSubscribers(sessionPath, "one", "hash-one");
+		handler.pushSnapshotToSubscribers(sessionPath, "two", "hash-two");
+		handler.pushSnapshotToSubscribers(sessionPath, "two", "hash-two");
+
+		expect(sent.filter((message) => message.type === "session_sync").map((message) => message.revision))
+			.toEqual([1, 2, 2]);
+	});
+
+	it("rejects invalid fields before command dispatch", async () => {
+		const { handler, pool } = makeHandler();
+		const { ws, sent } = makeWs();
+		await handler.handleMessage(ws, JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "prompt-1",
+			type: "prompt",
+			sessionPath: "/tmp/a.jsonl",
+			message: "hello",
+		}));
+
+		expect(sent).toContainEqual(expect.objectContaining({
+			id: "prompt-1",
+			code: "invalid_message",
+			error: expect.stringContaining("$command.model"),
+		}));
+		expect(pool.sendRpc).not.toHaveBeenCalled();
+	});
+});
+
 describe("WsHandler actor orchestration", () => {
 	it("applies model and thinking sequentially and publishes the effective clamp", async () => {
 		const calls: any[] = [];
@@ -127,14 +195,17 @@ describe("WsHandler actor orchestration", () => {
 		actor.beginTurn();
 		const { ws, sent } = makeWs();
 
-		await handler.handlePrompt(ws, "req_1", {
+		await handler.handlePrompt(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_1",
+			type: "prompt",
 			sessionPath: actor.sessionPath,
 			message: "continue",
 		});
 
 		expect(sendRpc).toHaveBeenCalledWith(proc, { type: "steer", message: "continue" });
 		expect(actor.steeringQueue).toEqual(["continue"]);
-		expect(sent).toContainEqual(expect.objectContaining({ command: "steer", success: true }));
+		expect(sent).toContainEqual(expect.objectContaining({ command: "prompt", success: true }));
 	});
 
 	it("serializes raced prompt starts so the second becomes steering", async () => {
@@ -169,15 +240,27 @@ describe("WsHandler actor orchestration", () => {
 			thinkingLevel: "off",
 		};
 
-		const firstRun = handler.handlePrompt(first.ws, "first", { ...command, message: "first prompt" });
+		const firstRun = handler.handlePrompt(first.ws, {
+			...command,
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "first",
+			type: "prompt",
+			message: "first prompt",
+		});
 		while (!sendRpc.mock.calls.some((call: any[]) => call[1].type === "prompt")) await Promise.resolve();
-		const secondRun = handler.handlePrompt(second.ws, "second", { ...command, message: "second prompt" });
+		const secondRun = handler.handlePrompt(second.ws, {
+			...command,
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "second",
+			type: "prompt",
+			message: "second prompt",
+		});
 		acceptPrompt();
 		await Promise.all([firstRun, secondRun]);
 
 		expect(sendRpc.mock.calls.filter((call: any[]) => call[1].type === "prompt")).toHaveLength(1);
 		expect(sendRpc).toHaveBeenCalledWith(proc, { type: "steer", message: "second prompt" });
-		expect(second.sent).toContainEqual(expect.objectContaining({ command: "steer", success: true }));
+		expect(second.sent).toContainEqual(expect.objectContaining({ command: "prompt", success: true }));
 	});
 
 	it("hard-kills and releases the actor-owned process", async () => {
@@ -188,7 +271,12 @@ describe("WsHandler actor orchestration", () => {
 		actor.beginTurn();
 		const { ws, sent } = makeWs();
 
-		await handler.handleHardKill(ws, "req_kill", { sessionPath: actor.sessionPath });
+		await handler.handleHardKill(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_kill",
+			type: "hard_kill",
+			sessionPath: actor.sessionPath,
+		});
 
 		expect(forceKill).toHaveBeenCalledWith(proc);
 		expect(actor.phase).toBe("detached");
@@ -226,7 +314,12 @@ describe("WsHandler actor orchestration", () => {
 		actor.beginTurn();
 		const { ws } = makeWs();
 
-		await expect(handler.handleCompact(ws, "req_2", { sessionPath: actor.sessionPath }))
+		await expect(handler.handleCompact(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_2",
+			type: "compact",
+			sessionPath: actor.sessionPath,
+		}))
 			.rejects.toThrow("Cannot compact while session turn is starting");
 		expect(pool.sendRpc).not.toHaveBeenCalled();
 	});
@@ -238,7 +331,12 @@ describe("WsHandler actor orchestration", () => {
 		const { actor, release } = attachActor(registry, "/tmp/compact.jsonl", proc);
 		const { ws, sent } = makeWs();
 
-		await handler.handleCompact(ws, "req_compact", { sessionPath: actor.sessionPath });
+		await handler.handleCompact(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_compact",
+			type: "compact",
+			sessionPath: actor.sessionPath,
+		});
 
 		expect(sendRpc).toHaveBeenCalledWith(
 			proc,
@@ -260,7 +358,10 @@ describe("WsHandler actor orchestration", () => {
 		actor.beginTurn();
 		const { ws } = makeWs();
 
-		await expect(handler.handleForkPrompt(ws, "req_fork", {
+		await expect(handler.handleForkPrompt(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_fork",
+			type: "fork_prompt",
 			sessionPath: actor.sessionPath,
 			message: "branch now",
 		})).rejects.toThrow("Cannot fork and prompt while session turn is starting");
@@ -278,7 +379,10 @@ describe("WsHandler actor orchestration", () => {
 		});
 		const { ws } = makeWs();
 
-		await expect(handler.handleSetSessionName(ws, "req_3", {
+		await expect(handler.handleSetSessionName(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "req_3",
+			type: "set_session_name",
 			sessionPath: actor.sessionPath,
 			name: "renamed",
 		})).rejects.toThrow("timeout");
@@ -380,13 +484,22 @@ describe("WsHandler session path confinement", () => {
 				lastHash: "",
 			});
 
-			expect(() => handler.handleSubscribeSession(ws, "outside", {
+			expect(() => handler.handleSubscribeSession(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "outside",
+				type: "subscribe_session",
 				sessionPath: fixture.outsidePath,
 			})).toThrow("within the Pi sessions directory");
-			expect(() => handler.handleSubscribeSession(ws, "symlink", {
+			expect(() => handler.handleSubscribeSession(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "symlink",
+				type: "subscribe_session",
 				sessionPath: fixture.symlinkPath,
 			})).toThrow("escapes the Pi sessions directory");
-			expect(() => handler.handleSubscribeSession(ws, "missing", {
+			expect(() => handler.handleSubscribeSession(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "missing",
+				type: "subscribe_session",
 				sessionPath: path.join(fixture.sessionsRoot, "missing.jsonl"),
 			})).toThrow("Session file not found");
 			expect(handler.clients.get(ws)?.subscribedSession).toBeNull();
@@ -409,7 +522,12 @@ describe("WsHandler session path confinement", () => {
 				lastHash: "",
 			});
 
-			handler.handleSubscribeSession(ws, "pending", { sessionPath: pendingPath });
+			handler.handleSubscribeSession(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "pending",
+				type: "subscribe_session",
+				sessionPath: pendingPath,
+			});
 
 			expect(handler.clients.get(ws)?.subscribedSession).toBe(pendingPath);
 			expect(sent).toContainEqual(expect.objectContaining({
@@ -428,11 +546,17 @@ describe("WsHandler session path confinement", () => {
 			const { handler, pool } = makeHandler({ sessionPaths: fixture.sessionPaths });
 			const { ws } = makeWs();
 
-			await expect(handler.handleFork(ws, "fork", {
+			await expect(handler.handleFork(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "fork",
+				type: "fork",
 				sessionPath: fixture.outsidePath,
 				entryId: "entry",
 			})).rejects.toThrow("within the Pi sessions directory");
-			await expect(handler.handleForkPrompt(ws, "fork-prompt", {
+			await expect(handler.handleForkPrompt(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "fork-prompt",
+				type: "fork_prompt",
 				sessionPath: fixture.symlinkPath,
 				message: "continue",
 			})).rejects.toThrow("escapes the Pi sessions directory");
@@ -459,7 +583,10 @@ describe("WsHandler session path confinement", () => {
 			const { ws } = makeWs();
 			const nonCanonicalPath = `${fixture.sessionsRoot}${path.sep}unused${path.sep}..${path.sep}session.jsonl`;
 
-			await handler.handleSetSessionName(ws, "rename", {
+			await handler.handleSetSessionName(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "rename",
+				type: "set_session_name",
 				sessionPath: nonCanonicalPath,
 				name: "renamed",
 			});
@@ -494,10 +621,12 @@ describe("WsHandler extension statuses", () => {
 		});
 
 		expect(sent).toContainEqual({
+			protocolVersion: WS_PROTOCOL_VERSION,
 			type: "provider_usage",
 			statuses: { codex: "codex 25% 5h" },
 		});
 		expect(sent).toContainEqual({
+			protocolVersion: WS_PROTOCOL_VERSION,
 			type: "extension_status",
 			sessionPath,
 			statuses: { "provider-usage": "codex 25% 5h" },

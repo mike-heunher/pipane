@@ -7,15 +7,30 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import * as readline from "node:readline";
 import { existsSync } from "node:fs";
+import {
+	attachStrictJsonlReader,
+	decodePiRpcLine,
+	encodePiRpcCommand,
+	type PiRpcCommandPayload,
+	type PiRpcCommandType,
+	type PiRpcEvent,
+	type PiRpcResponse,
+	type PiRpcSuccessResponse,
+} from "./pi-rpc-protocol.js";
+
+interface PendingRpcRequest {
+	command: PiRpcCommandType;
+	resolve: (response: PiRpcResponse) => void;
+	reject: (error: Error) => void;
+}
 
 export interface RpcProcess {
 	id: number;
 	cwd: string;
 	process: ChildProcess;
-	rl: readline.Interface;
-	pendingRequests: Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>;
+	stopReadingStdout: () => void;
+	pendingRequests: Map<string, PendingRpcRequest>;
 	requestId: number;
 	lastResponseTime: number;
 	recentStderr: string[];
@@ -34,7 +49,7 @@ export interface SpawnConfig {
 	env?: Record<string, string>;
 }
 
-export type RpcProcessEvent = Record<string, any>;
+export type RpcProcessEvent = PiRpcEvent;
 export type RpcProcessEventListener = (proc: RpcProcess, event: RpcProcessEvent) => void;
 
 /** Exclusive ownership of one pooled process. */
@@ -158,35 +173,39 @@ export class ProcessPool {
 			}
 		});
 
-		const rl = readline.createInterface({ input: child.stdout!, terminal: false });
 		const proc: RpcProcess = {
 			id: procId,
 			cwd,
 			process: child,
-			rl,
+			stopReadingStdout: () => {},
 			pendingRequests: new Map(),
 			requestId: 0,
 			lastResponseTime: Date.now(),
 			recentStderr,
 		};
 
-		rl.on("line", (line: string) => {
-			let data: any;
-			try {
-				data = JSON.parse(line);
-			} catch {
+		proc.stopReadingStdout = attachStrictJsonlReader(child.stdout!, (line) => {
+			const decoded = decodePiRpcLine(line);
+			if (!decoded.ok) {
+				console.warn(`[pool] pi#${proc.id} ignored invalid RPC output: ${decoded.error.message}`);
 				return;
 			}
-			if (data.type === "response") {
-				if (data.id && proc.pendingRequests.has(data.id)) {
-					const pending = proc.pendingRequests.get(data.id)!;
-					proc.pendingRequests.delete(data.id);
-					proc.lastResponseTime = Date.now();
-					pending.resolve(data);
+			const message = decoded.value;
+			if (message.type === "response") {
+				const pending = message.id ? proc.pendingRequests.get(message.id) : undefined;
+				if (!pending || !message.id) return;
+				proc.pendingRequests.delete(message.id);
+				proc.lastResponseTime = Date.now();
+				if (message.command !== pending.command) {
+					pending.reject(new Error(
+						`Mismatched RPC response for ${pending.command}: received ${message.command}`,
+					));
+					return;
 				}
+				pending.resolve(message);
 				return;
 			}
-			this.emitEvent(proc, data);
+			this.emitEvent(proc, message);
 		});
 
 		child.on("error", (err) => {
@@ -224,6 +243,7 @@ export class ProcessPool {
 		this.leases.delete(proc);
 		this.decommissioning.delete(proc);
 
+		proc.stopReadingStdout();
 		for (const pending of proc.pendingRequests.values()) pending.reject(error);
 		proc.pendingRequests.clear();
 		this.onProcessExit?.(proc);
@@ -337,13 +357,16 @@ export class ProcessPool {
 		}
 	}
 
-	sendRpc(proc: RpcProcess, command: any, timeoutMs?: number): Promise<any> {
+	sendRpc<Command extends PiRpcCommandPayload>(
+		proc: RpcProcess,
+		command: Command,
+		timeoutMs?: number,
+	): Promise<PiRpcResponse<Command["type"]>> {
 		if (!proc.process || proc.process.exitCode !== null) {
 			return Promise.reject(new Error("RPC process is dead"));
 		}
 		const timeout = timeoutMs ?? this.rpcTimeout;
 		const id = `req_${++proc.requestId}`;
-		const fullCommand = { ...command, id };
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				proc.pendingRequests.delete(id);
@@ -353,24 +376,28 @@ export class ProcessPool {
 				reject(new Error(`Timeout waiting for RPC response to ${command.type}`));
 			}, timeout);
 			proc.pendingRequests.set(id, {
-				resolve: (data: any) => {
+				command: command.type,
+				resolve: (response) => {
 					clearTimeout(timer);
-					resolve(data);
+					resolve(response as PiRpcResponse<Command["type"]>);
 				},
-				reject: (err: Error) => {
+				reject: (error) => {
 					clearTimeout(timer);
-					reject(err);
+					reject(error);
 				},
 			});
-			proc.process.stdin!.write(JSON.stringify(fullCommand) + "\n");
+			proc.process.stdin!.write(encodePiRpcCommand(command, id));
 		});
 	}
 
-	async sendRpcChecked(proc: RpcProcess, command: any): Promise<any> {
+	async sendRpcChecked<Command extends PiRpcCommandPayload>(
+		proc: RpcProcess,
+		command: Command,
+	): Promise<PiRpcSuccessResponse<Command["type"]>> {
 		const response = await this.sendRpc(proc, command);
-		if (!response?.success) {
-			throw new Error(response?.error || `RPC command failed: ${command.type}`);
+		if (!response.success) {
+			throw new Error(response.error || `RPC command failed: ${command.type}`);
 		}
-		return response;
+		return response as PiRpcSuccessResponse<Command["type"]>;
 	}
 }

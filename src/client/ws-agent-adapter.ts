@@ -18,6 +18,17 @@ import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import {
+	assertNever,
+	decodeServerMessage,
+	decodeSessionStateJson,
+	encodeClientCommand,
+	type ClientCommandPayload,
+	type ClientCommandType,
+	type CommandResponseData,
+	type ProtocolDecodeError,
+	type SessionSyncMessage,
+} from "../shared/ws-protocol.js";
+import {
 	clampThinkingLevel,
 	modelsMatch,
 	toCompactModelRef,
@@ -49,19 +60,16 @@ type SessionSyncChanges = {
 	steering: boolean;
 };
 
-type WsCommand =
-	| { type: "prompt"; sessionPath: string; message: string; model?: { provider: string; modelId: string }; thinkingLevel?: ThinkingLevelValue; controlRevision?: number; images?: ImageContent[] }
-	| { type: "steer"; sessionPath: string; message: string }
-	| { type: "abort"; sessionPath: string }
-	| { type: "hard_kill"; sessionPath: string }
-	| { type: "compact"; sessionPath: string; customInstructions?: string }
-	| { type: "get_available_models" }
-	| { type: "get_commands" }
-	| { type: "reload_processes" }
-	| { type: "set_session_name"; sessionPath: string; name: string }
-	| { type: "fork"; sessionPath: string; entryId: string }
-	| { type: "subscribe_session"; sessionPath: string }
-	| { type: "install_pi" };
+type ScopedSessionSync = SessionSyncMessage & {
+	__sessionPath: string;
+	__sessionNonce: number;
+};
+
+interface PendingRequest {
+	command: ClientCommandType;
+	resolve: (data: unknown) => void;
+	reject: (error: Error) => void;
+}
 
 export interface PiInstallRequiredInfo {
 	command: string;
@@ -90,7 +98,7 @@ export class WsAgentAdapter {
 	private readonly requestFrame: (callback: FrameRequestCallback) => number;
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
-	private pendingRequests = new Map<string, { resolve: (data: any) => void; reject: (err: Error) => void }>();
+	private pendingRequests = new Map<string, PendingRequest>();
 	private requestId = 0;
 
 	// ── Auto-reconnect state ───────────────────────────────────────────────
@@ -186,10 +194,12 @@ export class WsAgentAdapter {
 	private _syncJson = "";
 	/** Current synced hash */
 	private _syncHash = "";
+	/** Last applied authoritative session revision. */
+	private _syncRevision: number | undefined;
 
 	// ── session_sync frame queue ──────────────────────────────────────────
 	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
-	private _pendingSessionSyncs: any[] = [];
+	private _pendingSessionSyncs: ScopedSessionSync[] = [];
 	/** True when a frame callback has been scheduled to flush session_sync. */
 	private _sessionSyncFlushScheduled = false;
 	/** True while applySessionSync is running to prevent concurrent flushes. */
@@ -509,6 +519,7 @@ export class WsAgentAdapter {
 		if (this._sessionPath && this._sessionStatus !== "virtual") {
 			this._syncJson = "";
 			this._syncHash = "";
+			this._syncRevision = undefined;
 			this.subscribeToSession(this._sessionPath);
 		}
 		this.refreshSessionStatuses();
@@ -558,131 +569,110 @@ export class WsAgentAdapter {
 		}
 	}
 
-	private handleMessage(raw: string) {
-		let data: any;
-		try { data = JSON.parse(raw); } catch { return; }
+	private handleProtocolError(error: ProtocolDecodeError): void {
+		const message = `Protocol error: ${error.message}`;
+		console.error(`[ws-adapter] ${message}`);
+		this._state.error = message;
+		this.emitStatusChange();
+		if (error.code === "unsupported_version") this.ws?.close(1002, "Unsupported protocol version");
+	}
 
-		// Response to a pending request
-		if (data.type === "response" && data.id && this.pendingRequests.has(data.id)) {
-			const pending = this.pendingRequests.get(data.id)!;
-			this.pendingRequests.delete(data.id);
-			if (data.success) {
-				pending.resolve(data.data);
-			} else {
-				const message = data.error || "Unknown error";
-				this._state.error = message;
-				this.emitStatusChange();
-				pending.reject(new Error(message));
+	private handleMessage(raw: string): void {
+		const decoded = decodeServerMessage(raw);
+		if (!decoded.ok) {
+			this.handleProtocolError(decoded.error);
+			return;
+		}
+
+		const data = decoded.value;
+		switch (data.type) {
+			case "response": {
+				if (!data.success && data.id === null) {
+					this._state.error = data.error;
+					this.emitStatusChange();
+					return;
+				}
+				if (data.id === null) return;
+				const pending = this.pendingRequests.get(data.id);
+				if (!pending) return;
+				this.pendingRequests.delete(data.id);
+				if (data.command !== pending.command) {
+					pending.reject(new Error(
+						`Mismatched response for ${pending.command}: received ${data.command}`,
+					));
+					return;
+				}
+				if (data.success) {
+					pending.resolve(data.data);
+				} else {
+					this._state.error = data.error;
+					this.emitStatusChange();
+					pending.reject(new Error(data.error));
+				}
+				return;
 			}
-			return;
-		}
-
-		if (data.type === "pi_install_required") {
-			this.emitPiInstallRequired({
-				command: data.command || "pi",
-				installable: !!data.installable,
-				installing: !!data.installing,
-				message: data.message || "pi is not available",
-			});
-			return;
-		}
-
-		// Init message with server-wide status snapshots.
-		if (data.type === "init") {
-			if (data.sessionStatuses) {
+			case "pi_install_required":
+				this.emitPiInstallRequired({
+					command: data.command,
+					installable: data.installable,
+					installing: data.installing,
+					message: data.message,
+				});
+				return;
+			case "init":
 				this.setAllSessionStatuses(data.sessionStatuses);
-			}
-			if (data.providerUsageStatuses !== undefined) {
 				this.replaceProviderUsageStatuses(data.providerUsageStatuses);
-			}
-			// Restore steering queues from server
-			if (data.steeringQueues) {
 				this._steeringQueues.clear();
-				for (const [sp, q] of Object.entries(data.steeringQueues as Record<string, string[]>)) {
-					if (q.length > 0) this._steeringQueues.set(sp, [...q]);
+				for (const [sessionPath, queue] of Object.entries(data.steeringQueues)) {
+					if (queue.length > 0) this._steeringQueues.set(sessionPath, [...queue]);
 				}
 				this.emitSteeringQueueChange();
-			}
-			return;
-		}
-
-		// Session status updates for all sessions (sidebar badges)
-		if (data.type === "session_status_change") {
-			if (data.sessionPath && data.status) {
+				return;
+			case "session_status_change":
 				this.setGlobalSessionStatus(data.sessionPath, data.status);
+				return;
+			case "provider_usage":
+				this.replaceProviderUsageStatuses(data.statuses);
+				return;
+			case "extension_status":
+				if (data.sessionPath === this._sessionPath) this.replaceExtensionStatuses(data.statuses);
+				return;
+			case "session_sync":
+				if (data.sessionPath !== this._sessionPath) return;
+				this.enqueueSessionSync({
+					...data,
+					__sessionPath: data.sessionPath,
+					__sessionNonce: this._sessionNonce,
+				});
+				return;
+			case "control_state": {
+				if (data.sessionPath !== this._sessionPath) return;
+				const applied = this.applyAuthoritativeControlState(
+					data.model,
+					data.thinkingLevel,
+					data.controlRevision,
+				);
+				if (applied) this.emitContentChange();
+				return;
 			}
-			return;
-		}
-
-		// Account-wide subscription usage is independent of the active session.
-		if (data.type === "provider_usage") {
-			this.replaceProviderUsageStatuses(data.statuses);
-			return;
-		}
-
-		// Complete extension status snapshot for the active session.
-		if (data.type === "extension_status") {
-			if (data.sessionPath !== this._sessionPath) return;
-			this.replaceExtensionStatuses(data.statuses);
-			return;
-		}
-
-		// Hash-verified session sync from server (authoritative)
-		if (data.type === "session_sync") {
-			const sp = data.sessionPath as string;
-			if (sp !== this._sessionPath) return;
-			this.enqueueSessionSync({
-				...data,
-				__sessionPath: sp,
-				__sessionNonce: this._sessionNonce,
-			});
-			return;
-		}
-
-		// Effective model/thinking after pi has applied and clamped a request.
-		if (data.type === "control_state") {
-			if (data.sessionPath !== this._sessionPath) return;
-			const applied = this.applyAuthoritativeControlState(
-				data.model,
-				data.thinkingLevel,
-				data.controlRevision,
-			);
-			if (applied) this.emitContentChange();
-			return;
-		}
-
-		// A newly created or forked session is announced before its turn settles.
-		if (data.type === "session_attached") {
-			if (data.sessionPath) {
+			case "session_attached": {
 				this.setGlobalSessionStatus(data.sessionPath, "running");
-			}
-			// Only adopt this session if:
-			// - It matches the session we're currently viewing, OR
-			// - We're in virtual state AND we have a pending __new__ prompt.
-			//   Without this second check, a stale session_attached from a
-			//   previous prompt could hijack a new virtual session the user
-			//   just created while the old turn was still running.
-			const shouldAdopt = data.sessionPath === this._sessionPath
-				|| (this._sessionStatus === "virtual" && this._pendingNewPrompt);
-			if (shouldAdopt) {
-				const adoptedVirtualSession = this._sessionStatus === "virtual" && !!data.sessionPath;
-				if (adoptedVirtualSession) {
-					this._sessionPath = data.sessionPath;
-					const filename = path.basename(data.sessionPath, ".jsonl");
-					const parts = filename.split("_");
-					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
-					this._startingPrompts.get(`virtual:${this._sessionNonce}`)?.resolveReady(data.sessionPath);
+				const shouldAdopt = data.sessionPath === this._sessionPath
+					|| (this._sessionStatus === "virtual" && this._pendingNewPrompt);
+				if (shouldAdopt) {
+					const adoptedVirtualSession = this._sessionStatus === "virtual";
+					if (adoptedVirtualSession) {
+						this._sessionPath = data.sessionPath;
+						const filename = path.basename(data.sessionPath, ".jsonl");
+						const parts = filename.split("_");
+						this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+						this._startingPrompts.get(`virtual:${this._sessionNonce}`)?.resolveReady(data.sessionPath);
+					}
+					this._sessionStatus = "attached";
+					this._state.isStreaming = true;
+					void this.subscribeToSession(data.sessionPath);
+					this.emitStatusChange();
 				}
-				this._sessionStatus = "attached";
-				this._state.isStreaming = true;
-				if (data.sessionPath) {
-					this.subscribeToSession(data.sessionPath);
-				}
-				this.emitStatusChange();
-			}
-			if (data.sessionPath) {
-				// Create an optimistic session entry so the sidebar shows it instantly
-				// instead of waiting for the filesystem scan (~2s).
 				if (!this._optimisticSessions.has(data.sessionPath)) {
 					const now = new Date().toISOString();
 					const filename = path.basename(data.sessionPath, ".jsonl");
@@ -691,32 +681,23 @@ export class WsAgentAdapter {
 					this._optimisticSessions.set(data.sessionPath, {
 						id,
 						path: data.sessionPath,
-						cwd: data.cwd || "",
+						cwd: data.cwd ?? "",
 						created: now,
 						modified: now,
 						lastUserPromptTime: now,
 						messageCount: 1,
-						firstMessage: data.firstMessage || "(new session)",
+						firstMessage: data.firstMessage ?? "(new session)",
 					});
 				}
+				if (shouldAdopt) this.emitSessionChange();
+				return;
 			}
-			// Emit session change AFTER optimistic session is created, so the
-			// picker can immediately remove the __virtual__ entry and show the
-			// real session — preventing the duplicate-session visual glitch.
-			if (shouldAdopt) {
-				this.emitSessionChange();
-			}
-			return;
+			case "sessions_changed":
+				for (const listener of this.sessionsChangedListeners) listener(data.file);
+				return;
+			default:
+				assertNever(data);
 		}
-
-
-		// Sessions directory change notification
-		if (data.type === "sessions_changed") {
-			const file = data.file as string;
-			for (const fn of this.sessionsChangedListeners) fn(file);
-			return;
-		}
-
 	}
 
 	/**
@@ -724,7 +705,7 @@ export class WsAgentAdapter {
 	 * snapshot supersedes queued history, but every delta after that full must be
 	 * retained and applied in order because its baseHash depends on the prior op.
 	 */
-	private enqueueSessionSync(syncMsg: any) {
+	private enqueueSessionSync(syncMsg: ScopedSessionSync): void {
 		if (syncMsg.op === "full") {
 			this._pendingSessionSyncs = [syncMsg];
 		} else {
@@ -773,7 +754,7 @@ export class WsAgentAdapter {
 		if (changes.status) this.emitStatusChange();
 	}
 
-	private async applySessionSyncBatch(syncMessages: any[]): Promise<SessionSyncChanges | undefined> {
+	private async applySessionSyncBatch(syncMessages: ScopedSessionSync[]): Promise<SessionSyncChanges | undefined> {
 		const syncSessionPath = this._sessionPath;
 		const syncSessionNonce = this._sessionNonce;
 		if (!syncSessionPath || syncMessages.length === 0) return;
@@ -781,12 +762,34 @@ export class WsAgentAdapter {
 			message.__sessionPath !== syncSessionPath || message.__sessionNonce !== syncSessionNonce
 		)) return;
 
-		const syncOps: SyncOp[] = syncMessages.map((syncMsg) => ({
-			op: syncMsg.op,
-			...(syncMsg.op === "full"
-				? { data: syncMsg.data, hash: syncMsg.hash }
-				: { patches: syncMsg.patches, hash: syncMsg.hash, baseHash: syncMsg.baseHash }),
-		}) as SyncOp);
+		let nextRevision = this._syncRevision;
+		for (const message of syncMessages) {
+			if (message.op === "full") {
+				nextRevision = message.revision;
+				continue;
+			}
+			if (nextRevision === undefined || message.revision !== nextRevision + 1) {
+				console.error("[ws-adapter] Session revision gap, re-subscribing", {
+					expected: nextRevision === undefined ? "full snapshot" : nextRevision + 1,
+					actual: message.revision,
+				});
+				this._syncJson = "";
+				this._syncHash = "";
+				this._syncRevision = undefined;
+				void this.subscribeToSession(syncSessionPath);
+				return;
+			}
+			nextRevision = message.revision;
+		}
+
+		const syncOps: SyncOp[] = syncMessages.map((syncMessage) => syncMessage.op === "full"
+			? { op: "full", data: syncMessage.data, hash: syncMessage.hash }
+			: {
+				op: "delta",
+				patches: syncMessage.patches,
+				hash: syncMessage.hash,
+				baseHash: syncMessage.baseHash,
+			});
 
 		// After reconnect/re-subscribe, we must receive a full sync first.
 		// Ignore early deltas until a base hash exists.
@@ -803,22 +806,23 @@ export class WsAgentAdapter {
 			console.error("[ws-adapter] Sync verification failed, re-subscribing");
 			this._syncJson = "";
 			this._syncHash = "";
+			this._syncRevision = undefined;
 			this.subscribeToSession(syncSessionPath);
 			return;
 		}
 
-		this._syncJson = result.data;
-		this._syncHash = result.hash;
-
-		// Parse only the final state in the batch. Intermediate hash-chain states
-		// were never observable between animation frames.
-		let state: any;
-		try {
-			state = JSON.parse(result.data);
-		} catch {
-			console.error("[ws-adapter] Failed to parse synced state");
+		// Parse and validate only the final state in the batch. Intermediate
+		// hash-chain states were never observable between animation frames.
+		const decodedState = decodeSessionStateJson(result.data);
+		if (!decodedState.ok) {
+			this.handleProtocolError(decodedState.error);
 			return;
 		}
+		const state = decodedState.value;
+
+		this._syncJson = result.data;
+		this._syncHash = result.hash;
+		this._syncRevision = nextRevision;
 
 		const previousStreaming = this._state.isStreaming;
 		const previousSessionStatus = this._sessionStatus;
@@ -854,13 +858,15 @@ export class WsAgentAdapter {
 	}
 
 
-	private send(command: WsCommand | any): Promise<any> {
+	private send<Payload extends ClientCommandPayload>(
+		command: Payload,
+	): Promise<CommandResponseData<Payload["type"]>> {
 		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
 			return Promise.reject(new Error("WebSocket not connected"));
 		}
 
 		const id = `req_${++this.requestId}`;
-		return new Promise((resolve, reject) => {
+		return new Promise<CommandResponseData<Payload["type"]>>((resolve, reject) => {
 			const timeoutMs = command.type === "compact"
 				? COMPACT_CLIENT_TIMEOUT_MS
 				: command.type === "prompt" || command.type === "fork_prompt"
@@ -872,11 +878,15 @@ export class WsAgentAdapter {
 			}, timeoutMs);
 
 			this.pendingRequests.set(id, {
-				resolve: (data) => { clearTimeout(timeout); resolve(data); },
-				reject: (err) => { clearTimeout(timeout); reject(err); },
+				command: command.type,
+				resolve: (data) => {
+					clearTimeout(timeout);
+					resolve(data as CommandResponseData<Payload["type"]>);
+				},
+				reject: (error) => { clearTimeout(timeout); reject(error); },
 			});
 
-			this.ws!.send(JSON.stringify({ ...command, id }));
+			this.ws!.send(encodeClientCommand(command, id));
 		});
 	}
 
@@ -1331,7 +1341,7 @@ export class WsAgentAdapter {
 
 		if (trimmed === "/reload") {
 			try {
-				const data = await this.send({ type: "reload_processes" }) as { killed?: number; draining?: number };
+				const data = await this.send({ type: "reload_processes" });
 				const killed = data?.killed ?? 0;
 				const draining = data?.draining ?? 0;
 				this._state.messages = [...this._state.messages, {
@@ -1450,7 +1460,7 @@ export class WsAgentAdapter {
 		this.markControlSent(controlRevision);
 
 		const nonce = this._sessionNonce;
-		let data: any;
+		let data: CommandResponseData<"fork_prompt">;
 		try {
 			data = await this.send({
 				type: "fork_prompt",
@@ -1552,6 +1562,7 @@ export class WsAgentAdapter {
 		this._toolCallTimings = {};
 		this._syncJson = "";
 		this._syncHash = "";
+		this._syncRevision = undefined;
 		this.clearSessionSyncQueue();
 		this._state.error = undefined;
 
@@ -1602,6 +1613,7 @@ export class WsAgentAdapter {
 		this._toolCallTimings = {};
 		this._syncJson = "";
 		this._syncHash = "";
+		this._syncRevision = undefined;
 		this.clearSessionSyncQueue();
 		this._state.error = undefined;
 

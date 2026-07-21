@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 
 const SESSION_PATH = "/tmp/sessions/sync-burst.jsonl";
 
@@ -9,6 +10,7 @@ function sessionState(text: string) {
 		messages: [{ role: "assistant", content: [{ type: "text", text }] }],
 		isStreaming: true,
 		pendingToolCalls: [],
+		toolCallTimings: {},
 		model: { provider: "mock", modelId: "mock-model" },
 		thinkingLevel: "medium",
 		steeringQueue: [],
@@ -24,6 +26,7 @@ function createAdapter() {
 		send: vi.fn((raw: string) => {
 			sent.push(JSON.parse(raw));
 		}),
+		close: vi.fn(),
 	};
 	(adapter as any)._sessionPath = SESSION_PATH;
 	(adapter as any)._sessionNonce = 7;
@@ -32,10 +35,16 @@ function createAdapter() {
 	return { adapter, sent };
 }
 
+const revisions = new WeakMap<WsAgentAdapter, number>();
+
 function deliver(adapter: WsAgentAdapter, message: Record<string, unknown>) {
+	const revision = (revisions.get(adapter) ?? 0) + 1;
+	revisions.set(adapter, revision);
 	(adapter as any).handleMessage(JSON.stringify({
+		protocolVersion: WS_PROTOCOL_VERSION,
 		type: "session_sync",
 		sessionPath: SESSION_PATH,
+		revision,
 		...message,
 	}));
 }
@@ -94,6 +103,47 @@ describe("WsAgentAdapter burst session sync", () => {
 			expect.anything(),
 		);
 		expect(error).not.toHaveBeenCalledWith("[ws-adapter] Sync verification failed, re-subscribing");
+	});
+
+	it("recovers with a full subscription when a session revision is skipped", async () => {
+		vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+		const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { adapter, sent } = createAdapter();
+		const a = adapter as any;
+		const first = sessionState("one");
+		const second = sessionState("two");
+		const firstHash = await computeHash(first);
+		const secondHash = await computeHash(second);
+
+		deliver(adapter, { op: "full", data: first, hash: firstHash });
+		await a.flushSessionSyncQueue();
+		deliver(adapter, {
+			revision: 3,
+			op: "delta",
+			patches: computePatches(first, second),
+			baseHash: firstHash,
+			hash: secondHash,
+		});
+		await a.flushSessionSyncQueue();
+
+		const subscribe = sent.find((message) => message.type === "subscribe_session");
+		expect(subscribe).toMatchObject({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			sessionPath: SESSION_PATH,
+		});
+		expect(consoleError).toHaveBeenCalledWith(
+			"[ws-adapter] Session revision gap, re-subscribing",
+			expect.objectContaining({ expected: 2, actual: 3 }),
+		);
+		(adapter as any).handleMessage(JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			type: "response",
+			id: subscribe.id,
+			command: "subscribe_session",
+			success: true,
+			data: {},
+		}));
+		consoleError.mockRestore();
 	});
 
 	it("publishes only the final state from a queued burst", async () => {

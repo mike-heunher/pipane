@@ -14,9 +14,15 @@ import type { IncomingMessage } from "node:http";
 import { copyFile } from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
 import path from "node:path";
+import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { SessionRegistry } from "./session-registry.js";
 import type { SessionActor } from "./session-actor.js";
-import { ProcessPool, type RpcProcess, type RpcProcessLease } from "./process-pool.js";
+import {
+	ProcessPool,
+	type RpcProcess,
+	type RpcProcessEvent,
+	type RpcProcessLease,
+} from "./process-pool.js";
 import {
 	SessionJsonl,
 	readSessionFromDisk,
@@ -27,7 +33,17 @@ import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
-import type { ExtensionStatusMessage, ProviderUsageMessage } from "../shared/ws-protocol.js";
+import {
+	assertNever,
+	decodeClientCommand,
+	encodeServerMessage,
+	type ClientCommand,
+	type ClientCommandType,
+	type CommandResponseData,
+	type ExtensionStatusMessage,
+	type ProviderUsageMessage,
+	type ServerMessagePayload,
+} from "../shared/ws-protocol.js";
 import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import {
 	extensionStatusSnapshot,
@@ -47,6 +63,11 @@ export interface WsHandlerOptions {
 	ensurePool: () => void;
 	isRequestAuthorized: (req: IncomingMessage) => boolean;
 }
+
+type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: Type }>;
+type ControlCommand = CommandOf<"prompt"> | CommandOf<"fork_prompt">;
+type ExtensionStatusPayload = Omit<ExtensionStatusMessage, "protocolVersion">;
+type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 interface ClientState {
 	subscribedSession: string | null;
@@ -71,7 +92,7 @@ function makeTurnId(): string {
 	return `turn_${Date.now()}_${++nextTurnId}`;
 }
 
-function debugTurn(stage: string, data: Record<string, any>) {
+function debugTurn(stage: string, data: Record<string, unknown>) {
 	console.log(`[turn] ${stage} ${JSON.stringify(data)}`);
 }
 
@@ -96,6 +117,8 @@ export class WsHandler {
 	 * Used for change detection when the file watcher fires.
 	 */
 	private subscribedFileSizes = new Map<string, number>();
+	/** Last revision/hash published for each authoritative session state. */
+	private sessionRevisions = new Map<string, { revision: number; hash: string }>();
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -156,7 +179,7 @@ export class WsHandler {
 		});
 	}
 
-	private handleProcessEvent(proc: RpcProcess, event: Record<string, any>): void {
+	private handleProcessEvent(proc: RpcProcess, event: RpcProcessEvent): void {
 		if (event.type !== "extension_ui_request" || event.method !== "setStatus") return;
 		if (!isValidExtensionStatusKey(event.statusKey)) return;
 
@@ -214,7 +237,7 @@ export class WsHandler {
 		this.pushExtensionStatusesToSubscribers(sessionPath);
 	}
 
-	private makeExtensionStatusMessage(sessionPath: string): ExtensionStatusMessage {
+	private makeExtensionStatusMessage(sessionPath: string): ExtensionStatusPayload {
 		return {
 			type: "extension_status",
 			sessionPath,
@@ -222,7 +245,7 @@ export class WsHandler {
 		};
 	}
 
-	private makeProviderUsageMessage(): ProviderUsageMessage {
+	private makeProviderUsageMessage(): ProviderUsagePayload {
 		return {
 			type: "provider_usage",
 			statuses: Object.fromEntries(this.providerUsageStatuses),
@@ -230,7 +253,7 @@ export class WsHandler {
 	}
 
 	private pushExtensionStatusesToSubscribers(sessionPath: string): void {
-		const message = JSON.stringify(this.makeExtensionStatusMessage(sessionPath));
+		const message = encodeServerMessage(this.makeExtensionStatusMessage(sessionPath));
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath || ws.readyState !== WebSocket.OPEN) continue;
 			ws.send(message);
@@ -312,21 +335,21 @@ export class WsHandler {
 			lastHash: "",
 		});
 
-		ws.send(JSON.stringify({
+		this.sendMessage(ws, {
 			type: "init",
 			sessionStatuses: this.registry.getAllStatuses(),
 			steeringQueues: this.registry.getAllSteeringQueues(),
 			providerUsageStatuses: this.makeProviderUsageMessage().statuses,
-		}));
+		});
 
 		if (!this.piAvailable) {
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "pi_install_required",
 				command: this.piLaunch.command,
 				installable: isPiInstallable(this.piLaunch.command, this.piLaunch.baseArgs),
 				installing: this.piInstalling,
 				message: makePiNotFoundMessage(this.piLaunch.command),
-			}));
+			});
 		}
 
 		ws.on("message", (raw) => this.handleMessage(ws, raw.toString()));
@@ -336,104 +359,136 @@ export class WsHandler {
 		});
 	}
 
-	private broadcast(payload: any) {
+	private sendMessage(ws: WebSocket, payload: ServerMessagePayload): void {
+		if (ws.readyState === WebSocket.OPEN) ws.send(encodeServerMessage(payload));
+	}
+
+	private sendSuccess<Type extends ClientCommandType>(
+		ws: WebSocket,
+		id: string,
+		command: Type,
+		data: CommandResponseData<Type>,
+	): void {
+		this.sendMessage(ws, {
+			type: "response",
+			id,
+			command,
+			success: true,
+			data,
+		} as ServerMessagePayload);
+	}
+
+	private sendError(
+		ws: WebSocket,
+		id: string | null,
+		command: string,
+		error: string,
+		code: "invalid_json" | "invalid_message" | "unsupported_version" | "unknown_command" | "unknown_message" | "command_failed",
+	): void {
+		this.sendMessage(ws, { type: "response", id, command, success: false, code, error });
+	}
+
+	private broadcast(payload: ServerMessagePayload): void {
+		const message = encodeServerMessage(payload);
 		for (const ws of this.clients.keys()) {
-			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify(payload));
-			}
+			if (ws.readyState === WebSocket.OPEN) ws.send(message);
 		}
 	}
 
 	private async handleMessage(ws: WebSocket, raw: string): Promise<void> {
-		let command: any;
-		try {
-			command = JSON.parse(raw);
-		} catch {
-			ws.send(JSON.stringify({ type: "response", command: "parse", success: false, error: "Invalid JSON" }));
+		const decoded = decodeClientCommand(raw);
+		if (!decoded.ok) {
+			this.sendError(
+				ws,
+				decoded.error.requestId,
+				decoded.error.command,
+				decoded.error.message,
+				decoded.error.code,
+			);
 			return;
 		}
 
+		const command = decoded.value;
 		const id = command.id;
 		try {
 			if (!this.piAvailable && command.type !== "install_pi" && command.type !== "get_session_statuses") {
-				ws.send(JSON.stringify({
+				this.sendMessage(ws, {
 					type: "pi_install_required",
 					command: this.piLaunch.command,
 					installable: isPiInstallable(this.piLaunch.command, this.piLaunch.baseArgs),
 					installing: this.piInstalling,
 					message: makePiNotFoundMessage(this.piLaunch.command),
-				}));
-				if (id) {
-					ws.send(JSON.stringify({
-						id, type: "response", command: command.type, success: false,
-						error: makePiNotFoundMessage(this.piLaunch.command),
-					}));
-				}
+				});
+				this.sendError(
+					ws,
+					id,
+					command.type,
+					makePiNotFoundMessage(this.piLaunch.command),
+					"command_failed",
+				);
 				return;
 			}
 
 			switch (command.type) {
 				case "install_pi":
-					await this.handleInstallPi(ws, id);
+					await this.handleInstallPi(ws, command);
 					break;
 				case "subscribe_session":
-					this.handleSubscribeSession(ws, id, command);
+					this.handleSubscribeSession(ws, command);
 					break;
 				case "prompt":
-					await this.handlePrompt(ws, id, command);
+					await this.handlePrompt(ws, command);
 					break;
 				case "steer":
-					await this.handleSteer(ws, id, command);
+					await this.handleSteer(ws, command);
 					break;
 				case "remove_steering":
-					await this.handleRemoveSteering(ws, id, command);
+					await this.handleRemoveSteering(ws, command);
 					break;
 				case "abort":
-					await this.handleAbort(ws, id, command);
+					await this.handleAbort(ws, command);
 					break;
 				case "hard_kill":
-					await this.handleHardKill(ws, id, command);
+					await this.handleHardKill(ws, command);
 					break;
 				case "compact":
-					await this.handleCompact(ws, id, command);
+					await this.handleCompact(ws, command);
 					break;
 				case "get_available_models":
-					await this.handleGetAvailableModels(ws, id);
+					await this.handleGetAvailableModels(ws, command);
 					break;
 				case "get_default_model":
-					await this.handleGetDefaultModel(ws, id);
+					await this.handleGetDefaultModel(ws, command);
 					break;
 				case "get_session_statuses":
-					this.handleGetSessionStatuses(ws, id);
+					this.handleGetSessionStatuses(ws, command);
 					break;
 				case "fork":
-					await this.handleFork(ws, id, command);
+					await this.handleFork(ws, command);
 					break;
 				case "fork_prompt":
-					await this.handleForkPrompt(ws, id, command);
+					await this.handleForkPrompt(ws, command);
 					break;
 				case "set_session_name":
-					await this.handleSetSessionName(ws, id, command);
+					await this.handleSetSessionName(ws, command);
 					break;
 				case "get_commands":
-					await this.handleGetCommands(ws, id);
+					await this.handleGetCommands(ws, command);
 					break;
 				case "reload_processes":
-					await this.handleReloadProcesses(ws, id);
+					await this.handleReloadProcesses(ws, command);
 					break;
 				default:
-					ws.send(JSON.stringify({
-						id, type: "response", command: command.type, success: false,
-						error: `Unknown command: ${command.type}`,
-					}));
+					assertNever(command);
 			}
-		} catch (err: any) {
-			debugTurn("command_error", { commandType: command?.type, requestId: id, error: err?.message });
-			ws.send(JSON.stringify({ id, type: "response", command: command.type, success: false, error: err.message }));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			debugTurn("command_error", { commandType: command.type, requestId: id, error: message });
+			this.sendError(ws, id, command.type, message, "command_failed");
 		}
 	}
 
-	private async handleInstallPi(ws: WebSocket, id: string): Promise<void> {
+	private async handleInstallPi(ws: WebSocket, command: CommandOf<"install_pi">): Promise<void> {
 		const installable = isPiInstallable(this.piLaunch.command, this.piLaunch.baseArgs);
 		if (!installable) {
 			throw new Error(`Automatic install not supported for command '${this.piLaunch.command}'. Set PI_CLI or install manually.`);
@@ -456,10 +511,10 @@ export class WsHandler {
 			console.log("[pi] pi installed successfully");
 			this.ensurePool();
 		}
-		ws.send(JSON.stringify({ id, type: "response", command: "install_pi", success: true, data: {} }));
+		this.sendSuccess(ws, command.id, "install_pi", {});
 	}
 
-	private handleSubscribeSession(ws: WebSocket, id: string, command: any): void {
+	private handleSubscribeSession(ws: WebSocket, command: CommandOf<"subscribe_session">): void {
 		const client = this.clients.get(ws);
 		if (!client) return;
 		const requestedPath = command.sessionPath;
@@ -469,7 +524,7 @@ export class WsHandler {
 			client.lastVersion = 0;
 			client.lastJson = "";
 			client.lastHash = "";
-			ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
+			this.sendSuccess(ws, command.id, "subscribe_session", {});
 			return;
 		}
 
@@ -493,13 +548,14 @@ export class WsHandler {
 			client.lastJson = attached.json;
 			client.lastHash = attached.hash;
 			client.lastVersion = attached.version;
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
+				revision: this.revisionForState(sessionPath, attached.hash),
 				op: "full",
 				data: attached.json,
 				hash: attached.hash,
-			}));
+			});
 		} else {
 			// Detached — read from disk
 			const { json, hash } = readSessionFromDisk(sessionPath);
@@ -508,22 +564,23 @@ export class WsHandler {
 			client.lastVersion = 0;
 			// Track file size for change detection
 			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
+				revision: this.revisionForState(sessionPath, hash),
 				op: "full",
 				data: json,
 				hash,
-			}));
+			});
 		}
 
 		// Extension status is a separate, authoritative snapshot so reconnects
 		// and session switches replace rather than merge stale client state.
-		ws.send(JSON.stringify(this.makeExtensionStatusMessage(sessionPath)));
-		ws.send(JSON.stringify({ id, type: "response", command: "subscribe_session", success: true, data: {} }));
+		this.sendMessage(ws, this.makeExtensionStatusMessage(sessionPath));
+		this.sendSuccess(ws, command.id, "subscribe_session", {});
 	}
 
-	private async handlePrompt(ws: WebSocket, id: string, command: any): Promise<void> {
+	private async handlePrompt(ws: WebSocket, command: CommandOf<"prompt">): Promise<void> {
 		const requestedPath = command.sessionPath;
 		if (!requestedPath) throw new Error("Missing sessionPath");
 		let sessionPath = requestedPath === "__new__"
@@ -546,8 +603,8 @@ export class WsHandler {
 				await this.pool.waitForReady(proc);
 				this.beginPendingExtensionStatusCapture(proc);
 				await this.replacePiSession(proc, { type: "new_session" }, "new_session");
-				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
-				const createdPath = stateResp.data?.sessionFile;
+				const stateResp = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+				const createdPath = stateResp.data.sessionFile;
 				if (!createdPath) throw new Error("Failed to get session path from new session");
 				sessionPath = this.sessionPaths.resolvePending(createdPath);
 			}
@@ -567,12 +624,12 @@ export class WsHandler {
 					actor!.attach(unownedLease, this.createSessionState(sessionPath));
 					unownedLease = undefined;
 					this.commitPendingExtensionStatuses(proc, sessionPath);
-					ws.send(JSON.stringify({
+					this.sendMessage(ws, {
 						type: "session_attached",
 						sessionPath,
 						cwd: newSessionCwd,
 						firstMessage: command.message,
-					}));
+					});
 				} else {
 					proc = await this.acquireForActor(actor!);
 				}
@@ -581,15 +638,18 @@ export class WsHandler {
 				const observer = this.setupTurnEventForwarding(actor!, proc!, generation, turnId);
 				await this.applyRequestedControlState(proc!, actor!, ws, command);
 
-				const promptCmd: any = { type: "prompt", message: command.message };
-				if (command.images?.length > 0) promptCmd.images = command.images;
-				const response = await this.pool.sendRpc(proc!, promptCmd);
+				const response = await this.pool.sendRpc(proc!, {
+					type: "prompt",
+					message: command.message,
+					...(command.images?.length ? { images: command.images } : {}),
+				});
+				if (!response.success) throw new Error(response.error);
 				await this.reconcileEffectiveControlState(proc!, actor!);
 				return { observer, response, generation };
 			});
 
 			if (!start) {
-				ws.send(JSON.stringify({ id, type: "response", command: "steer", success: true }));
+				this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
 				return;
 			}
 
@@ -600,54 +660,52 @@ export class WsHandler {
 				this.releaseActor(actor!);
 			});
 
-			const enriched = { ...start.response };
-			if (!enriched.data) enriched.data = {};
-			enriched.data.newSessionPath = sessionPath;
-			ws.send(JSON.stringify({ ...enriched, id, command: "prompt" }));
-		} catch (err: any) {
+			this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
+		} catch (error) {
 			if (proc) this.pendingExtensionStatuses.delete(proc);
 			unownedLease?.release();
 			if (actor && proc && actor.process === proc) {
-				let detailed = this.buildPromptFailureMessage(err, proc, actor);
+				let detailed = this.buildPromptFailureMessage(error, proc, actor);
 				await actor.enqueue("prompt failure", () => {
 					if (actor!.process !== proc) return;
-					detailed = this.buildPromptFailureMessage(err, proc!, actor!);
+					detailed = this.buildPromptFailureMessage(error, proc!, actor!);
 					actor!.markFailed();
 					this.injectSessionError(actor!, detailed);
 					this.releaseActor(actor!);
 				});
-				if ((err?.message || "").includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
+				const rawMessage = error instanceof Error ? error.message : String(error);
+				if (rawMessage.includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
 					proc.process.kill("SIGTERM");
 				}
 				throw new Error(detailed);
 			}
 			if (proc && proc.process.exitCode === null) proc.process.kill("SIGTERM");
-			throw err;
+			throw error;
 		}
 	}
 
-	private async handleSteer(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
+	private async handleSteer(ws: WebSocket, command: CommandOf<"steer">): Promise<void> {
+		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 		const actor = this.registry.find(sessionPath);
 		if (!actor) throw new Error("Session is not attached (agent not running)");
 		await actor.enqueue("steer", () => this.sendSteering(actor, command.message));
-		ws.send(JSON.stringify({ id, type: "response", command: "steer", success: true }));
+		this.sendSuccess(ws, command.id, "steer", {});
 	}
 
-	private async handleRemoveSteering(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
+	private async handleRemoveSteering(ws: WebSocket, command: CommandOf<"remove_steering">): Promise<void> {
+		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
-		const index = command.index as number;
+		const index = command.index;
 		if (typeof index !== "number") throw new Error("Missing index");
 
 		const actor = this.registry.find(sessionPath);
 		if (actor) await actor.enqueue("remove steering", () => actor.removeSteeringByIndex(index));
-		ws.send(JSON.stringify({ id, type: "response", command: "remove_steering", success: true }));
+		this.sendSuccess(ws, command.id, "remove_steering", {});
 	}
 
-	private async handleAbort(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
+	private async handleAbort(ws: WebSocket, command: CommandOf<"abort">): Promise<void> {
+		const sessionPath = command.sessionPath;
 		const actor = sessionPath ? this.registry.find(sessionPath) : undefined;
 		if (actor) {
 			await actor.enqueue("abort", async () => {
@@ -656,11 +714,11 @@ export class WsHandler {
 				}
 			});
 		}
-		ws.send(JSON.stringify({ id, type: "response", command: "abort", success: true }));
+		this.sendSuccess(ws, command.id, "abort", {});
 	}
 
-	private async handleHardKill(ws: WebSocket, id: string, command: any): Promise<void> {
-		const sessionPath = command.sessionPath as string;
+	private async handleHardKill(ws: WebSocket, command: CommandOf<"hard_kill">): Promise<void> {
+		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 
 		const actor = this.registry.find(sessionPath);
@@ -678,18 +736,17 @@ export class WsHandler {
 		}
 
 		if (hadProcess) this.ensurePool();
-		ws.send(JSON.stringify({
-			id,
-			type: "response",
-			command: "hard_kill",
-			success: true,
-			data: killed
+		this.sendSuccess(
+			ws,
+			command.id,
+			"hard_kill",
+			killed
 				? { killed: true }
 				: { killed: false, reason: hadProcess ? "signal_failed" : "not_attached" },
-		}));
+		);
 	}
 
-	private async handleCompact(ws: WebSocket, id: string, command: any): Promise<void> {
+	private async handleCompact(ws: WebSocket, command: CommandOf<"compact">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("compact", async () => {
@@ -708,60 +765,62 @@ export class WsHandler {
 				this.releaseActor(actor);
 			}
 		});
-		ws.send(JSON.stringify({ ...response, id, command: "compact" }));
+		if (!response.success) throw new Error(response.error);
+		this.sendSuccess(ws, command.id, "compact", { ...response.data });
 	}
 
-	private async handleGetAvailableModels(ws: WebSocket, id: string): Promise<void> {
+	private async handleGetAvailableModels(ws: WebSocket, command: CommandOf<"get_available_models">): Promise<void> {
 		const lease = await this.acquireAnyProcess();
 		try {
-			const response = await this.pool.sendRpc(lease.process, { type: "get_available_models" });
-			ws.send(JSON.stringify({ ...response, id, command: "get_available_models" }));
+			const response = await this.pool.sendRpcChecked(lease.process, { type: "get_available_models" });
+			this.sendSuccess(ws, command.id, "get_available_models", {
+				models: response.data.models as unknown as CommandResponseData<"get_available_models">["models"],
+			});
 		} finally {
 			lease.release();
 		}
 	}
 
-	private async handleGetCommands(ws: WebSocket, id: string): Promise<void> {
+	private async handleGetCommands(ws: WebSocket, command: CommandOf<"get_commands">): Promise<void> {
 		const lease = await this.acquireAnyProcess();
 		try {
-			const response = await this.pool.sendRpc(lease.process, { type: "get_commands" });
-			ws.send(JSON.stringify({ ...response, id, command: "get_commands" }));
+			const response = await this.pool.sendRpcChecked(lease.process, { type: "get_commands" });
+			this.sendSuccess(ws, command.id, "get_commands", {
+				commands: response.data.commands as unknown as CommandResponseData<"get_commands">["commands"],
+			});
 		} finally {
 			lease.release();
 		}
 	}
 
-	private async handleReloadProcesses(ws: WebSocket, id: string): Promise<void> {
+	private async handleReloadProcesses(ws: WebSocket, command: CommandOf<"reload_processes">): Promise<void> {
 		const { killed, draining } = this.pool.decommissionAll();
 		this.ensurePool();
-		ws.send(JSON.stringify({
-			id,
-			type: "response",
-			command: "reload_processes",
-			success: true,
-			data: { killed, draining },
-		}));
+		this.sendSuccess(ws, command.id, "reload_processes", { killed, draining });
 	}
 
-	private async handleGetDefaultModel(ws: WebSocket, id: string): Promise<void> {
+	private async handleGetDefaultModel(ws: WebSocket, command: CommandOf<"get_default_model">): Promise<void> {
 		const lease = await this.acquireAnyProcess();
 		try {
-			const stateResp = await this.pool.sendRpc(lease.process, { type: "get_state" });
-			const model = stateResp.data?.model ?? null;
-			const thinkingLevel = stateResp.data?.thinkingLevel ?? "off";
-			ws.send(JSON.stringify({ id, type: "response", command: "get_default_model", success: true, data: { model, thinkingLevel } }));
+			const stateResp = await this.pool.sendRpcChecked(lease.process, { type: "get_state" });
+			const model = stateResp.data.model ?? null;
+			const thinkingLevel = stateResp.data.thinkingLevel;
+			this.sendSuccess(ws, command.id, "get_default_model", {
+				model: model as CommandResponseData<"get_default_model">["model"],
+				thinkingLevel,
+			});
 		} finally {
 			lease.release();
 		}
 	}
 
-	private handleGetSessionStatuses(ws: WebSocket, id: string): void {
-		ws.send(JSON.stringify({ id, type: "response", command: "get_session_statuses", success: true, data: { statuses: this.registry.getAllStatuses() } }));
+	private handleGetSessionStatuses(ws: WebSocket, command: CommandOf<"get_session_statuses">): void {
+		this.sendSuccess(ws, command.id, "get_session_statuses", { statuses: this.registry.getAllStatuses() });
 	}
 
-	private async handleFork(ws: WebSocket, id: string, command: any): Promise<void> {
+	private async handleFork(ws: WebSocket, command: CommandOf<"fork">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
-		const entryId = command.entryId as string;
+		const entryId = command.entryId;
 		if (!entryId) throw new Error("Missing entryId");
 
 		const actor = this.registry.get(sessionPath);
@@ -769,9 +828,9 @@ export class WsHandler {
 			actor.assertAvailable("fork");
 			const proc = await this.acquireForActor(actor);
 			try {
-				const response = await this.pool.sendRpc(proc, { type: "fork", entryId });
-				const stateResp = await this.pool.sendRpc(proc, { type: "get_state" });
-				const returnedPath = stateResp.data?.sessionFile;
+				const response = await this.pool.sendRpcChecked(proc, { type: "fork", entryId });
+				const stateResp = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+				const returnedPath = stateResp.data.sessionFile;
 				return {
 					response,
 					newSessionPath: returnedPath
@@ -783,19 +842,16 @@ export class WsHandler {
 			}
 		});
 
-		ws.send(JSON.stringify({
-			id, type: "response", command: "fork", success: true,
-			data: {
-				text: result.response.data?.text ?? "",
-				cancelled: result.response.data?.cancelled ?? false,
-				newSessionPath: result.newSessionPath ?? null,
-			},
-		}));
+		this.sendSuccess(ws, command.id, "fork", {
+			text: result.response.data.text,
+			cancelled: result.response.data.cancelled,
+			newSessionPath: result.newSessionPath ?? null,
+		});
 	}
 
-	private async handleForkPrompt(ws: WebSocket, id: string, command: any): Promise<void> {
+	private async handleForkPrompt(ws: WebSocket, command: CommandOf<"fork_prompt">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
-		const message = command.message as string;
+		const message = command.message;
 		if (!message) throw new Error("Missing message");
 
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -828,14 +884,16 @@ export class WsHandler {
 				actor.attach(unownedLease, this.createSessionState(newSessionPath));
 				unownedLease = undefined;
 				this.commitPendingExtensionStatuses(proc, newSessionPath);
-				ws.send(JSON.stringify({ type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message }));
+				this.sendMessage(ws, { type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message });
 
 				const generation = actor.beginTurn();
 				const observer = this.setupTurnEventForwarding(actor, proc, generation, makeTurnId());
 				await this.applyRequestedControlState(proc, actor, ws, command);
-				const promptCmd: any = { type: "prompt", message };
-				if (command.images?.length > 0) promptCmd.images = command.images;
-				await this.pool.sendRpc(proc, promptCmd);
+				await this.pool.sendRpcChecked(proc, {
+					type: "prompt",
+					message,
+					...(command.images?.length ? { images: command.images } : {}),
+				});
 				await this.reconcileEffectiveControlState(proc, actor);
 				return { observer, generation };
 			});
@@ -846,30 +904,31 @@ export class WsHandler {
 				await this.reconcileEffectiveControlState(proc!, actor);
 				this.releaseActor(actor);
 			});
-			ws.send(JSON.stringify({ id, type: "response", command: "fork_prompt", success: true, data: { newSessionPath } }));
-		} catch (err: any) {
+			this.sendSuccess(ws, command.id, "fork_prompt", { newSessionPath });
+		} catch (error) {
 			if (proc) this.pendingExtensionStatuses.delete(proc);
 			unownedLease?.release();
 			if (proc && actor.process === proc) {
-				let detailed = this.buildPromptFailureMessage(err, proc, actor);
+				let detailed = this.buildPromptFailureMessage(error, proc, actor);
 				await actor.enqueue("fork prompt failure", () => {
 					if (actor.process !== proc) return;
-					detailed = this.buildPromptFailureMessage(err, proc!, actor);
+					detailed = this.buildPromptFailureMessage(error, proc!, actor);
 					actor.markFailed();
 					this.injectSessionError(actor, detailed);
 					this.releaseActor(actor);
 				});
-				if ((err?.message || "").includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
+				const rawMessage = error instanceof Error ? error.message : String(error);
+				if (rawMessage.includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
 					proc.process.kill("SIGTERM");
 				}
 				throw new Error(detailed);
 			}
 			if (proc && proc.process.exitCode === null) proc.process.kill("SIGTERM");
-			throw err;
+			throw error;
 		}
 	}
 
-	private async handleSetSessionName(ws: WebSocket, id: string, command: any): Promise<void> {
+	private async handleSetSessionName(ws: WebSocket, command: CommandOf<"set_session_name">): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const actor = this.registry.get(sessionPath);
 		const response = await actor.enqueue("set session name", async () => {
@@ -881,7 +940,8 @@ export class WsHandler {
 				this.releaseActor(actor);
 			}
 		});
-		ws.send(JSON.stringify({ ...response, id, command: "set_session_name" }));
+		if (!response.success) throw new Error(response.error);
+		this.sendSuccess(ws, command.id, "set_session_name", {});
 	}
 
 	// ── Internal helpers ─────────────────────────────────────────────────
@@ -905,8 +965,8 @@ export class WsHandler {
 		proc: RpcProcess,
 		actor: SessionActor,
 		ws: WebSocket,
-		command: any,
-	): Promise<any> {
+		command: ControlCommand,
+	): Promise<void> {
 		const sessionPath = actor.sessionPath;
 		if (!command.model) {
 			throw new Error(`BUG: prompt command received without model. sessionPath=${sessionPath}`);
@@ -937,15 +997,14 @@ export class WsHandler {
 		this.publishEffectiveControlState(actor, stateResponse.data);
 
 		if (ws.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "control_state",
 				sessionPath,
 				controlRevision: command.controlRevision,
-				model: activeModel,
-				thinkingLevel: stateResponse.data?.thinkingLevel ?? "off",
-			}));
+				model: activeModel as unknown as NonNullable<CommandResponseData<"get_default_model">["model"]>,
+				thinkingLevel: stateResponse.data.thinkingLevel,
+			});
 		}
-		return stateResponse.data;
 	}
 
 	private async waitForPromptSettlement(proc: RpcProcess, observer: TurnEventObserver): Promise<void> {
@@ -980,7 +1039,7 @@ export class WsHandler {
 		this.publishEffectiveControlState(actor, stateResponse.data);
 	}
 
-	private publishEffectiveControlState(actor: SessionActor, rpcState: any): void {
+	private publishEffectiveControlState(actor: SessionActor, rpcState: RpcSessionState): void {
 		const session = actor.session;
 		if (!session) return;
 		const model = toCompactModelRef(rpcState?.model ?? {});
@@ -1120,17 +1179,27 @@ export class WsHandler {
 		this.pushSnapshotToSubscribers(sessionPath, json, hash);
 	}
 
+	private revisionForState(sessionPath: string, hash: string): number {
+		const current = this.sessionRevisions.get(sessionPath);
+		if (current?.hash === hash) return current.revision;
+		const revision = (current?.revision ?? 0) + 1;
+		this.sessionRevisions.set(sessionPath, { revision, hash });
+		return revision;
+	}
+
 	private pushSnapshotToSubscribers(sessionPath: string, json: string, hash: string) {
+		const revision = this.revisionForState(sessionPath, hash);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== WebSocket.OPEN) continue;
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
+				revision,
 				op: "full",
 				data: json,
 				hash,
-			}));
+			});
 			client.lastJson = json;
 			client.lastHash = hash;
 			client.lastVersion = 0;
@@ -1142,6 +1211,7 @@ export class WsHandler {
 	 * Uses the hash-verified diff protocol for efficient incremental sync.
 	 */
 	private pushUpdateToSubscribers(sessionPath: string, session: SessionJsonl) {
+		const revision = this.revisionForState(sessionPath, session.hash);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== WebSocket.OPEN) continue;
@@ -1149,11 +1219,12 @@ export class WsHandler {
 			const syncOp = session.computeSyncOp(client.lastJson, client.lastHash, client.lastVersion);
 			if (!syncOp) continue;
 
-			ws.send(JSON.stringify({
+			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
+				revision,
 				...syncOp,
-			}));
+			});
 
 			client.lastJson = session.json;
 			client.lastHash = session.hash;
@@ -1181,9 +1252,9 @@ export class WsHandler {
 		const ended = new Promise<void>((resolve) => { resolveEnded = resolve; });
 		const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
 
-		const eventHandler = (sourceProc: RpcProcess, data: Record<string, any>) => {
+		const eventHandler = (sourceProc: RpcProcess, data: RpcProcessEvent) => {
 			if (sourceProc !== proc || data.type === "extension_ui_request") return;
-			const replacementMessages = data.type === "auto_compaction_end" && data.result
+			const replacementMessages = data.type === "compaction_end" && data.result
 				? readSessionFromDisk(sessionPath).state.messages
 				: undefined;
 

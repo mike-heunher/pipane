@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
+import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,18 +34,38 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 
 			// Resolve requests synchronously: send() installs its pending request
 			// before writing to the socket, so arbitrary sleeps are unnecessary.
+			const newSessionPath = parsed.sessionPath === "__new__"
+				? "/tmp/sessions/new-session.jsonl"
+				: parsed.sessionPath;
 			if (parsed.type === "prompt" && parsed.sessionPath === "__new__") {
 				messageHandler({ data: JSON.stringify({
+					protocolVersion: WS_PROTOCOL_VERSION,
 					type: "session_attached",
-					sessionPath: "/tmp/sessions/new-session.jsonl",
+					sessionPath: newSessionPath,
 					cwd: "/tmp",
 				}) });
 			}
+			const responseData: Record<string, unknown> = (() => {
+				switch (parsed.type) {
+					case "prompt": return { newSessionPath };
+					case "fork_prompt": return { newSessionPath: "/tmp/sessions/fork.jsonl" };
+					case "hard_kill": return { killed: true };
+					case "get_available_models": return { models: [] };
+					case "get_default_model": return { model: null, thinkingLevel: "off" };
+					case "get_session_statuses": return { statuses: {} };
+					case "fork": return { text: "", cancelled: false, newSessionPath: null };
+					case "get_commands": return { commands: [] };
+					case "reload_processes": return { killed: 0, draining: 0 };
+					default: return {};
+				}
+			})();
 			messageHandler({ data: JSON.stringify({
+				protocolVersion: WS_PROTOCOL_VERSION,
 				type: "response",
 				id: parsed.id,
+				command: parsed.type,
 				success: true,
-				data: {},
+				data: responseData,
 			}) });
 		}),
 		close: vi.fn(),
@@ -66,7 +87,14 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 		}),
 	});
 
-	return { adapter, sent, mockWs, simulateServerMessage: (msg: any) => messageHandler?.({ data: JSON.stringify(msg) }) };
+	return {
+		adapter,
+		sent,
+		mockWs,
+		simulateServerMessage: (msg: any) => messageHandler?.({
+			data: JSON.stringify({ protocolVersion: WS_PROTOCOL_VERSION, ...msg }),
+		}),
+	};
 }
 
 /**
@@ -95,14 +123,17 @@ async function pushSessionState(
 		messages: [],
 		isStreaming: false,
 		pendingToolCalls: [],
+		toolCallTimings: {},
 		model: null,
 		thinkingLevel: "off",
 		steeringQueue: [],
 		...state,
 	});
 	await (adapter as any).applySessionSyncBatch([{
+		protocolVersion: WS_PROTOCOL_VERSION,
 		type: "session_sync",
 		sessionPath,
+		revision: 1,
 		op: "full",
 		data,
 		hash: await computeHash(data),
@@ -941,8 +972,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = createTestAdapter();
 			const a = adapter as any;
 
-			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{}", hash: "h1" });
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h1", hash: "h2" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 1, op: "full", data: "{}", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 2, op: "delta", patches: [], baseHash: "h1", hash: "h2" });
 
 			expect(a._pendingSessionSyncs.map((op: any) => op.op)).toEqual(["full", "delta"]);
 			expect(a._pendingSessionSyncs.map((op: any) => op.hash)).toEqual(["h1", "h2"]);
@@ -952,8 +983,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = createTestAdapter();
 			const a = adapter as any;
 
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "a" }], baseHash: "h0", hash: "h1" });
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "b" }], baseHash: "h1", hash: "h2" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 1, op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "a" }], baseHash: "h0", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 2, op: "delta", patches: [{ offset: 0, deleteCount: 0, insert: "b" }], baseHash: "h1", hash: "h2" });
 
 			expect(a._pendingSessionSyncs.map((op: any) => op.hash)).toEqual(["h1", "h2"]);
 		});
@@ -962,8 +993,8 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = createTestAdapter();
 			const a = adapter as any;
 
-			a.enqueueSessionSync({ type: "session_sync", op: "delta", patches: [], baseHash: "h0", hash: "h1" });
-			a.enqueueSessionSync({ type: "session_sync", op: "full", data: "{\"new\":true}", hash: "h2" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 1, op: "delta", patches: [], baseHash: "h0", hash: "h1" });
+			a.enqueueSessionSync({ type: "session_sync", revision: 2, op: "full", data: "{\"new\":true}", hash: "h2" });
 
 			expect(a._pendingSessionSyncs).toHaveLength(1);
 			expect(a._pendingSessionSyncs[0]).toMatchObject({ op: "full", hash: "h2" });
@@ -981,6 +1012,7 @@ describe("WsAgentAdapter prompt routing", () => {
 				messages: [{ role: "user", content: text }],
 				isStreaming: false,
 				pendingToolCalls: [],
+				toolCallTimings: {},
 				model: { provider: "openai", modelId: "gpt-5" },
 				thinkingLevel: "high",
 				steeringQueue: [],
@@ -989,9 +1021,9 @@ describe("WsAgentAdapter prompt routing", () => {
 			const hashes = await Promise.all(states.map(computeHash));
 			const scope = { __sessionPath: sessionPath, __sessionNonce: 4 };
 
-			a.enqueueSessionSync({ ...scope, op: "full", data: states[0], hash: hashes[0] });
-			a.enqueueSessionSync({ ...scope, op: "delta", patches: computePatches(states[0], states[1]), baseHash: hashes[0], hash: hashes[1] });
-			a.enqueueSessionSync({ ...scope, op: "delta", patches: computePatches(states[1], states[2]), baseHash: hashes[1], hash: hashes[2] });
+			a.enqueueSessionSync({ ...scope, revision: 1, op: "full", data: states[0], hash: hashes[0] });
+			a.enqueueSessionSync({ ...scope, revision: 2, op: "delta", patches: computePatches(states[0], states[1]), baseHash: hashes[0], hash: hashes[1] });
+			a.enqueueSessionSync({ ...scope, revision: 3, op: "delta", patches: computePatches(states[1], states[2]), baseHash: hashes[1], hash: hashes[2] });
 			await a.flushSessionSyncQueue();
 
 			expect(a._syncJson).toBe(states[2]);
@@ -1006,17 +1038,27 @@ describe("WsAgentAdapter prompt routing", () => {
 			const sessionPath = "/tmp/progressive.jsonl";
 			a._sessionPath = sessionPath;
 			a._sessionNonce = 5;
-			const first = JSON.stringify({ messages: [{ role: "user", content: "first" }] });
-			const second = JSON.stringify({ messages: [{ role: "user", content: "second" }] });
+			const makeState = (content: string) => JSON.stringify({
+				messages: [{ role: "user", content }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off",
+				steeringQueue: [],
+			});
+			const first = makeState("first");
+			const second = makeState("second");
 			const firstHash = await computeHash(first);
 			const secondHash = await computeHash(second);
 			const scope = { __sessionPath: sessionPath, __sessionNonce: 5 };
 			const nextFrame = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
 
-			a._pendingSessionSyncs = [{ ...scope, op: "full", data: first, hash: firstHash }];
+			a._pendingSessionSyncs = [{ ...scope, revision: 1, op: "full", data: first, hash: firstHash }];
 			const flushing = a.flushSessionSyncQueue();
 			a._pendingSessionSyncs.push({
 				...scope,
+				revision: 2,
 				op: "delta",
 				patches: computePatches(first, second),
 				baseHash: firstHash,
@@ -1034,13 +1076,22 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = createTestAdapter();
 			const a = adapter as any;
 			const sessionA = "/tmp/a.jsonl";
-			const stateA = JSON.stringify({ messages: [{ role: "user", content: "A" }] });
+			const stateA = JSON.stringify({
+				messages: [{ role: "user", content: "A" }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off",
+				steeringQueue: [],
+			});
 			const hashA = await computeHash(stateA);
 			a._sessionPath = sessionA;
 			a._sessionNonce = 10;
 			a._state.messages = [{ role: "user", content: "B" }];
 
 			const applying = a.applySessionSyncBatch([{
+				revision: 1,
 				op: "full",
 				data: stateA,
 				hash: hashA,
@@ -1063,17 +1114,43 @@ describe("WsAgentAdapter prompt routing", () => {
 			const { adapter } = createTestAdapter();
 			const reject = vi.fn();
 			const resolve = vi.fn();
-			(adapter as any).pendingRequests.set("req_x", { resolve, reject });
+			(adapter as any).pendingRequests.set("req_x", { command: "prompt", resolve, reject });
 
 			(adapter as any).handleMessage(JSON.stringify({
+				protocolVersion: WS_PROTOCOL_VERSION,
 				type: "response",
 				id: "req_x",
+				command: "prompt",
 				success: false,
+				code: "command_failed",
 				error: "Upstream provider is unavailable",
 			}));
 
 			expect(adapter.state.error).toBe("Upstream provider is unavailable");
 			expect(reject).toHaveBeenCalledTimes(1);
+		});
+
+		it("rejects a response correlated to the wrong command", () => {
+			const { adapter } = createTestAdapter();
+			const reject = vi.fn();
+			(adapter as any).pendingRequests.set("req_mismatch", {
+				command: "prompt",
+				resolve: vi.fn(),
+				reject,
+			});
+
+			(adapter as any).handleMessage(JSON.stringify({
+				protocolVersion: WS_PROTOCOL_VERSION,
+				type: "response",
+				id: "req_mismatch",
+				command: "steer",
+				success: true,
+				data: {},
+			}));
+
+			expect(reject).toHaveBeenCalledWith(expect.objectContaining({
+				message: "Mismatched response for prompt: received steer",
+			}));
 		});
 
 		it("reportError appends a visible assistant message", () => {
@@ -1100,7 +1177,7 @@ describe("WsAgentAdapter prompt routing", () => {
 						compactRequest = command;
 						return;
 					}
-					simulateServerMessage({ type: "response", id: command.id, success: true, data: {} });
+					simulateServerMessage({ type: "response", id: command.id, command: command.type, success: true, data: {} });
 				});
 				const settled = vi.fn();
 
@@ -1112,6 +1189,7 @@ describe("WsAgentAdapter prompt routing", () => {
 				simulateServerMessage({
 					type: "response",
 					id: compactRequest.id,
+					command: "compact",
 					success: true,
 					data: {},
 				});
@@ -1130,7 +1208,9 @@ describe("WsAgentAdapter prompt routing", () => {
 				simulateServerMessage({
 					type: "response",
 					id: command.id,
+					command: "compact",
 					success: false,
+					code: "command_failed",
 					error: "Compaction failed",
 				});
 			});

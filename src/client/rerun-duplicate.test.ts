@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { computeHash } from "../shared/jsonl-sync.js";
+import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -27,8 +28,10 @@ function createTestAdapter() {
 				setTimeout(() => {
 					messageHandler?.({
 						data: JSON.stringify({
+							protocolVersion: WS_PROTOCOL_VERSION,
 							type: "response",
 							id: parsed.id,
+							command: parsed.type,
 							success: true,
 							data: {},
 						}),
@@ -55,7 +58,7 @@ function createTestAdapter() {
 	};
 
 	const simulateServerMessage = (msg: any) => {
-		messageHandler?.({ data: JSON.stringify(msg) });
+		messageHandler?.({ data: JSON.stringify({ protocolVersion: WS_PROTOCOL_VERSION, ...msg }) });
 	};
 
 	return { adapter, sent, simulateServerMessage };
@@ -84,11 +87,21 @@ async function pushSessionSync(
 	simulateServerMessage: (msg: any) => void,
 	state: any,
 ) {
-	const json = JSON.stringify(state);
+	const json = JSON.stringify({
+		messages: [],
+		isStreaming: false,
+		pendingToolCalls: [],
+		toolCallTimings: {},
+		model: null,
+		thinkingLevel: "off",
+		steeringQueue: [],
+		...state,
+	});
 	const hash = await computeHash(json);
 	simulateServerMessage({
 		type: "session_sync",
 		sessionPath: SESSION_PATH,
+		revision: 1,
 		op: "full",
 		data: json,
 		hash,

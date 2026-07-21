@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import type { UpdateNotice, UpdateTarget } from "../src/shared/updates.js";
+import { encodeServerMessage, type ServerMessagePayload } from "../src/shared/ws-protocol.js";
 
 const CLIENT_DIST = path.resolve(import.meta.dirname, "../dist/client");
 
@@ -62,6 +63,7 @@ export class MockPipaneServer {
 	private readonly sessionStatuses: Record<string, "running" | "done">;
 	private updateNotices: UpdateNotice[];
 	private readonly updateRequests: UpdateTarget[] = [];
+	private readonly sessionRevisions = new Map<string, number>();
 	private client: WebSocket | null = null;
 
 	private constructor(
@@ -138,12 +140,12 @@ export class MockPipaneServer {
 
 	private handleConnection(ws: WebSocket): void {
 		this.client = ws;
-		ws.send(JSON.stringify({
+		this.sendTo(ws, {
 			type: "init",
 			sessionStatuses: this.sessionStatuses,
 			steeringQueues: {},
 			providerUsageStatuses: {},
-		}));
+		});
 		ws.on("message", (raw) => this.handleCommand(ws, raw.toString()));
 		ws.on("close", () => {
 			if (this.client === ws) this.client = null;
@@ -153,13 +155,13 @@ export class MockPipaneServer {
 	private handleCommand(ws: WebSocket, raw: string): void {
 		const command = JSON.parse(raw);
 		if (!command.id) return;
-		const respond = (data: any = {}) => ws.send(JSON.stringify({
+		const respond = (data: Record<string, unknown> = {}) => this.sendTo(ws, {
 			type: "response",
 			id: command.id,
 			command: command.type,
 			success: true,
 			data,
-		}));
+		} as ServerMessagePayload);
 
 		switch (command.type) {
 			case "get_default_model":
@@ -221,13 +223,16 @@ export class MockPipaneServer {
 		this.states.set(sessionPath, state);
 		if (!target || target.readyState !== WebSocket.OPEN) return;
 		const data = JSON.stringify(state);
-		target.send(JSON.stringify({
+		const revision = (this.sessionRevisions.get(sessionPath) ?? 0) + 1;
+		this.sessionRevisions.set(sessionPath, revision);
+		this.sendTo(target, {
 			type: "session_sync",
 			sessionPath,
+			revision,
 			op: "full",
 			data,
 			hash: hashState(data),
-		}));
+		});
 	}
 
 	sendSessionStatus(sessionPath: string, status: "running" | "done"): void {
@@ -235,10 +240,12 @@ export class MockPipaneServer {
 		this.send({ type: "session_status_change", sessionPath, status });
 	}
 
-	send(payload: any): void {
-		if (this.client?.readyState === WebSocket.OPEN) {
-			this.client.send(JSON.stringify(payload));
-		}
+	private sendTo(target: WebSocket, payload: ServerMessagePayload): void {
+		if (target.readyState === WebSocket.OPEN) target.send(encodeServerMessage(payload));
+	}
+
+	send(payload: ServerMessagePayload): void {
+		if (this.client) this.sendTo(this.client, payload);
 	}
 
 	async close(): Promise<void> {

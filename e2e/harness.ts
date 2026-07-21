@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createMockLlmServer, type MockLlmServer, type Scenario } from "./mock-llm-server.js";
+import { WS_PROTOCOL_VERSION } from "../src/shared/ws-protocol.js";
 
 export interface E2EHarness {
 	pipanePort: number;
@@ -143,7 +144,11 @@ async function warmUpPiProcess(port: number): Promise<void> {
 		const timeout = setTimeout(() => finish(new Error("Pi warm-up timed out")), 30_000);
 
 		ws.once("open", () => {
-			ws.send(JSON.stringify({ type: "get_default_model", id: "warmup_1" }));
+			ws.send(JSON.stringify({
+				protocolVersion: WS_PROTOCOL_VERSION,
+				type: "get_default_model",
+				id: "warmup_1",
+			}));
 		});
 		ws.on("message", (data) => {
 			try {

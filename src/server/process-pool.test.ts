@@ -13,6 +13,20 @@ function makeSpawnConfig(): SpawnConfig {
 	};
 }
 
+function rpcState() {
+	return {
+		thinkingLevel: "off" as const,
+		isStreaming: false,
+		isCompacting: false,
+		steeringMode: "one-at-a-time" as const,
+		followUpMode: "one-at-a-time" as const,
+		sessionId: "session-1",
+		autoCompactionEnabled: true,
+		messageCount: 0,
+		pendingMessageCount: 0,
+	};
+}
+
 /**
  * Create a pool and inject mock processes for testing pool logic
  * without actually spawning child processes.
@@ -40,10 +54,11 @@ function createPoolWithMocks(options?: { maxProcesses?: number }) {
 			id,
 			cwd,
 			process: process as any,
-			rl: {} as any,
+			stopReadingStdout: vi.fn(),
 			pendingRequests: new Map(),
 			requestId: 0,
 			lastResponseTime: Date.now(),
+			recentStderr: [],
 		} as RpcProcess;
 
 		let cwdPool = poolsMap.get(cwd);
@@ -79,7 +94,7 @@ describe("ProcessPool", () => {
 				id: 1,
 				cwd: "/project-a",
 				process: { exitCode: null } as any,
-				rl: {} as any,
+				stopReadingStdout: vi.fn(),
 				pendingRequests: new Map(),
 				requestId: 0,
 				lastResponseTime: Date.now(),
@@ -169,7 +184,7 @@ describe("ProcessPool", () => {
 			const { pool, injectProc } = createPoolWithMocks();
 			const proc = injectProc("/project-a", 1, false);
 
-			await expect(pool.sendRpc(proc, { type: "test" })).rejects.toThrow("RPC process is dead");
+			await expect(pool.sendRpc(proc, { type: "get_state" })).rejects.toThrow("RPC process is dead");
 		});
 
 		it("decommissions a leased process after an RPC timeout", async () => {
@@ -207,18 +222,31 @@ describe("ProcessPool", () => {
 				const pending = proc.pendingRequests.get(cmd.id);
 				if (pending) {
 					setTimeout(() => {
-						pending.resolve({ id: cmd.id, type: "response", success: true, data: { hello: "world" } });
+						pending.resolve({
+							id: cmd.id,
+							type: "response",
+							command: "get_state",
+							success: true,
+							data: rpcState(),
+						});
 					}, 0);
 				}
 			});
 
 			const result = await pool.sendRpc(proc, { type: "get_state" });
-			expect(result).toEqual({ id: expect.any(String), type: "response", success: true, data: { hello: "world" } });
+			expect(result).toMatchObject({
+				id: expect.any(String),
+				type: "response",
+				command: "get_state",
+				success: true,
+				data: { sessionId: "session-1" },
+			});
 		});
 	});
 
 	describe("process events", () => {
 		it("delivers non-response events before resolving the RPC response", async () => {
+			const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
 			const script = [
 				"let buffer = '';",
 				"process.stdin.setEncoding('utf8');",
@@ -228,8 +256,8 @@ describe("ProcessPool", () => {
 				"  if (newline < 0) return;",
 				"  const command = JSON.parse(buffer.slice(0, newline));",
 				"  console.log('not-json');",
-				"  console.log(JSON.stringify({ type: 'extension_ui_request', method: 'setStatus', statusKey: 'usage', statusText: '42%' }));",
-				"  console.log(JSON.stringify({ type: 'response', id: command.id, success: true, data: { ready: true } }));",
+				"  console.log(JSON.stringify({ type: 'extension_ui_request', id: 'status-1', method: 'setStatus', statusKey: 'usage', statusText: '42%' }));",
+				`  console.log(JSON.stringify({ type: 'response', id: command.id, command: 'get_state', success: true, data: ${JSON.stringify(rpcState())} }));`,
 				"});",
 			].join("\n");
 			const pool = new ProcessPool({ command: process.execPath, baseArgs: ["-e", script] }, {
@@ -242,15 +270,43 @@ describe("ProcessPool", () => {
 
 			try {
 				const response = await pool.sendRpc(proc, { type: "get_state" });
-				expect(response.data).toEqual({ ready: true });
+				expect(response.success && response.data.sessionId).toBe("session-1");
 				expect(listener).toHaveBeenCalledTimes(1);
 				expect(listener).toHaveBeenCalledWith(proc, expect.objectContaining({
 					type: "extension_ui_request",
 					statusKey: "usage",
 					statusText: "42%",
 				}));
+				expect(consoleWarn).toHaveBeenCalledWith(expect.stringContaining("ignored invalid RPC output"));
 			} finally {
 				unsubscribe();
+				proc.process.kill("SIGTERM");
+				consoleWarn.mockRestore();
+			}
+		});
+
+		it("rejects a response whose command does not match the request", async () => {
+			const script = [
+				"let buffer = '';",
+				"process.stdin.setEncoding('utf8');",
+				"process.stdin.on('data', chunk => {",
+				"  buffer += chunk;",
+				"  const newline = buffer.indexOf('\\n');",
+				"  if (newline < 0) return;",
+				"  const command = JSON.parse(buffer.slice(0, newline));",
+				"  console.log(JSON.stringify({ type: 'response', id: command.id, command: 'abort', success: true }));",
+				"});",
+			].join("\n");
+			const pool = new ProcessPool({ command: process.execPath, baseArgs: ["-e", script] }, {
+				maxProcesses: 1,
+				prewarmCount: 0,
+			});
+			const proc = pool.spawn(process.cwd());
+
+			try {
+				await expect(pool.sendRpc(proc, { type: "get_state" }))
+					.rejects.toThrow("Mismatched RPC response for get_state: received abort");
+			} finally {
 				proc.process.kill("SIGTERM");
 			}
 		});
@@ -286,12 +342,22 @@ describe("ProcessPool", () => {
 				const pending = proc.pendingRequests.get(cmd.id);
 				if (pending) {
 					setTimeout(() => {
-						pending.resolve({ id: cmd.id, type: "response", success: false, error: "model not found" });
+						pending.resolve({
+							id: cmd.id,
+							type: "response",
+							command: "set_model",
+							success: false,
+							error: "model not found",
+						});
 					}, 0);
 				}
 			});
 
-			await expect(pool.sendRpcChecked(proc, { type: "set_model" })).rejects.toThrow("model not found");
+			await expect(pool.sendRpcChecked(proc, {
+				type: "set_model",
+				provider: "missing",
+				modelId: "missing",
+			})).rejects.toThrow("model not found");
 		});
 	});
 

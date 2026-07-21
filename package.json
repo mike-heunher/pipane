@@ -33,6 +33,7 @@
 	"files": [
 		"dist/",
 		"bin/",
+		"docs/",
 		"extensions/",
 		"LICENSE",
 		"README.md",
