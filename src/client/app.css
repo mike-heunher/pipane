@@ -92,9 +92,9 @@ message-editor > div {
 	bottom: calc(100% + 0.45rem);
 	max-height: min(22rem, 48vh);
 	overflow-y: auto;
-	padding: 0.35rem;
+	padding: 0.16rem;
 	border: 1px solid var(--border, #d1d5db);
-	border-radius: 0.75rem;
+	border-radius: 0.5rem;
 	background: color-mix(in srgb, var(--background, #fff) 96%, var(--muted, #f3f4f6));
 	box-shadow: 0 14px 35px color-mix(in srgb, #000 18%, transparent);
 }
@@ -103,35 +103,54 @@ message-editor > div {
 	appearance: none;
 	display: flex;
 	align-items: center;
-	gap: 0.75rem;
+	gap: 0.35rem;
 	width: 100%;
-	min-height: 3.15rem;
-	padding: 0.48rem 0.65rem;
+	min-height: 1.8rem;
+	padding: 0.18rem 0.4rem;
 	border: 0;
-	border-radius: 0.5rem;
+	border-radius: 0.28rem;
 	background: transparent;
 	color: var(--foreground, #111);
-	font: inherit;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	text-align: left;
 	cursor: pointer;
 }
 
+.slash-command-option::before {
+	content: "·";
+	flex: 0 0 0.55rem;
+	color: var(--muted-foreground, #6b7280);
+	font-size: 0.72rem;
+	font-weight: 600;
+	text-align: center;
+}
+
 .slash-command-option.is-selected {
 	background: color-mix(in srgb, var(--accent, #e5e7eb) 82%, transparent);
+	box-shadow: inset 2px 0 var(--primary, #2563eb);
+}
+
+.slash-command-option.is-selected::before {
+	content: "›";
+	color: var(--primary, #2563eb);
 }
 
 .slash-command-copy {
-	display: flex;
+	display: grid;
 	flex: 1 1 auto;
+	grid-template-columns: minmax(7rem, 12.5rem) minmax(0, 1fr);
+	align-items: center;
+	gap: 0.5rem;
 	min-width: 0;
-	flex-direction: column;
-	gap: 0.1rem;
 }
 
 .slash-command-name {
-	font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	font-size: 0.82rem;
+	overflow: hidden;
+	font-size: 0.74rem;
 	font-weight: 600;
+	line-height: 1.15;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .slash-command-name > span,
@@ -142,25 +161,23 @@ message-editor > div {
 
 .slash-command-description {
 	overflow: hidden;
-	font-size: 0.74rem;
-	line-height: 1.25;
+	font-size: 0.66rem;
+	line-height: 1.15;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
 .slash-command-source {
-	flex: 0 0 auto;
-	padding: 0.12rem 0.42rem;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--muted, #f3f4f6) 78%, transparent);
+	flex: 0 0 3.7rem;
+	padding: 0;
 	color: var(--muted-foreground, #6b7280);
-	font-size: 0.64rem;
-	font-weight: 600;
-	letter-spacing: 0.02em;
+	font-size: 0.59rem;
+	font-weight: 500;
+	letter-spacing: 0.01em;
+	text-align: right;
 }
 
 .slash-command-source-builtin {
-	background: color-mix(in srgb, var(--primary, #2563eb) 12%, transparent);
 	color: var(--primary, #2563eb);
 }
 

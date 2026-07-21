@@ -330,8 +330,8 @@ export class MessageEditor extends LitElement {
 							@mouseenter=${() => { this.selectedSlashCommand = index; }}
 						>
 							<span class="slash-command-copy">
-								<span class="slash-command-name">/${command.name}${command.argumentHint ? html` <span>${command.argumentHint}</span>` : ""}</span>
-								<span class="slash-command-description">${command.description || "No help text available"}</span>
+								<span class="slash-command-name" title=${`/${command.name}${command.argumentHint ? ` ${command.argumentHint}` : ""}`}>/${command.name}${command.argumentHint ? html` <span>${command.argumentHint}</span>` : ""}</span>
+								<span class="slash-command-description" title=${command.description || "No help text available"}>${command.description || "No help text available"}</span>
 							</span>
 							<span class=${`slash-command-source slash-command-source-${command.source}`}>
 								${slashCommandSourceLabel(command.source)}
