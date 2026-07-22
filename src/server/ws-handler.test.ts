@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { SessionJsonl } from "./session-jsonl.js";
+import { readSessionFromDisk, SessionJsonl } from "./session-jsonl.js";
 import { SessionRegistry } from "./session-registry.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
@@ -76,11 +76,26 @@ function attachActor(registry: SessionRegistry, sessionPath: string, proc: any) 
 
 function makeWs() {
 	const sent: any[] = [];
+	const sendOptions: any[] = [];
+	const cancelTransfer = vi.fn();
 	return {
-		ws: { readyState: WebSocket.OPEN, send: (raw: string) => sent.push(JSON.parse(raw)) } as any,
+		ws: {
+			readyState: WebSocket.OPEN,
+			send: (raw: string, options?: unknown) => {
+				sent.push(JSON.parse(raw));
+				sendOptions.push(options);
+			},
+			cancelTransfer,
+		} as any,
 		sent,
+		sendOptions,
+		cancelTransfer,
 	};
 }
+
+afterEach(() => {
+	vi.useRealTimers();
+});
 
 describe("WsHandler protocol boundary", () => {
 	it("accepts an already-authenticated carrier without an HTTP request", async () => {
@@ -137,9 +152,9 @@ describe("WsHandler protocol boundary", () => {
 		]));
 	});
 
-	it("publishes monotonic revisions for changed session snapshots", () => {
+	it("publishes monotonic delta revisions and suppresses unchanged snapshots", () => {
 		const { handler } = makeHandler();
-		const { ws, sent } = makeWs();
+		const { ws, sent, sendOptions } = makeWs();
 		const sessionPath = "/tmp/revision.jsonl";
 		handler.clients.set(ws, {
 			subscribedSession: sessionPath,
@@ -148,12 +163,76 @@ describe("WsHandler protocol boundary", () => {
 			lastHash: "",
 		});
 
-		handler.pushSnapshotToSubscribers(sessionPath, "one", "hash-one");
-		handler.pushSnapshotToSubscribers(sessionPath, "two", "hash-two");
-		handler.pushSnapshotToSubscribers(sessionPath, "two", "hash-two");
+		const initial = "a".repeat(1_000);
+		const updated = `${initial}b`;
+		handler.pushSnapshotToSubscribers(sessionPath, initial, "hash-one");
+		handler.pushSnapshotToSubscribers(sessionPath, updated, "hash-two");
+		handler.pushSnapshotToSubscribers(sessionPath, updated, "hash-two");
 
-		expect(sent.filter((message) => message.type === "session_sync").map((message) => message.revision))
-			.toEqual([1, 2, 2]);
+		const syncs = sent.filter((message) => message.type === "session_sync");
+		expect(syncs.map((message) => message.revision)).toEqual([1, 2]);
+		expect(syncs.map((message) => message.op)).toEqual(["full", "delta"]);
+		expect(sendOptions).toEqual([
+			{ priority: "bulk", transferKey: "active-session-sync" },
+			{ priority: "bulk", transferKey: "active-session-sync" },
+		]);
+	});
+
+	it("coalesces detached file bursts and sends only the resulting delta", async () => {
+		vi.useFakeTimers();
+		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-detached-sync-"));
+		try {
+			const sessionPath = path.join(tmpDir, "session.jsonl");
+			const root = {
+				type: "session",
+				id: "root",
+				cwd: tmpDir,
+				timestamp: new Date(0).toISOString(),
+			};
+			const first = {
+				type: "message",
+				id: "first",
+				parentId: "root",
+				message: { role: "user", content: "first", timestamp: 1 },
+				timestamp: new Date(1).toISOString(),
+			};
+			const second = {
+				type: "message",
+				id: "second",
+				parentId: "first",
+				message: { role: "assistant", content: [{ type: "text", text: "second" }], timestamp: 2 },
+				timestamp: new Date(2).toISOString(),
+			};
+			writeFileSync(sessionPath, `${JSON.stringify(root)}\n${JSON.stringify(first)}\n`);
+			const baseline = readSessionFromDisk(sessionPath);
+			const { handler } = makeHandler();
+			const { ws, sent } = makeWs();
+			handler.clients.set(ws, {
+				subscribedSession: sessionPath,
+				lastVersion: 0,
+				lastJson: baseline.json,
+				lastHash: baseline.hash,
+			});
+			handler.subscribedFileSizes.set(sessionPath, statSync(sessionPath).size);
+
+			writeFileSync(sessionPath, `${JSON.stringify(root)}\n${JSON.stringify(first)}\n${JSON.stringify(second)}\n`);
+			handler.notifySessionFileChanged(sessionPath);
+			await vi.advanceTimersByTimeAsync(50);
+			handler.notifySessionFileChanged(sessionPath);
+			await vi.advanceTimersByTimeAsync(74);
+			expect(sent).toHaveLength(0);
+			await vi.advanceTimersByTimeAsync(1);
+
+			expect(sent).toHaveLength(1);
+			expect(sent[0]).toMatchObject({
+				type: "session_sync",
+				sessionPath,
+				op: "delta",
+				baseHash: baseline.hash,
+			});
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 
 	it("rejects invalid fields before command dispatch", async () => {
@@ -541,7 +620,7 @@ describe("WsHandler session path confinement", () => {
 			const pendingPath = path.join(fixture.sessionsRoot, "pending.jsonl");
 			const { handler, registry } = makeHandler({ sessionPaths: fixture.sessionPaths });
 			attachActor(registry, pendingPath, { id: 42 });
-			const { ws, sent } = makeWs();
+			const { ws, sent, sendOptions, cancelTransfer } = makeWs();
 			handler.clients.set(ws, {
 				subscribedSession: null,
 				lastVersion: 0,
@@ -562,6 +641,11 @@ describe("WsHandler session path confinement", () => {
 				sessionPath: pendingPath,
 				op: "full",
 			}));
+			expect(cancelTransfer).toHaveBeenCalledWith("active-session-sync");
+			const syncIndex = sent.findIndex((message) => message.type === "session_sync");
+			const responseIndex = sent.findIndex((message) => message.type === "response");
+			expect(sendOptions[syncIndex]).toEqual({ priority: "bulk", transferKey: "active-session-sync" });
+			expect(sendOptions[responseIndex]).toEqual({ priority: "control" });
 		} finally {
 			rmSync(fixture.tmpDir, { recursive: true, force: true });
 		}

@@ -89,7 +89,9 @@ The answer-side implementation accepts only a reliable ordered DataChannel with 
 
 Authenticated DataChannels carry the existing versioned v1 application frames through the same server connection boundary as local WebSockets. A frame router keeps those application frames isolated from semantic v2 responses on the same ordered channel. Revocation closes active rendezvous routes and matching backend peers, prevents new ticket issuance, and is retained centrally so an offline backend clears stale local ownership when it next registers.
 
-After the unfragmented authentication exchange, the carrier transparently splits logical frames larger than 12,000 UTF-8 bytes into ordered base64 chunk envelopes no larger than 16 KiB. Browser and backend reassemble at most 64 MiB per logical frame with bounded pending-frame and outgoing-queue memory. Application v1 and semantic v2 decoders therefore continue to receive exactly one complete JSON frame regardless of the negotiated SCTP message-size limit.
+After the unfragmented authentication exchange, the carrier transparently splits logical frames larger than 12,000 UTF-8 bytes into ordered base64 chunk envelopes no larger than 16 KiB. The same transparent envelopes are used for large server-to-browser local WebSocket frames. Browser and backend reassemble at most 64 MiB per logical frame with bounded pending-frame and outgoing-queue memory. Application v1 and semantic v2 decoders therefore continue to receive exactly one complete JSON frame regardless of the negotiated SCTP message-size limit.
+
+Server carriers schedule control and bulk lanes independently, so responses, status, steering, and abort traffic can overtake queued session-snapshot chunks. Selecting another session cancels the unsent portion of the stale snapshot with a reserved carrier envelope before the replacement begins. Detached JSONL watcher bursts are coalesced per session and hash-chained against each client's last state, producing a delta when it is smaller than a full snapshot and suppressing unchanged updates.
 
 ### Semantic backend protocol v2
 

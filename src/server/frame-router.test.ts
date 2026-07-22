@@ -9,7 +9,9 @@ import { routeFrameConnection } from "./frame-router.js";
 class FakeConnection extends EventEmitter implements ServerFrameConnection {
 	readyState = FRAME_CONNECTION_OPEN;
 	sent: string[] = [];
+	cancelled: string[] = [];
 	send(frame: string): void { this.sent.push(frame); }
+	cancelTransfer(transferKey: string): void { this.cancelled.push(transferKey); }
 	close(): void { this.emit("close"); }
 }
 
@@ -30,11 +32,13 @@ describe("routeFrameConnection", () => {
 		source.emit("message", v1);
 		source.emit("message", v2);
 		routes.semantic.send("response");
+		routes.application.cancelTransfer?.("session");
 		source.emit("close");
 
 		expect(application).toEqual([v1]);
 		expect(semantic).toEqual([v2]);
 		expect(source.sent).toEqual(["response"]);
+		expect(source.cancelled).toEqual(["session"]);
 		expect(closes).toBe(2);
 	});
 });

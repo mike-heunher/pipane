@@ -4,6 +4,7 @@ import {
 	DataChannelFrameDecoder,
 	MAX_DATA_CHANNEL_MESSAGE_BYTES,
 	encodeDataChannelFrame,
+	encodeDataChannelFrameCancellation,
 } from "./data-channel-framing.js";
 
 const byteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
@@ -24,6 +25,17 @@ describe("DataChannel carrier framing", () => {
 		const decoder = new DataChannelFrameDecoder();
 		for (const message of messages.slice(0, -1)) expect(decoder.accept(message)).toBeUndefined();
 		expect(decoder.accept(messages.at(-1)!)).toBe(frame);
+	});
+
+	it("drops a cancelled partial frame and accepts a later logical frame", () => {
+		const decoder = new DataChannelFrameDecoder();
+		const abandoned = encodeDataChannelFrame("a".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "abandoned");
+		expect(decoder.accept(abandoned[0])).toBeUndefined();
+		expect(decoder.accept(encodeDataChannelFrameCancellation("abandoned"))).toBeUndefined();
+		expect(decoder.accept("control-frame")).toBe("control-frame");
+		const replacement = encodeDataChannelFrame("b".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "replacement");
+		expect(decoder.accept(replacement[0])).toBeUndefined();
+		expect(decoder.accept(replacement[1])).toBe("b".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1));
 	});
 
 	it("keeps exact payload boundaries below the physical message limit", () => {

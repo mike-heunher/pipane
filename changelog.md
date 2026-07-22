@@ -1,5 +1,7 @@
 # Unreleased
 
+- Coalesce detached-session changes into deltas and prioritize controls while cancelling stale bulk transfers on WebSocket and WebRTC carriers.
+
 # 0.1.9 - 2026-07-22
 
 - Register new backends with pipane.dev by default and identify them by their short hostname when no name is configured.

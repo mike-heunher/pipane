@@ -385,24 +385,25 @@ function startSessionsWatcher(): FSWatcher | null {
 		return null;
 	}
 
-	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-	let lastChangedFile: string | null = null;
+	const sessionListTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	const watcher = watch(SESSIONS_DIR, { recursive: true }, (_event, filename) => {
 		if (!filename || !filename.endsWith(".jsonl")) return;
+		const fullPath = path.join(SESSIONS_DIR, filename);
 
-		lastChangedFile = filename;
+		// WsHandler coalesces detached state per file on a short trailing edge.
+		wsHandler.notifySessionFileChanged(fullPath);
 
-		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => {
-			const fullPath = path.join(SESSIONS_DIR, lastChangedFile!);
-
-			// Re-read detached session state and push it to active subscribers.
-			wsHandler.notifySessionFileChanged(fullPath);
-
-			// Notify every local WebSocket and authenticated DataChannel client.
+		// Sidebar notifications remain less frequent, but no longer let a change
+		// in one session overwrite another session's pending watcher event.
+		const pending = sessionListTimers.get(fullPath);
+		if (pending) clearTimeout(pending);
+		const timer = setTimeout(() => {
+			sessionListTimers.delete(fullPath);
 			wsHandler.notifySessionsChanged(fullPath);
 		}, 300);
+		timer.unref?.();
+		sessionListTimers.set(fullPath, timer);
 	});
 
 	console.log(`Watching sessions directory: ${SESSIONS_DIR}`);

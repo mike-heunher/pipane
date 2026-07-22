@@ -1,5 +1,5 @@
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
-import type { ServerFrameConnection } from "./frame-connection.js";
+import type { FrameSendOptions, ServerFrameConnection } from "./frame-connection.js";
 
 class RoutedFrameConnection implements ServerFrameConnection {
 	private readonly messageListeners = new Set<(frame: { toString(): string }) => void>();
@@ -8,7 +8,8 @@ class RoutedFrameConnection implements ServerFrameConnection {
 	constructor(private readonly connection: ServerFrameConnection) {}
 
 	get readyState(): number { return this.connection.readyState; }
-	send(frame: string): unknown { return this.connection.send(frame); }
+	send(frame: string, options?: FrameSendOptions): unknown { return this.connection.send(frame, options); }
+	cancelTransfer(transferKey: string): void { this.connection.cancelTransfer?.(transferKey); }
 	close(code?: number, reason?: string): unknown { return this.connection.close(code, reason); }
 
 	on(event: "message", listener: (frame: { toString(): string }) => void): this;

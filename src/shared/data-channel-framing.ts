@@ -1,5 +1,7 @@
 const CHUNK_MARKER = 1 as const;
+const CANCEL_MARKER = 1 as const;
 const CHUNK_PREFIX = `{"__pipaneDataChannelChunk":${CHUNK_MARKER},`;
+const CANCEL_PREFIX = `{"__pipaneDataChannelCancel":${CANCEL_MARKER},`;
 
 /** Keep physical messages below conservative browser/libdatachannel SCTP limits. */
 export const DATA_CHANNEL_CHUNK_PAYLOAD_BYTES = 12_000;
@@ -16,6 +18,11 @@ interface DataChannelChunk {
 	index: number;
 	total: number;
 	data: string;
+}
+
+interface DataChannelCancel {
+	__pipaneDataChannelCancel: typeof CANCEL_MARKER;
+	id: string;
 }
 
 interface PendingFrame {
@@ -58,13 +65,23 @@ export function encodeDataChannelFrame(frame: string, id: string): string[] {
 	return messages;
 }
 
+/** Cancel one incomplete logical frame without exposing a carrier envelope upstream. */
+export function encodeDataChannelFrameCancellation(id: string): string {
+	if (!CHUNK_ID_PATTERN.test(id)) throw new Error("DataChannel frame id is invalid");
+	return JSON.stringify({ __pipaneDataChannelCancel: CANCEL_MARKER, id } satisfies DataChannelCancel);
+}
+
 /** Reassemble carrier chunks while passing ordinary application frames through unchanged. */
 export class DataChannelFrameDecoder {
 	private readonly pending = new Map<string, PendingFrame>();
 
 	accept(message: string): string | undefined {
-		if (!message.startsWith(CHUNK_PREFIX)) return message;
+		if (!message.startsWith(CHUNK_PREFIX) && !message.startsWith(CANCEL_PREFIX)) return message;
 		try {
+			if (message.startsWith(CANCEL_PREFIX)) {
+				this.pending.delete(parseCancel(message).id);
+				return undefined;
+			}
 			const chunk = parseChunk(message);
 			let pending = this.pending.get(chunk.id);
 			if (!pending) {
@@ -104,6 +121,24 @@ export class DataChannelFrameDecoder {
 	reset(): void {
 		this.pending.clear();
 	}
+}
+
+function parseCancel(message: string): DataChannelCancel {
+	let value: unknown;
+	try {
+		value = JSON.parse(message);
+	} catch {
+		throw new Error("DataChannel cancellation is not valid JSON");
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error("DataChannel cancellation must be an object");
+	}
+	const cancellation = value as Record<string, unknown>;
+	if (cancellation.__pipaneDataChannelCancel !== CANCEL_MARKER
+		|| typeof cancellation.id !== "string" || !CHUNK_ID_PATTERN.test(cancellation.id)) {
+		throw new Error("DataChannel cancellation envelope is invalid");
+	}
+	return cancellation as unknown as DataChannelCancel;
 }
 
 function parseChunk(message: string): DataChannelChunk {

@@ -1,4 +1,5 @@
 import type { FrameTransport, FrameTransportConnectionEvent } from "./frame-transport.js";
+import { DataChannelFrameDecoder } from "../shared/data-channel-framing.js";
 
 const SOCKET_OPEN = 1;
 const MAX_RECONNECT_DELAY_MS = 10_000;
@@ -24,6 +25,7 @@ export class WebSocketFrameTransport implements FrameTransport {
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private manuallyClosed = false;
+	private readonly decoder = new DataChannelFrameDecoder();
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
 	private readonly createWebSocket: (endpoint: string) => WebSocketLike;
@@ -79,13 +81,19 @@ export class WebSocketFrameTransport implements FrameTransport {
 			this.cancelSchedule(this.reconnectTimer);
 			this.reconnectTimer = undefined;
 		}
+		this.decoder.reset();
 		this.socket?.close(code, reason);
 	}
 
 	private attachFrameHandler(socket: WebSocketLike): void {
 		socket.onmessage = (event) => {
-			const frame = String(event.data);
-			for (const listener of this.frameListeners) listener(frame);
+			try {
+				const frame = this.decoder.accept(String(event.data));
+				if (frame === undefined) return;
+				for (const listener of this.frameListeners) listener(frame);
+			} catch {
+				socket.close(1002, "Invalid carrier frame");
+			}
 		};
 	}
 
@@ -123,6 +131,7 @@ export class WebSocketFrameTransport implements FrameTransport {
 
 			socket.onclose = () => {
 				if (this.socket === socket) this.socket = null;
+				this.decoder.reset();
 				if (!settled) {
 					settled = true;
 					reject(new Error("WebSocket closed before connecting"));

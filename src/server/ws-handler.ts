@@ -11,7 +11,11 @@
 
 import type { WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
-import { FRAME_CONNECTION_OPEN, type ServerFrameConnection } from "./frame-connection.js";
+import {
+	FRAME_CONNECTION_OPEN,
+	WebSocketFrameConnection,
+	type ServerFrameConnection,
+} from "./frame-connection.js";
 
 import { copyFile } from "node:fs/promises";
 import { constants as fsConstants, existsSync } from "node:fs";
@@ -34,6 +38,7 @@ import {
 import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
+import { computeSyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import {
 	assertNever,
@@ -70,6 +75,9 @@ type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: 
 type ControlCommand = CommandOf<"prompt"> | CommandOf<"fork_prompt">;
 type ExtensionStatusPayload = Omit<ExtensionStatusMessage, "protocolVersion">;
 type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
+
+const DETACHED_SYNC_COALESCE_MS = 75;
+const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
 
 interface ClientState {
 	subscribedSession: string | null;
@@ -121,6 +129,8 @@ export class WsHandler {
 	private subscribedFileSizes = new Map<string, number>();
 	/** Last revision/hash published for each authoritative session state. */
 	private sessionRevisions = new Map<string, { revision: number; hash: string }>();
+	/** Per-session trailing-edge disk refreshes for detached JSONL bursts. */
+	private pendingDetachedSyncs = new Map<string, ReturnType<typeof setTimeout>>();
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -265,29 +275,33 @@ export class WsHandler {
 
 	/**
 	 * Called by the file watcher when a JSONL file changes on disk.
-	 * For detached sessions with subscribers, re-reads from disk and pushes a snapshot.
-	 * Ignores attached sessions (their state comes from streaming events).
+	 * Detached writes are coalesced per session so a burst is read, diffed, and
+	 * published once at its trailing edge. Attached actor events remain authoritative.
 	 */
 	notifySessionFileChanged(sessionPath: string): void {
-		// If the session is attached, ignore — streaming events are authoritative
-		if (this.registry.find(sessionPath)?.isAttached) return;
+		if (this.registry.find(sessionPath)?.isAttached || !this.hasSubscribers(sessionPath)) return;
+		const pending = this.pendingDetachedSyncs.get(sessionPath);
+		if (pending) clearTimeout(pending);
+		const timer = setTimeout(() => {
+			this.pendingDetachedSyncs.delete(sessionPath);
+			this.flushDetachedSessionSync(sessionPath);
+		}, DETACHED_SYNC_COALESCE_MS);
+		timer.unref?.();
+		this.pendingDetachedSyncs.set(sessionPath, timer);
+	}
 
-		// Check if any client is subscribed to this session
-		let hasSubscribers = false;
-		for (const [, client] of this.clients) {
-			if (client.subscribedSession === sessionPath) {
-				hasSubscribers = true;
-				break;
-			}
+	private hasSubscribers(sessionPath: string): boolean {
+		for (const client of this.clients.values()) {
+			if (client.subscribedSession === sessionPath) return true;
 		}
-		if (!hasSubscribers) return;
+		return false;
+	}
 
-		// Check if the file actually changed
+	private flushDetachedSessionSync(sessionPath: string): void {
+		if (this.registry.find(sessionPath)?.isAttached || !this.hasSubscribers(sessionPath)) return;
 		const oldSize = this.subscribedFileSizes.get(sessionPath) ?? 0;
 		const newSize = getSessionFileSize(sessionPath);
 		if (newSize === oldSize) return;
-
-		// File changed — read from disk and push snapshot to subscribers
 		this.subscribedFileSizes.set(sessionPath, newSize);
 		const { json, hash } = readSessionFromDisk(sessionPath);
 		this.pushSnapshotToSubscribers(sessionPath, json, hash);
@@ -325,7 +339,7 @@ export class WsHandler {
 				ws.close(1008, "Unauthorized");
 				return;
 			}
-			this.acceptConnection(ws);
+			this.acceptConnection(new WebSocketFrameConnection(ws));
 		});
 	}
 
@@ -367,7 +381,10 @@ export class WsHandler {
 	}
 
 	private sendMessage(ws: ServerFrameConnection, payload: ServerMessagePayload): void {
-		if (ws.readyState === FRAME_CONNECTION_OPEN) ws.send(encodeServerMessage(payload));
+		if (ws.readyState !== FRAME_CONNECTION_OPEN) return;
+		ws.send(encodeServerMessage(payload), payload.type === "session_sync"
+			? { priority: "bulk", transferKey: SESSION_SYNC_TRANSFER_KEY }
+			: { priority: "control" });
 	}
 
 	private sendSuccess<Type extends ClientCommandType>(
@@ -534,6 +551,7 @@ export class WsHandler {
 		const requestedPath = command.sessionPath;
 
 		if (!requestedPath) {
+			ws.cancelTransfer?.(SESSION_SYNC_TRANSFER_KEY);
 			client.subscribedSession = null;
 			client.lastVersion = 0;
 			client.lastJson = "";
@@ -553,7 +571,13 @@ export class WsHandler {
 			if (!this.registry.find(pendingPath)?.isAttached) throw error;
 			sessionPath = pendingPath;
 		}
+		// A newly selected session makes every queued chunk from the previous
+		// snapshot stale. The carrier emits a cancellation for a partial frame.
+		ws.cancelTransfer?.(SESSION_SYNC_TRANSFER_KEY);
 		client.subscribedSession = sessionPath;
+		client.lastVersion = 0;
+		client.lastJson = "";
+		client.lastHash = "";
 
 		// If the session is attached, send from its actor-owned in-memory state
 		const attached = this.registry.find(sessionPath)?.session;
@@ -1233,15 +1257,14 @@ export class WsHandler {
 	private pushSnapshotToSubscribers(sessionPath: string, json: string, hash: string) {
 		const revision = this.revisionForState(sessionPath, hash);
 		for (const [ws, client] of this.clients) {
-			if (client.subscribedSession !== sessionPath) continue;
-			if (ws.readyState !== FRAME_CONNECTION_OPEN) continue;
+			if (client.subscribedSession !== sessionPath || ws.readyState !== FRAME_CONNECTION_OPEN) continue;
+			if (client.lastHash === hash) continue;
+			const sync = computeSyncOp(client.lastJson, json, client.lastHash, hash);
 			this.sendMessage(ws, {
 				type: "session_sync",
 				sessionPath,
 				revision,
-				op: "full",
-				data: json,
-				hash,
+				...sync,
 			});
 			client.lastJson = json;
 			client.lastHash = hash;

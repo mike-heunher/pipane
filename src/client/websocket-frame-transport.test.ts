@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	DATA_CHANNEL_CHUNK_PAYLOAD_BYTES,
+	encodeDataChannelFrame,
+	encodeDataChannelFrameCancellation,
+} from "../shared/data-channel-framing.js";
 import { WebSocketFrameTransport, type WebSocketLike } from "./websocket-frame-transport.js";
 
 class FakeSocket {
@@ -68,6 +73,25 @@ describe("WebSocketFrameTransport", () => {
 		expect(sockets[0].sent).toEqual(["request"]);
 		expect(frames).toEqual(["response"]);
 		expect(connections).toEqual([{ connected: true, reconnected: false }]);
+	});
+
+	it("reassembles large frames and drops cancelled stale transfers", async () => {
+		const { sockets, createWebSocket } = socketFactory();
+		const transport = new WebSocketFrameTransport({ createWebSocket });
+		const frames: string[] = [];
+		transport.onFrame((frame) => frames.push(frame));
+		const connecting = transport.connect("wss://example.test/ws");
+		sockets[0].open();
+		await connecting;
+
+		const stale = encodeDataChannelFrame("s".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "stale");
+		sockets[0].receive(stale[0]);
+		sockets[0].receive(encodeDataChannelFrameCancellation("stale"));
+		sockets[0].receive("control");
+		const replacementText = "r".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1);
+		for (const chunk of encodeDataChannelFrame(replacementText, "replacement")) sockets[0].receive(chunk);
+
+		expect(frames).toEqual(["control", replacementText]);
 	});
 
 	it("reconnects with backoff and marks the recovered connection", async () => {
