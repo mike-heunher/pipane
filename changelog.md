@@ -1,5 +1,6 @@
 # Unreleased
 
+- Hide pipane self-update notices when running a development commit while preserving Pi and package updates.
 - Let users dismiss Pi, pipane, and managed package update notices for 24 hours.
 
 # 0.1.7 - 2026-07-22

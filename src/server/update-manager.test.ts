@@ -21,7 +21,11 @@ function makeDependencies(overrides: Partial<UpdateManagerDependencies> = {}): U
 	};
 }
 
-function makeManager(dependencies: UpdateManagerDependencies, onPiRuntimeChanged = vi.fn()) {
+function makeManager(
+	dependencies: UpdateManagerDependencies,
+	onPiRuntimeChanged = vi.fn(),
+	options: { skipPipaneCheck?: boolean } = {},
+) {
 	return {
 		manager: new UpdateManager({
 			pipaneVersion: "1.1.0",
@@ -30,6 +34,7 @@ function makeManager(dependencies: UpdateManagerDependencies, onPiRuntimeChanged
 			cwd: "/srv/project",
 			onPiRuntimeChanged,
 			dependencies,
+			...options,
 		}),
 		onPiRuntimeChanged,
 	};
@@ -56,6 +61,17 @@ describe("UpdateManager", () => {
 		// Callers cannot mutate the manager's cached snapshot.
 		snapshot.notices.length = 0;
 		expect(manager.currentSnapshot.notices).toHaveLength(3);
+	});
+
+	it("hides only the pipane update for development commits", async () => {
+		const dependencies = makeDependencies();
+		const { manager } = makeManager(dependencies, vi.fn(), { skipPipaneCheck: true });
+
+		expect((await manager.check()).notices).toEqual([
+			{ target: "pi", currentVersion: "0.80.0", latestVersion: "0.81.0" },
+			{ target: "extensions", packages: ["npm:alpha", "npm:zeta"] },
+		]);
+		expect(dependencies.fetchLatestVersion).not.toHaveBeenCalled();
 	});
 
 	it("runs each update with fixed arguments and restarts Pi workers when needed", async () => {

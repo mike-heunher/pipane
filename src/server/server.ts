@@ -34,6 +34,7 @@ import { WsHandler } from "./ws-handler.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 import { UpdateManager } from "./update-manager.js";
+import { isDevelopmentCommit } from "./build-info.js";
 import { registerUpdateApi } from "./update-api.js";
 import { SessionPathGuard } from "./session-path.js";
 import { AuthGuard } from "./auth-guard.js";
@@ -91,6 +92,8 @@ const PKG_VERSION: string = (() => {
 	}
 })();
 const PKG_NAME = "pipane";
+const IS_DEVELOPMENT_COMMIT = process.env.NODE_ENV !== "production"
+	|| isDevelopmentCommit(path.resolve(path.dirname(PKG_JSON_PATH), "dist/build-info.json"), PKG_VERSION);
 
 async function startRendezvousRegistration(): Promise<void> {
 	if (!RENDEZVOUS_URL) return;
@@ -288,6 +291,7 @@ const updateManager = new UpdateManager({
 	pipaneVersion: PKG_VERSION,
 	pipanePackageName: PKG_NAME,
 	piLaunch: PI_LAUNCH,
+	skipPipaneCheck: IS_DEVELOPMENT_COMMIT,
 	cwd: PI_CWD,
 	onPiRuntimeChanged: async () => {
 		pool.decommissionAll();

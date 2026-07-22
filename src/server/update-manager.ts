@@ -50,6 +50,7 @@ export interface UpdateManagerOptions {
 	cwd: string;
 	onPiRuntimeChanged?: () => void | Promise<void>;
 	skipChecks?: boolean;
+	skipPipaneCheck?: boolean;
 	dependencies?: Partial<UpdateManagerDependencies>;
 }
 
@@ -173,7 +174,9 @@ export class UpdateManager {
 			return this.snapshot;
 		}
 
-		const pipaneCheck = this.checkPipaneUpdate();
+		const pipaneCheck = this.options.skipPipaneCheck
+			? Promise.resolve<UpdateNotice | null>(null)
+			: this.checkPipaneUpdate();
 		const piCheck = process.env.PI_SKIP_VERSION_CHECK
 			? Promise.resolve<UpdateNotice | null>(null)
 			: this.checkPiUpdate();
