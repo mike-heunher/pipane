@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.7 - 2026-07-22
+
 - Allow resizing the linked file preview pane without iframe content interrupting the drag.
 - Render LaTeX in Markdown file previews and match previews to the active application theme.
 - Restore each conversation's open file preview when switching between sessions.
