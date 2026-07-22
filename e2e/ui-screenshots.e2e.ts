@@ -135,9 +135,24 @@ const toolMessages = [
 	},
 	{
 		role: "assistant",
+		content: [
+			{ type: "text", text: "I'll inspect the ingestion test with an extension tool." },
+			{ type: "toolCall", id: "t7", name: "hypa_read", arguments: {
+				path: "tests/test_tool_ingestion.py", offset: 1, limit: 180, maxTokens: 10_000,
+			} },
+		],
+		timestamp: 1013,
+		stopReason: "tool_use",
+	},
+	{
+		role: "toolResult", toolCallId: "t7", toolName: "hypa_read", isError: false,
+		content: [{ type: "text", text: "def test_tool_ingestion():\n    assert ingest_tool_call() == expected" }], timestamp: 1014,
+	},
+	{
+		role: "assistant",
 		content: [{ type: "text", text: "Done." }],
 		usage: usage(3600, 100, 0.02, 152_000),
-		timestamp: 1013,
+		timestamp: 1015,
 		stopReason: "end_turn",
 	},
 ];
@@ -149,6 +164,7 @@ const completedToolCallTimings = {
 	t4: { startedAt: 40_000, completedAt: 63_400 },
 	t5: { startedAt: 70_000, completedAt: 72_180 },
 	t6: { startedAt: 80_000, completedAt: 80_640 },
+	t7: { startedAt: 90_000, completedAt: 91_420 },
 };
 
 function createMockServer(showTokenUsage = true): Promise<MockPipaneServer> {
@@ -268,8 +284,8 @@ test.describe("UI behavior and visual goldens", () => {
 		await captureAndCompare(page, "tool-renderers-full.png");
 
 		const tools = page.locator("tool-message");
-		await expect(tools).toHaveCount(6);
-		const names = ["tool-read.png", "tool-edit.png", "tool-write.png", "tool-bash-success.png", "tool-bash-error.png", "tool-canvas.png"];
+		await expect(tools).toHaveCount(7);
+		const names = ["tool-read.png", "tool-edit.png", "tool-write.png", "tool-bash-success.png", "tool-bash-error.png", "tool-canvas.png", "tool-generic.png"];
 		for (let i = 0; i < names.length; i++) {
 			const tool = tools.nth(i);
 			await tool.scrollIntoViewIfNeeded();
@@ -283,7 +299,7 @@ test.describe("UI behavior and visual goldens", () => {
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		// The page auto-loads the latest session, which opens its canvas. Wait for
 		// that authoritative content before closing the panel for a stable width.
-		await expect(page.locator("tool-message")).toHaveCount(6);
+		await expect(page.locator("tool-message")).toHaveCount(7);
 		const canvasCloseBtn = page.locator("button.canvas-close");
 		if (await canvasCloseBtn.count() > 0) {
 			await expect(canvasCloseBtn).toBeVisible();
@@ -435,7 +451,7 @@ test.describe("UI behavior and visual goldens", () => {
 			pending: ["t-progress"],
 		});
 		const tools = page.locator("tool-message");
-		await expect(tools).toHaveCount(7);
+		await expect(tools).toHaveCount(8);
 		await expect(page.getByText("npm run build", { exact: false }).last()).toBeVisible();
 		const runtime = tools.last().locator("tool-runtime");
 		const initialRuntime = await runtime.textContent();

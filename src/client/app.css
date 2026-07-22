@@ -942,6 +942,11 @@ tool-runtime[running] {
 	line-height: 1.3;
 }
 
+.generic-tool-header-label {
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+
 .tool-body-scroll {
 	max-height: 10rem; /* 160px — down from 16rem/256px */
 }

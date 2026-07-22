@@ -541,6 +541,31 @@ class CanvasRenderer implements ToolRenderer {
 	}
 }
 
+const MAX_INLINE_GENERIC_CALL_CHARS = 240;
+
+function formatInlineGenericCall(toolName: string, parsed: any): string | undefined {
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+
+	const entries = Object.entries(parsed);
+	if (entries.length === 0) return toolName;
+
+	const formatted: string[] = [];
+	for (const [key, value] of entries) {
+		if (typeof value === "object" && value !== null) return undefined;
+		let display: string | undefined;
+		try {
+			display = JSON.stringify(value);
+		} catch {
+			return undefined;
+		}
+		if (display === undefined || display.includes("\\n")) return undefined;
+		formatted.push(`${key}: ${display}`);
+	}
+
+	const label = `${toolName}(${formatted.join(", ")})`;
+	return label.length <= MAX_INLINE_GENERIC_CALL_CHARS ? label : undefined;
+}
+
 class GenericFallbackRenderer implements FallbackToolRenderer {
 	render(toolName: string, params: any, result: ToolResultMessage | undefined, isStreaming?: boolean, runtime?: TemplateResult): ToolRenderResult {
 		const state: ToolState = result ? (result.isError ? "error" : "complete") : isStreaming ? "inprogress" : "complete";
@@ -548,25 +573,18 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 		let parsed: any = {};
 		try { parsed = typeof params === "string" ? JSON.parse(params) : params || {}; } catch { /* */ }
 
-		// Build a compact parameter summary for the header
-		const paramKeys = Object.keys(parsed);
-		let paramSummary = "";
-		if (paramKeys.length === 1) {
-			const val = parsed[paramKeys[0]];
-			const display = typeof val === "string" ? val : JSON.stringify(val);
-			paramSummary = display.length > 60 ? display.slice(0, 57) + "…" : display;
-		} else if (paramKeys.length > 1) {
-			paramSummary = paramKeys.join(", ");
-		}
-
-		const headerLabel = paramSummary ? `${toolName}(${paramSummary})` : toolName;
+		const inlineHeaderLabel = formatInlineGenericCall(toolName, parsed);
+		const paramKeys = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed) : [];
+		const headerLabel = inlineHeaderLabel
+			?? (paramKeys.length ? `${toolName}(${paramKeys.join(", ")})` : toolName);
 
 		const output = resultText(result);
 		const isError = result?.isError ?? false;
 
-		// Format params as JSON for body
+		// Keep complex or unusually long parameters available in the body. Compact
+		// primitive arguments are already shown in full as part of the call above.
 		let paramsJson = "";
-		if (params) {
+		if (!inlineHeaderLabel && params) {
 			try {
 				paramsJson = JSON.stringify(parsed, null, 2);
 			} catch {
@@ -574,7 +592,6 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 			}
 		}
 
-		// Build body content: params + output
 		let bodyContent = "";
 		if (paramsJson && paramsJson !== "{}" && output) {
 			bodyContent = `> ${paramsJson}\n\n${output}`;
@@ -600,9 +617,9 @@ class GenericFallbackRenderer implements FallbackToolRenderer {
 						${hasBody ? html`<div class="tool-thread-line w-0.5 flex-1 mt-0.5 rounded-full ${threadColorClass(state)}"></div>` : ""}
 					</div>
 					<div class="flex-1 min-w-0">
-						<div class="tool-hdr flex items-center gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
+						<div class="tool-hdr flex items-start gap-1 cursor-pointer py-px hover:text-foreground" @click=${handleToggle}>
 							<span class="tool-chevron inline-block transition-transform text-muted-foreground" style="transform: rotate(90deg)">${icon(ChevronRight, "xs")}</span>
-							<span class="tool-header-label text-muted-foreground font-mono truncate" title="${toolName}">${headerLabel}</span>
+							<span class="tool-header-label generic-tool-header-label min-w-0 text-muted-foreground font-mono" title=${headerLabel}>${headerLabel}</span>
 							${spinner}
 							${!hasBody ? runtime : ""}
 						</div>

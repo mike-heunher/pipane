@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { html, render as renderTemplate } from "lit";
 import hljs from "highlight.js/lib/core";
-import { getToolRenderer } from "./ui/tool-registry.js";
+import { getToolRenderer, renderTool } from "./ui/tool-registry.js";
 import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./ui/tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
@@ -145,6 +145,45 @@ describe("streaming tool output scroll pin", () => {
 		expect(streamingOutput.textContent).toContain("line 2");
 		expect(streamingOutput.scrollTop).toBe(40);
 		renderTemplate(null, container);
+	});
+});
+
+describe("generic fallback renderer", () => {
+	it("inlines complete primitive parameters with readable spacing", () => {
+		const container = document.createElement("div");
+		const toolResult = {
+			role: "toolResult" as const,
+			isError: false,
+			content: [{ type: "text" as const, text: "file contents" }],
+			toolCallId: "generic-inline",
+			toolName: "hypa_read",
+			timestamp: Date.now(),
+		};
+		const rendered = renderTool("hypa_read", {
+			path: "tests/test_tool_ingestion.py",
+			offset: 1,
+			limit: 180,
+			maxTokens: 10_000,
+		}, toolResult, false);
+
+		renderTemplate(rendered.content, container);
+
+		expect(container.querySelector(".tool-header-label")?.textContent).toBe(
+			'hypa_read(path: "tests/test_tool_ingestion.py", offset: 1, limit: 180, maxTokens: 10000)',
+		);
+		expect(container.querySelector(".tool-body-code")?.textContent).toBe("file contents");
+		expect(container.querySelector(".tool-body-code")?.textContent).not.toContain('"path"');
+	});
+
+	it("keeps structured parameters in the formatted body", () => {
+		const container = document.createElement("div");
+		const rendered = renderTool("batch_tool", { edits: [{ path: "a.ts", value: 1 }] }, undefined, false);
+
+		renderTemplate(rendered.content, container);
+
+		expect(container.querySelector(".tool-header-label")?.textContent).toBe("batch_tool(edits)");
+		expect(container.querySelector(".tool-body-code")?.textContent).toContain('\n  "edits": [\n');
+		expect(container.querySelector(".tool-body-code")?.textContent).toContain('    "path": "a.ts"');
 	});
 });
 
