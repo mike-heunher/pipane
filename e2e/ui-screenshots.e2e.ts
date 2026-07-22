@@ -201,7 +201,7 @@ async function openMainSession(page: Page) {
 	await expect(page.locator("tool-message").first()).toBeVisible();
 }
 
-test.describe("UI visual goldens", () => {
+test.describe("UI behavior and visual goldens", () => {
 	test.describe.configure({ mode: captureLatest ? "default" : "parallel" });
 	test.use({ viewport: { width: 1440, height: 900 } });
 	let mock: Awaited<ReturnType<typeof createMockServer>>;
@@ -217,6 +217,33 @@ test.describe("UI visual goldens", () => {
 			localStorage.setItem("theme", "light");
 			localStorage.setItem("pipane-show-token-usage", "true");
 		});
+	});
+
+	test("delays session actions until the row has been hovered", async ({ page }) => {
+		await page.goto(`http://localhost:${mock.port}`);
+		await waitForSessionItems(page);
+
+		const item = page.locator("session-picker").locator(".session-item").filter({ hasText: "Refactor auth module" });
+		const pin = item.locator(".pin-btn");
+		const remove = item.locator(".delete-btn");
+		await expect(pin).toHaveCSS("visibility", "hidden");
+		await expect(pin).toHaveCSS("pointer-events", "none");
+		await expect(remove).toHaveCSS("visibility", "hidden");
+
+		await item.hover();
+		const revealTransition = await pin.evaluate((element) => {
+			const style = getComputedStyle(element);
+			return {
+				properties: style.transitionProperty,
+				delays: style.transitionDelay,
+			};
+		});
+		expect(revealTransition).toEqual({
+			properties: "opacity, visibility",
+			delays: "0s, 0.3s",
+		});
+		await expect(pin).toHaveCSS("visibility", "visible", { timeout: 1_000 });
+		await expect(remove).toHaveCSS("visibility", "visible", { timeout: 1_000 });
 	});
 
 	test("session list", async ({ page }) => {

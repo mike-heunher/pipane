@@ -374,7 +374,9 @@ export class SessionPicker extends LitElement {
 			padding: 0.1rem;
 			border-radius: 3px;
 			opacity: 0;
-			transition: all 0.15s;
+			visibility: hidden;
+			pointer-events: none;
+			transition: opacity 0.15s, visibility 0s linear 0.15s;
 			flex-shrink: 0;
 			margin-top: 0;
 		}
@@ -382,10 +384,6 @@ export class SessionPicker extends LitElement {
 		.pin-btn.pinned {
 			opacity: 0.6;
 			color: var(--picker-active);
-		}
-
-		.session-item:hover .pin-btn {
-			opacity: 0.5;
 		}
 
 		.pin-btn:hover {
@@ -409,13 +407,19 @@ export class SessionPicker extends LitElement {
 			padding: 0.1rem;
 			border-radius: 3px;
 			opacity: 0;
-			transition: all 0.15s;
+			visibility: hidden;
+			pointer-events: none;
+			transition: opacity 0.15s, visibility 0s linear 0.15s;
 			flex-shrink: 0;
 			margin-top: 0;
 		}
 
+		.session-item:hover .pin-btn,
 		.session-item:hover .delete-btn {
 			opacity: 0.5;
+			visibility: visible;
+			pointer-events: auto;
+			transition-delay: 0s, 0.3s;
 		}
 
 		.delete-btn:hover {
