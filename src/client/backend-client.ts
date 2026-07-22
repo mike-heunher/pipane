@@ -4,6 +4,7 @@ import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import type { SlashCommandInfo } from "../shared/ws-protocol.js";
 import type { ThinkingLevelValue } from "../shared/thinking-levels.js";
 import type { BackendApi, SessionInfoDTO } from "./backend-api.js";
+import type { ConnectionDiagnostics } from "./frame-transport.js";
 
 export type { SessionInfoDTO } from "./backend-api.js";
 
@@ -48,6 +49,7 @@ export interface BackendClient extends BackendApi {
 
 	connect(endpoint: string): Promise<void>;
 	disconnect(): void;
+	getConnectionDiagnostics?(): Promise<ConnectionDiagnostics | undefined>;
 	onConnectionChange(fn: (connected: boolean) => void): () => void;
 	onExtensionStatusChange(fn: () => void): () => void;
 	onGlobalStatusChange(fn: () => void): () => void;

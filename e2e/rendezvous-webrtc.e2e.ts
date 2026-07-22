@@ -507,6 +507,11 @@ test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel"
 		await expect(switcher).toBeVisible();
 		await expect(switcher.locator("option")).toHaveCount(2);
 		await expect(page.locator("message-editor")).toBeVisible();
+		await page.locator("[data-testid='connection-diagnostics-button']").click();
+		const diagnosticsDialog = page.locator("[data-testid='connection-diagnostics']");
+		await expect(diagnosticsDialog).toContainText(/TURN relay|Direct via STUN/u, { timeout: 10_000 });
+		await expect(diagnosticsDialog).toContainText(turn.url);
+		await diagnosticsDialog.locator("[aria-label='Close connection diagnostics']").click();
 		await switcher.locator("select").selectOption(secondIdentity.backendId);
 		await expect(page).toHaveURL(new RegExp(`/backend/${secondIdentity.backendId}$`));
 		// Wait for the route's new document explicitly; URL assignment precedes unload.

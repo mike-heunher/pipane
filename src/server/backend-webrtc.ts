@@ -244,7 +244,11 @@ export class BackendWebRtcManager {
 			type: "authentication_error",
 			message,
 		};
-		channel.sendMessage(JSON.stringify(response));
+		try {
+			if (channel.isOpen()) channel.sendMessage(JSON.stringify(response));
+		} catch {
+			// The peer may close while asynchronous authorization is settling.
+		}
 		this.failPeer(state.request.connectionId, new Error(message));
 	}
 

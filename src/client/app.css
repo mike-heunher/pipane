@@ -2817,3 +2817,247 @@ body.is-file-preview-resizing .file-preview-frame {
 	background: var(--accent, #f3f4f6);
 	color: var(--foreground, #111);
 }
+
+/* ── Remote WebRTC connection diagnostics ─────────────────────── */
+.connection-diagnostics-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 10020;
+	display: grid;
+	place-items: center;
+	padding: 1rem;
+	background: rgba(0, 0, 0, 0.58);
+	backdrop-filter: blur(2px);
+}
+
+.connection-diagnostics-panel {
+	width: min(860px, 96vw);
+	max-height: min(780px, 92vh);
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--border);
+	border-radius: 0.8rem;
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+}
+
+.connection-diagnostics-header {
+	display: flex;
+	align-items: center;
+	gap: 1rem;
+	padding: 0.9rem 1rem;
+	border-bottom: 1px solid var(--border);
+	background: color-mix(in srgb, var(--muted) 52%, var(--background));
+}
+
+.connection-diagnostics-title-wrap {
+	min-width: 0;
+	flex: 1;
+}
+
+.connection-diagnostics-title {
+	margin: 0;
+	font-size: 1rem;
+	font-weight: 650;
+}
+
+.connection-diagnostics-subtitle {
+	margin: 0.15rem 0 0;
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-size: 0.7rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.connection-diagnostics-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+}
+
+.connection-diagnostics-button {
+	padding: 0.35rem 0.6rem;
+	border: 1px solid var(--border);
+	border-radius: 0.4rem;
+	background: var(--background);
+	color: var(--foreground);
+	font-size: 0.68rem;
+	cursor: pointer;
+}
+
+.connection-diagnostics-button:hover:not(:disabled) {
+	background: var(--accent);
+}
+
+.connection-diagnostics-button:disabled {
+	opacity: 0.5;
+	cursor: wait;
+}
+
+.connection-diagnostics-close {
+	width: 1.8rem;
+	padding-inline: 0;
+	font-size: 1rem;
+}
+
+.connection-diagnostics-content {
+	min-height: 0;
+	overflow-y: auto;
+	padding: 1rem;
+}
+
+.connection-diagnostics-section {
+	margin-bottom: 1.15rem;
+}
+
+.connection-diagnostics-section > h3 {
+	margin: 0 0 0.55rem;
+	color: var(--muted-foreground);
+	font-size: 0.64rem;
+	font-weight: 650;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+}
+
+.connection-diagnostics-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1px;
+	margin: 0;
+	border: 1px solid var(--border);
+	border-radius: 0.55rem;
+	background: var(--border);
+	overflow: hidden;
+}
+
+.connection-diagnostics-fact {
+	min-width: 0;
+	padding: 0.6rem 0.7rem;
+	background: var(--card, var(--background));
+}
+
+.connection-diagnostics-fact dt {
+	margin-bottom: 0.2rem;
+	color: var(--muted-foreground);
+	font-size: 0.58rem;
+}
+
+.connection-diagnostics-fact dd {
+	margin: 0;
+	overflow: hidden;
+	font: 0.68rem ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.connection-diagnostics-fact small {
+	display: block;
+	margin-top: 0.3rem;
+	color: var(--muted-foreground);
+	font-size: 0.58rem;
+	line-height: 1.4;
+}
+
+.connection-diagnostics-server-list {
+	margin: 0;
+	padding: 0.55rem 0.75rem 0.55rem 1.8rem;
+	border: 1px solid var(--border);
+	border-radius: 0.55rem;
+	background: var(--card, var(--background));
+	font: 0.67rem ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.connection-diagnostics-candidates {
+	display: grid;
+	gap: 0.6rem;
+}
+
+.connection-diagnostics-candidate {
+	padding: 0.65rem;
+	border: 1px solid var(--border);
+	border-radius: 0.55rem;
+	background: var(--card, var(--background));
+}
+
+.connection-diagnostics-candidate.is-selected {
+	border-color: color-mix(in srgb, var(--primary) 65%, var(--border));
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.connection-diagnostics-candidate-heading {
+	display: flex;
+	justify-content: space-between;
+	margin-bottom: 0.5rem;
+	font-size: 0.67rem;
+	text-transform: capitalize;
+}
+
+.connection-diagnostics-candidate-heading span {
+	color: var(--muted-foreground);
+	font-size: 0.58rem;
+}
+
+.connection-diagnostics-message,
+.connection-diagnostics-privacy {
+	color: var(--muted-foreground);
+	font-size: 0.65rem;
+	line-height: 1.45;
+}
+
+.connection-diagnostics-message.is-error {
+	color: var(--destructive);
+}
+
+.connection-diagnostics-privacy {
+	margin: 0;
+	padding: 0.65rem 1rem;
+	border-top: 1px solid var(--border);
+	background: color-mix(in srgb, var(--muted) 35%, var(--background));
+}
+
+.connection-diagnostics-raw {
+	border-top: 1px solid var(--border);
+	padding-top: 0.7rem;
+	font-size: 0.65rem;
+}
+
+.connection-diagnostics-raw summary {
+	color: var(--muted-foreground);
+	cursor: pointer;
+}
+
+.connection-diagnostics-raw pre {
+	max-height: 18rem;
+	overflow: auto;
+	padding: 0.7rem;
+	border-radius: 0.45rem;
+	background: var(--muted);
+	font-size: 0.58rem;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+@media (max-width: 640px) {
+	.connection-diagnostics-overlay {
+		padding: 0;
+	}
+
+	.connection-diagnostics-panel {
+		width: 100vw;
+		max-height: 100vh;
+		height: 100vh;
+		border: 0;
+		border-radius: 0;
+	}
+
+	.connection-diagnostics-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.connection-diagnostics-header {
+		align-items: flex-start;
+	}
+}

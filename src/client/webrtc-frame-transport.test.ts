@@ -58,6 +58,10 @@ class FakeChannel {
 
 class FakePeer {
 	connectionState: RTCPeerConnectionState = "new";
+	iceConnectionState: RTCIceConnectionState = "connected";
+	iceGatheringState: RTCIceGatheringState = "complete";
+	signalingState: RTCSignalingState = "stable";
+	readonly sctp = { maxMessageSize: 262_144, transport: { state: "connected" as RTCDtlsTransportState } };
 	onicecandidate: ((event: RTCPeerConnectionIceEvent) => unknown) | null = null;
 	onconnectionstatechange: ((event: Event) => unknown) | null = null;
 	readonly channel = new FakeChannel();
@@ -65,6 +69,41 @@ class FakePeer {
 	readonly setRemoteDescription = vi.fn(async () => {});
 	readonly addIceCandidate = vi.fn(async () => {});
 	readonly createOffer = vi.fn(async () => ({ type: "offer" as const, sdp: "v=0\r\na=setup:actpass\r\n" }));
+	readonly getStats = vi.fn(async () => new Map<string, any>([
+		["transport", { id: "transport", type: "transport", selectedCandidatePairId: "pair", dtlsState: "connected" }],
+		["pair", {
+			id: "pair",
+			type: "candidate-pair",
+			state: "succeeded",
+			nominated: true,
+			localCandidateId: "local",
+			remoteCandidateId: "remote",
+			currentRoundTripTime: 0.012,
+			availableOutgoingBitrate: 2_500_000,
+			bytesSent: 4_096,
+			bytesReceived: 8_192,
+		}],
+		["local", {
+			id: "local",
+			type: "local-candidate",
+			address: "203.0.113.10",
+			port: 51_234,
+			protocol: "udp",
+			candidateType: "srflx",
+			relatedAddress: "192.168.1.5",
+			relatedPort: 51_234,
+			url: "stun:stun.example:3478",
+		}],
+		["remote", {
+			id: "remote",
+			type: "remote-candidate",
+			address: "198.51.100.8",
+			port: 49_000,
+			protocol: "udp",
+			candidateType: "host",
+		}],
+		["data", { id: "data", type: "data-channel", messagesSent: 3, messagesReceived: 4, bytesSent: 500, bytesReceived: 900 }],
+	]) as unknown as RTCStatsReport);
 	readonly close = vi.fn(() => { this.connectionState = "closed"; });
 
 	createDataChannel(): RTCDataChannel {
@@ -118,7 +157,7 @@ describe("WebRtcFrameTransport", () => {
 			rendezvousUrl: "https://signal.example",
 			backendId: backend.backendId,
 			deviceIdentity: device,
-			authorize: async () => ({ ticket, iceServers: [], pairingSecret: "secret" }),
+			authorize: async () => ({ ticket, iceServers: [{ urls: ["stun:stun.example:3478"] }], pairingSecret: "secret" }),
 			createPeerConnection: () => peer as unknown as RTCPeerConnection,
 			createRendezvousClient: () => rendezvous as unknown as BrowserRendezvousClient,
 		});
@@ -170,6 +209,23 @@ describe("WebRtcFrameTransport", () => {
 		let decoded: string | undefined;
 		for (const chunk of clientChunks) decoded = decoder.accept(chunk) ?? decoded;
 		expect(decoded).toBe(largeClientFrame);
+
+		peer.connectionState = "connected";
+		const diagnostics = await transport.getConnectionDiagnostics();
+		expect(diagnostics).toEqual(expect.objectContaining({
+			backendId: backend.backendId,
+			connectionState: "connected",
+			iceConnectionState: "connected",
+			icePath: "direct-stun",
+			iceServerUrls: ["stun:stun.example:3478"],
+			selectedPair: expect.objectContaining({
+				currentRoundTripTimeMs: 12,
+				local: expect.objectContaining({ candidateType: "srflx", address: "203.0.113.10" }),
+				remote: expect.objectContaining({ candidateType: "host", address: "198.51.100.8" }),
+			}),
+			dataChannel: expect.objectContaining({ maxMessageSize: 262_144, messagesSent: 3, bytesReceived: 900 }),
+		}));
+		expect(diagnostics.signalingUrl).toBe("wss://signal.example/v2/rendezvous/browser");
 		transport.close();
 	});
 

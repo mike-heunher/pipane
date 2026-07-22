@@ -1,5 +1,7 @@
 # Unreleased
 
+- Add live remote connection diagnostics for selected ICE paths, candidates, STUN/TURN servers, RTT, throughput, and DataChannel statistics.
+- Avoid a secondary libdatachannel send failure when a peer closes during asynchronous authentication rejection.
 - Fragment large WebRTC DataChannel frames so multi-megabyte session snapshots do not exceed negotiated SCTP message limits or crash the backend.
 - Hide pipane self-update notices when running a development commit while preserving Pi and package updates.
 - Let users dismiss Pi, pipane, and managed package update notices for 24 hours.

@@ -46,7 +46,7 @@ import type {
 	SessionStatus,
 } from "./backend-client.js";
 import { HttpBackendApi, type BackendApi } from "./backend-api.js";
-import type { FrameTransport } from "./frame-transport.js";
+import type { ConnectionDiagnostics, FrameTransport } from "./frame-transport.js";
 import { PIPANE_SLASH_COMMANDS } from "./slash-commands.js";
 import {
 	WebSocketFrameTransport,
@@ -430,6 +430,10 @@ export class WsAgentAdapter implements BackendClient {
 
 	disconnect(): void {
 		this.transport.close();
+	}
+
+	getConnectionDiagnostics(): Promise<ConnectionDiagnostics | undefined> {
+		return this.transport.getConnectionDiagnostics?.() ?? Promise.resolve(undefined);
 	}
 
 	private handleTransportConnectionChange(connected: boolean, reconnected: boolean): void {

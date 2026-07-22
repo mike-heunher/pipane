@@ -1,4 +1,11 @@
-import type { FrameTransport, FrameTransportConnectionEvent } from "./frame-transport.js";
+import type {
+	ConnectionDiagnostics,
+	FrameTransport,
+	FrameTransportConnectionEvent,
+	IceCandidateDiagnostics,
+	IceConnectionPath,
+	SelectedIcePairDiagnostics,
+} from "./frame-transport.js";
 import { BrowserRendezvousClient } from "./browser-rendezvous-client.js";
 import {
 	signDeviceConnection,
@@ -6,6 +13,7 @@ import {
 	type BrowserDeviceIdentity,
 } from "./device-identity.js";
 import type { ConnectionTicketClaims, ConnectionTicketResponse } from "../shared/trust-protocol.js";
+import { rendezvousWebSocketUrl } from "../shared/rendezvous-protocol.js";
 import {
 	DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES,
 	DATA_CHANNEL_BUFFER_LOW_WATER_BYTES,
@@ -62,6 +70,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private nextFrameId = 0;
 	private queuedBytes = 0;
 	private flushing = false;
+	private iceServerUrls: string[] = [];
 
 	constructor(options: WebRtcFrameTransportOptions) {
 		this.rendezvousUrl = options.rendezvousUrl;
@@ -102,6 +111,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 		this.manuallyClosed = false;
 		const authorization = await this.authorize();
 		const claims = decodeTicketClaims(authorization.ticket);
+		this.iceServerUrls = collectIceServerUrls(authorization.iceServers);
 		if (claims.backendId !== this.backendId || claims.deviceId !== this.deviceIdentity.deviceId) {
 			throw new Error("Connection ticket does not match this browser and backend");
 		}
@@ -269,6 +279,63 @@ export class WebRtcFrameTransport implements FrameTransport {
 		this.flushOutgoing();
 	}
 
+	async getConnectionDiagnostics(): Promise<ConnectionDiagnostics> {
+		const peer = this.peer;
+		const channel = this.channel;
+		let entries: any[] = [];
+		if (peer) {
+			try {
+				const report = await peer.getStats();
+				report.forEach((entry) => entries.push(entry));
+			} catch {
+				entries = [];
+			}
+		}
+
+		const candidates = entries
+			.filter((entry) => entry.type === "local-candidate" || entry.type === "remote-candidate")
+			.map((entry) => toCandidateDiagnostics(entry, entry.type === "local-candidate" ? "local" : "remote"));
+		const selectedPairStat = findSelectedCandidatePair(entries);
+		const local = selectedPairStat
+			? candidates.find((candidate) => candidate.id === selectedPairStat.localCandidateId)
+			: undefined;
+		const remote = selectedPairStat
+			? candidates.find((candidate) => candidate.id === selectedPairStat.remoteCandidateId)
+			: undefined;
+		const selectedPair = selectedPairStat ? toSelectedPairDiagnostics(selectedPairStat, local, remote) : undefined;
+		const transportStat = entries.find((entry) => entry.type === "transport");
+		const dataChannelStat = entries.find((entry) => entry.type === "data-channel");
+
+		return {
+			collectedAt: new Date().toISOString(),
+			carrier: "webrtc",
+			backendId: this.backendId,
+			rendezvousUrl: this.rendezvousUrl,
+			signalingUrl: rendezvousWebSocketUrl(this.rendezvousUrl, "browser"),
+			connectionState: peer?.connectionState,
+			iceConnectionState: peer?.iceConnectionState,
+			iceGatheringState: peer?.iceGatheringState,
+			signalingState: peer?.signalingState,
+			dtlsState: peer?.sctp?.transport.state ?? stringValue(transportStat?.dtlsState),
+			icePath: classifyIcePath(local, remote),
+			iceServerUrls: [...this.iceServerUrls],
+			...(selectedPair ? { selectedPair } : {}),
+			candidates,
+			dataChannel: {
+				state: channel?.readyState,
+				label: channel?.label,
+				protocol: channel?.protocol,
+				ordered: channel?.ordered,
+				bufferedAmount: channel?.bufferedAmount,
+				maxMessageSize: peer?.sctp?.maxMessageSize,
+				messagesSent: numberValue(dataChannelStat?.messagesSent),
+				messagesReceived: numberValue(dataChannelStat?.messagesReceived),
+				bytesSent: numberValue(dataChannelStat?.bytesSent),
+				bytesReceived: numberValue(dataChannelStat?.bytesReceived),
+			},
+		};
+	}
+
 	close(_code = 1000, reason = "Client closed"): void {
 		this.manuallyClosed = true;
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -331,6 +398,77 @@ export class WebRtcFrameTransport implements FrameTransport {
 }
 
 const textEncoder = new TextEncoder();
+
+function collectIceServerUrls(iceServers: RTCIceServer[]): string[] {
+	return [...new Set(iceServers.flatMap((server) => typeof server.urls === "string" ? [server.urls] : [...server.urls]))];
+}
+
+function findSelectedCandidatePair(entries: any[]): any | undefined {
+	const selectedId = entries.find((entry) => entry.type === "transport")?.selectedCandidatePairId;
+	if (typeof selectedId === "string") {
+		const selected = entries.find((entry) => entry.id === selectedId && entry.type === "candidate-pair");
+		if (selected) return selected;
+	}
+	return entries.find((entry) => entry.type === "candidate-pair" && entry.selected === true)
+		?? entries.find((entry) => entry.type === "candidate-pair" && entry.nominated === true && entry.state === "succeeded");
+}
+
+function toCandidateDiagnostics(entry: any, scope: "local" | "remote"): IceCandidateDiagnostics {
+	return {
+		id: String(entry.id),
+		scope,
+		address: stringValue(entry.address) ?? stringValue(entry.ip),
+		port: numberValue(entry.port),
+		protocol: stringValue(entry.protocol),
+		candidateType: stringValue(entry.candidateType),
+		networkType: stringValue(entry.networkType),
+		tcpType: stringValue(entry.tcpType),
+		relayProtocol: stringValue(entry.relayProtocol),
+		relatedAddress: stringValue(entry.relatedAddress),
+		relatedPort: numberValue(entry.relatedPort),
+		url: stringValue(entry.url),
+		priority: numberValue(entry.priority),
+	};
+}
+
+function toSelectedPairDiagnostics(
+	entry: any,
+	local: IceCandidateDiagnostics | undefined,
+	remote: IceCandidateDiagnostics | undefined,
+): SelectedIcePairDiagnostics {
+	const rtt = numberValue(entry.currentRoundTripTime);
+	return {
+		state: stringValue(entry.state),
+		nominated: typeof entry.nominated === "boolean" ? entry.nominated : undefined,
+		currentRoundTripTimeMs: rtt === undefined ? undefined : rtt * 1_000,
+		availableOutgoingBitrate: numberValue(entry.availableOutgoingBitrate),
+		bytesSent: numberValue(entry.bytesSent),
+		bytesReceived: numberValue(entry.bytesReceived),
+		packetsSent: numberValue(entry.packetsSent),
+		packetsReceived: numberValue(entry.packetsReceived),
+		...(local ? { local } : {}),
+		...(remote ? { remote } : {}),
+	};
+}
+
+function classifyIcePath(
+	local: IceCandidateDiagnostics | undefined,
+	remote: IceCandidateDiagnostics | undefined,
+): IceConnectionPath {
+	const types = [local?.candidateType, remote?.candidateType];
+	if (types.includes("relay")) return "turn-relay";
+	if (types.includes("srflx") || types.includes("prflx")) return "direct-stun";
+	if (types.includes("host")) return "direct-host";
+	return "unknown";
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function decodeTicketClaims(ticket: string): ConnectionTicketClaims {
 	const [encodedClaims] = ticket.split(".");

@@ -30,6 +30,7 @@ import {
 } from "./file-preview-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
+import { openConnectionDiagnosticsDialog } from "./connection-diagnostics-dialog.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
 import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
@@ -69,6 +70,7 @@ window.addEventListener("resize", () => {
 });
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
+let connectionDiagnosticsOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
 let prefetchedSessions: SessionInfoDTO[] | undefined;
@@ -491,6 +493,20 @@ async function openLocalSettingsModal() {
 	}
 }
 
+async function openConnectionDiagnosticsModal(): Promise<void> {
+	if (!remoteRuntime || connectionDiagnosticsOpen) return;
+	connectionDiagnosticsOpen = true;
+	try {
+		await openConnectionDiagnosticsDialog({
+			backendName: backendDisplayName(remoteRuntime.backendId),
+			backendId: remoteRuntime.backendId,
+			getDiagnostics: () => agent.getConnectionDiagnostics?.() ?? Promise.resolve(undefined),
+		});
+	} finally {
+		connectionDiagnosticsOpen = false;
+	}
+}
+
 function getTokenUsageSummary(): TokenUsageSummary | undefined {
 	if (!agent) return undefined;
 	const state = agent.state;
@@ -702,9 +718,15 @@ function renderBackendBar() {
 					</option>
 				`)}
 			</select>
-			<span class=${active?.online ? "text-green-600" : "text-amber-600"}>
-				${active?.online ? "Online" : "Offline"}
-			</span>
+			<button
+				type="button"
+				class=${agent.isConnected ? "text-green-600 hover:underline" : "text-amber-600 hover:underline"}
+				data-testid="connection-diagnostics-button"
+				title="Inspect WebRTC, ICE, STUN, candidates, and connection statistics"
+				@click=${() => { void openConnectionDiagnosticsModal(); }}
+			>
+				${agent.isConnected ? "Connected" : active?.online ? "Reconnecting" : "Offline"}
+			</button>
 			<span class="flex-1"></span>
 			<button
 				type="button"
