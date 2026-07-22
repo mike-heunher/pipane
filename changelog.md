@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.8 - 2026-07-22
+
 - Keep large WebRTC session transfers connected and flowing when libdatachannel applies native send buffering.
 - Add live remote connection diagnostics for selected ICE paths, candidates, STUN/TURN servers, RTT, throughput, and DataChannel statistics.
 - Avoid a secondary libdatachannel send failure when a peer closes during asynchronous authentication rejection.
