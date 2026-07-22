@@ -10,6 +10,7 @@ function fakeChannel() {
 	let closedListener: (() => void) | undefined;
 	let bufferedAmountLowListener: (() => void) | undefined;
 	let open = true;
+	let bufferNextSend = false;
 	const channel = {
 		onMessage: (listener: typeof messageListener) => { messageListener = listener; },
 		onClosed: (listener: () => void) => { closedListener = listener; },
@@ -17,7 +18,11 @@ function fakeChannel() {
 		setBufferedAmountLowThreshold: vi.fn(),
 		bufferedAmount: () => 0,
 		isOpen: () => open,
-		sendMessage: vi.fn((_message: string) => true),
+		sendMessage: vi.fn((_message: string) => {
+			if (!bufferNextSend) return true;
+			bufferNextSend = false;
+			return false;
+		}),
 		close: vi.fn(() => { open = false; closedListener?.(); }),
 	};
 	return {
@@ -25,6 +30,7 @@ function fakeChannel() {
 		sendMessage: channel.sendMessage,
 		message: (value: string) => messageListener?.(value),
 		close: () => { open = false; closedListener?.(); },
+		bufferSend: () => { bufferNextSend = true; },
 		drain: () => bufferedAmountLowListener?.(),
 	};
 }
@@ -62,6 +68,28 @@ describe("DataChannelFrameConnection", () => {
 		expect(chunks.every((chunk) => Buffer.byteLength(chunk) <= MAX_DATA_CHANNEL_MESSAGE_BYTES)).toBe(true);
 		for (const chunk of chunks) receiver.message(chunk);
 		expect(message).toHaveBeenCalledTimes(1);
+		expect(message.mock.calls[0][0].toString()).toBe(largeFrame);
+	});
+
+	it("waits for native backpressure without closing or resending accepted chunks", () => {
+		const sender = fakeChannel();
+		const receiver = fakeChannel();
+		const outgoing = new DataChannelFrameConnection(sender.channel);
+		const incoming = new DataChannelFrameConnection(receiver.channel);
+		const message = vi.fn();
+		incoming.on("message", message);
+		const largeFrame = JSON.stringify({ type: "session_sync", content: "buffered history ".repeat(20_000) });
+
+		sender.bufferSend();
+		outgoing.send(largeFrame);
+		expect(sender.sendMessage).toHaveBeenCalledTimes(1);
+		expect(outgoing.readyState).toBe(FRAME_CONNECTION_OPEN);
+
+		sender.drain();
+		const chunks = sender.sendMessage.mock.calls.map(([chunk]) => chunk);
+		expect(chunks.length).toBeGreaterThan(1);
+		for (const chunk of chunks) receiver.message(chunk);
+		expect(message).toHaveBeenCalledOnce();
 		expect(message.mock.calls[0][0].toString()).toBe(largeFrame);
 	});
 
