@@ -58,6 +58,19 @@ describe("DataChannelBackendApi", () => {
 		await expect(deletion).rejects.toBeInstanceOf(DataChannelBackendApiError);
 	});
 
+	it("creates host folders and validates the returned entry", async () => {
+		const transport = new FakeTransport();
+		const api = new DataChannelBackendApi(transport, "b_one");
+
+		const creating = api.createDirectory("/work", "new-project");
+		expect(transport.sent[0]).toMatchObject({
+			method: "host.mkdir",
+			params: { parentPath: "/work", name: "new-project" },
+		});
+		transport.reply(0, { name: "new-project", path: "/work/new-project" });
+		await expect(creating).resolves.toEqual({ name: "new-project", path: "/work/new-project" });
+	});
+
 	it("carries chunked file uploads over semantic frames", async () => {
 		const transport = new FakeTransport();
 		const api = new DataChannelBackendApi(transport, "b_one");

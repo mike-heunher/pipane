@@ -103,7 +103,8 @@ The currently implemented semantic methods are:
 
 - `backend.capabilities`
 - `sessions.list`, `sessions.delete`, `sessions.forkMessages`, `sessions.raw`
-- `files.read`, `files.upload.create`, `files.upload.append`, `files.upload.complete`, `host.browse`
+- `files.read`, `files.upload.create`, `files.upload.append`, `files.upload.complete`
+- `host.browse`, `host.mkdir`
 - `settings.get`, `settings.validate`, `settings.patch`, `settings.save`
 - `updates.get`, `updates.run`
 

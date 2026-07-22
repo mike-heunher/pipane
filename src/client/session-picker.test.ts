@@ -109,6 +109,37 @@ describe("session-picker", () => {
 		expect(onOpenSettings).toHaveBeenCalledOnce();
 	});
 
+	it("creates and enters a new folder from the project explorer", async () => {
+		const agent = new MockAgent();
+		const browseDirectory = vi.spyOn(agent, "browseDirectory").mockImplementation(async (requestedPath) => ({
+			path: requestedPath === "~" ? "/home/user" : requestedPath,
+			dirs: [],
+		}));
+		const createDirectory = vi.spyOn(agent, "createDirectory").mockResolvedValue({
+			name: "my-project",
+			path: "/home/user/my-project",
+		});
+		const el = await createPicker(agent);
+
+		el.shadowRoot!.querySelector<HTMLButtonElement>(".new-btn")!.click();
+		await vi.waitFor(() => expect(browseDirectory).toHaveBeenCalledWith("~"));
+		await vi.waitFor(() => expect(el.shadowRoot!.querySelector<HTMLButtonElement>(".folder-new-btn")?.disabled).toBe(false));
+
+		el.shadowRoot!.querySelector<HTMLButtonElement>(".folder-new-btn")!.click();
+		await el.updateComplete;
+		const input = el.shadowRoot!.querySelector<HTMLInputElement>('input[aria-label="New folder name"]')!;
+		input.value = "my-project";
+		input.dispatchEvent(new Event("input"));
+		await el.updateComplete;
+		el.shadowRoot!.querySelector<HTMLButtonElement>(".new-folder-confirm")!.click();
+
+		await vi.waitFor(() => expect(createDirectory).toHaveBeenCalledWith("/home/user", "my-project"));
+		await vi.waitFor(() => expect(browseDirectory).toHaveBeenCalledWith("/home/user/my-project"));
+		await el.updateComplete;
+		expect(el.shadowRoot!.querySelector(".folder-picker-location-path")?.textContent).toBe("/home/user/my-project");
+		expect(el.shadowRoot!.querySelector(".folder-picker-actions")?.textContent).toContain("Open in my-project");
+	});
+
 	describe("sorting by lastUserPromptTime", () => {
 		it("sorts sessions with most recent user prompt first", async () => {
 			const agent = new MockAgent();

@@ -23,6 +23,7 @@ function api(overrides: Partial<BackendApi> = {}): BackendApi {
 		deleteSession: async () => undefined,
 		listForkMessages: async () => [],
 		browseDirectory: async () => ({ path: "/", dirs: [] }),
+		createDirectory: async (parentPath, name) => ({ name, path: `${parentPath}/${name}` }),
 		getRawSession: async () => "",
 		getFileContent: async () => ({ path: "/file", content: "" }),
 		createFileUpload: async () => ({ uploadId: "upload" }),
@@ -63,6 +64,21 @@ describe("BackendProtocolHandler", () => {
 		expect(connection.sent).toHaveLength(1);
 		expect(reconnected.sent).toEqual(connection.sent);
 		expect(JSON.parse(connection.sent[0])).toMatchObject({ success: true, method: "sessions.list" });
+	});
+
+	it("dispatches host folder creation requests", async () => {
+		const createDirectory = vi.fn(async (parentPath: string, name: string) => ({ name, path: `${parentPath}/${name}` }));
+		const connection = new FakeConnection();
+		new BackendProtocolHandler(api({ createDirectory })).accept(connection, "d_one");
+		connection.message(request("mkdir", "host.mkdir", { parentPath: "/work", name: "new-project" }));
+		await settle();
+
+		expect(createDirectory).toHaveBeenCalledWith("/work", "new-project");
+		expect(JSON.parse(connection.sent[0])).toMatchObject({
+			method: "host.mkdir",
+			success: true,
+			result: { name: "new-project", path: "/work/new-project" },
+		});
 	});
 
 	it("dispatches chunked file upload requests", async () => {

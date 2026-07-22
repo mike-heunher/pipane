@@ -272,4 +272,40 @@ describe("REST session path confinement", () => {
 			dirs: [{ name: "project-a", path: path.join(outsideDirectory, "project-a") }],
 		});
 	});
+
+	it("creates a direct child folder for the project picker", async () => {
+		const parentPath = path.join(tmpDir, "projects");
+		const response = await fetch(`${baseUrl}/api/directories`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ parentPath, name: "new-project" }),
+		});
+
+		expect(response.status).toBe(201);
+		expect(await response.json()).toEqual({
+			name: "new-project",
+			path: path.join(parentPath, "new-project"),
+		});
+		expect(existsSync(path.join(parentPath, "new-project"))).toBe(true);
+
+		const duplicate = await fetch(`${baseUrl}/api/directories`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ parentPath, name: "new-project" }),
+		});
+		expect(duplicate.status).toBe(409);
+	});
+
+	it("rejects folder names that escape the selected parent", async () => {
+		const parentPath = path.join(tmpDir, "projects");
+		const escapedPath = path.join(tmpDir, "escaped-project");
+		const response = await fetch(`${baseUrl}/api/directories`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ parentPath, name: "../escaped-project" }),
+		});
+
+		expect(response.status).toBe(400);
+		expect(existsSync(escapedPath)).toBe(false);
+	});
 });

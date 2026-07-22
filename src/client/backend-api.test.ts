@@ -24,6 +24,7 @@ describe("HttpBackendApi", () => {
 			.mockResolvedValueOnce(jsonResponse({ messages: [{ entryId: "entry", text: "hello" }] }))
 			.mockResolvedValueOnce(jsonResponse({ success: true }))
 			.mockResolvedValueOnce(jsonResponse({ path: "/work", dirs: [{ name: "src", path: "/work/src" }] }))
+			.mockResolvedValueOnce(jsonResponse({ name: "new-project", path: "/work/new-project" }, 201))
 			.mockResolvedValueOnce(new Response('{"type":"session"}\n'))
 			.mockResolvedValueOnce(jsonResponse({ path: "/work/README.md", content: "# Readme" }));
 		const api = new HttpBackendApi({ fetch: fetchMock });
@@ -34,6 +35,10 @@ describe("HttpBackendApi", () => {
 		expect(await api.browseDirectory("/work folder")).toEqual({
 			path: "/work",
 			dirs: [{ name: "src", path: "/work/src" }],
+		});
+		expect(await api.createDirectory("/work", "new-project")).toEqual({
+			name: "new-project",
+			path: "/work/new-project",
 		});
 		expect(await api.getRawSession("/sessions/one.jsonl")).toContain("session");
 		expect(await api.getFileContent("/sessions/one.jsonl", "/work/README.md")).toEqual({
@@ -49,9 +54,14 @@ describe("HttpBackendApi", () => {
 			body: JSON.stringify({ path: "/sessions/one.jsonl" }),
 		});
 		expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/browse?path=%2Fwork%20folder");
-		expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/sessions/raw?path=%2Fsessions%2Fone.jsonl");
+		expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/directories", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ parentPath: "/work", name: "new-project" }),
+		});
+		expect(fetchMock).toHaveBeenNthCalledWith(6, "/api/sessions/raw?path=%2Fsessions%2Fone.jsonl");
 		expect(fetchMock).toHaveBeenNthCalledWith(
-			6,
+			7,
 			"/api/files/content?sessionPath=%2Fsessions%2Fone.jsonl&path=%2Fwork%2FREADME.md",
 			{ cache: "no-store" },
 		);

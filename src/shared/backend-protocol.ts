@@ -15,6 +15,7 @@ export type BackendMethod =
 	| "files.upload.append"
 	| "files.upload.complete"
 	| "host.browse"
+	| "host.mkdir"
 	| "settings.get"
 	| "settings.validate"
 	| "settings.patch"
@@ -33,6 +34,7 @@ export interface BackendMethodParams {
 	"files.upload.append": { uploadId: string; offset: number; data: string };
 	"files.upload.complete": { uploadId: string };
 	"host.browse": { path: string };
+	"host.mkdir": { parentPath: string; name: string };
 	"settings.get": Record<string, never>;
 	"settings.validate": { content: string };
 	"settings.patch": { patch: Record<string, unknown> };
@@ -186,6 +188,10 @@ function validateParams(method: BackendMethod, params: Record<string, unknown>):
 			return hasOnlyKeys(params, ["uploadId"]) && isNonEmptyString(params.uploadId);
 		case "host.browse":
 			return hasOnlyKeys(params, ["path"]) && typeof params.path === "string";
+		case "host.mkdir":
+			return hasOnlyKeys(params, ["parentPath", "name"])
+				&& isNonEmptyString(params.parentPath)
+				&& isNonEmptyString(params.name);
 		case "settings.validate":
 		case "settings.save":
 			return hasOnlyKeys(params, ["content"]) && typeof params.content === "string";
@@ -209,6 +215,7 @@ function isBackendMethod(value: string): value is BackendMethod {
 		"files.upload.append",
 		"files.upload.complete",
 		"host.browse",
+		"host.mkdir",
 		"settings.get",
 		"settings.validate",
 		"settings.patch",

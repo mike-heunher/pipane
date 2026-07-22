@@ -1,5 +1,6 @@
 # Unreleased
 
+- Allow creating and opening a new folder directly from the New Project file explorer.
 - Inline compact generic tool parameters with their values in readable call signatures.
 - Delay sidebar pin and delete actions until a conversation has been hovered for 300 ms to prevent accidental clicks.
 - Add an opt-in conversation setting that hides all but the most recent configured thinking parts.

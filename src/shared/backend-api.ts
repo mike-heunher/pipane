@@ -91,6 +91,7 @@ export interface BackendApi {
 	deleteSession(sessionPath: string): Promise<void>;
 	listForkMessages(sessionPath: string): Promise<Array<{ entryId: string; text: string }>>;
 	browseDirectory(path: string): Promise<DirectoryListing>;
+	createDirectory(parentPath: string, name: string): Promise<DirectoryEntry>;
 	getRawSession(sessionPath: string): Promise<string>;
 	getFileContent(sessionPath: string, path: string): Promise<FileContentResponse>;
 	createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession>;

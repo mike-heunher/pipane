@@ -19,6 +19,7 @@ describe("semantic backend protocol", () => {
 		["files.upload.append", { uploadId: "upload-1", offset: 0, data: "eGl6" }],
 		["files.upload.complete", { uploadId: "upload-1" }],
 		["host.browse", { path: "/tmp" }],
+		["host.mkdir", { parentPath: "/tmp", name: "new-project" }],
 		["settings.get", {}],
 		["settings.validate", { content: "{}" }],
 		["settings.patch", { patch: { appearance: {} } }],
@@ -40,6 +41,7 @@ describe("semantic backend protocol", () => {
 			JSON.stringify({ v: 2, kind: "request", id: "r", method: "sessions.delete", params: {} }),
 			JSON.stringify({ v: 2, kind: "request", id: "r", method: "files.upload.create", params: { fileName: "x", mimeType: "x", size: -1 } }),
 			JSON.stringify({ v: 2, kind: "request", id: "r", method: "files.upload.append", params: { uploadId: "u", offset: 0, data: "" } }),
+			JSON.stringify({ v: 2, kind: "request", id: "r", method: "host.mkdir", params: { parentPath: "/tmp", name: "" } }),
 		]) expect(decodeBackendRequest(raw).ok).toBe(false);
 	});
 

@@ -10,6 +10,7 @@ import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 import type {
 	BackendApi,
 	BackendCapabilities,
+	DirectoryEntry,
 	DirectoryListing,
 	FileContentResponse,
 	FileUploadChunk,
@@ -107,6 +108,7 @@ export class LocalBackendApi implements BackendApi {
 			features: [
 				"sessions",
 				"host-browse",
+				"host-mkdir",
 				"file-preview",
 				"file-upload",
 				"local-settings",
@@ -145,13 +147,37 @@ export class LocalBackendApi implements BackendApi {
 	}
 
 	browseDirectory(requestedPath: string): Promise<DirectoryListing> {
-		const resolved = path.resolve((requestedPath || process.env.HOME || "/").replace(/^~/, process.env.HOME || "/"));
+		const resolved = resolveHostPath(requestedPath);
 		if (!existsSync(resolved)) throw new LocalBackendApiError("Path not found", 404, "not_found");
 		const dirs = readdirSync(resolved, { withFileTypes: true })
 			.filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
 			.map((entry) => ({ name: entry.name, path: path.join(resolved, entry.name) }))
 			.sort((left, right) => left.name.localeCompare(right.name));
 		return Promise.resolve({ path: resolved, dirs });
+	}
+
+	async createDirectory(parentPath: string, name: string): Promise<DirectoryEntry> {
+		if (!name.trim() || name === "." || name === ".." || name.includes("/") || name.includes("\0") || Buffer.byteLength(name) > 255) {
+			throw new LocalBackendApiError("Folder name is invalid", 400, "invalid_request");
+		}
+		const resolvedParent = resolveHostPath(parentPath);
+		if (!existsSync(resolvedParent)) throw new LocalBackendApiError("Parent folder not found", 404, "not_found");
+		if (!statSync(resolvedParent).isDirectory()) {
+			throw new LocalBackendApiError("Parent path is not a folder", 400, "invalid_request");
+		}
+
+		const directoryPath = path.join(resolvedParent, name);
+		try {
+			await mkdir(directoryPath);
+		} catch (error: any) {
+			if (error?.code === "EEXIST") throw new LocalBackendApiError("A folder with that name already exists", 409, "conflict");
+			if (error?.code === "ENOENT") throw new LocalBackendApiError("Parent folder not found", 404, "not_found");
+			if (error?.code === "EACCES" || error?.code === "EPERM" || error?.code === "EROFS") {
+				throw new LocalBackendApiError("Cannot create a folder here", 403, "forbidden");
+			}
+			throw error;
+		}
+		return { name, path: directoryPath };
 	}
 
 	getRawSession(sessionPath: string): Promise<string> {
@@ -368,6 +394,10 @@ export class LocalBackendApi implements BackendApi {
 			}, 150);
 		});
 	}
+}
+
+function resolveHostPath(requestedPath: string): string {
+	return path.resolve((requestedPath || process.env.HOME || "/").replace(/^~/, process.env.HOME || "/"));
 }
 
 function safeUploadFileName(fileName: string): string {

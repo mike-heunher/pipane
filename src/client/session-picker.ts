@@ -576,6 +576,28 @@ export class SessionPicker extends LitElement {
 			letter-spacing: 0.03em;
 		}
 
+		.folder-picker-location {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+		}
+
+		.folder-picker-location-path {
+			flex: 1;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			text-transform: none;
+			letter-spacing: normal;
+		}
+
+		.folder-picker-location-actions {
+			display: flex;
+			gap: 0.3rem;
+			flex-shrink: 0;
+		}
+
 		.folder-item {
 			display: flex;
 			align-items: center;
@@ -613,7 +635,8 @@ export class SessionPicker extends LitElement {
 			text-overflow: ellipsis;
 		}
 
-		.folder-go-btn {
+		.folder-go-btn,
+		.folder-new-btn {
 			background: none;
 			border: 1px solid var(--picker-border);
 			color: var(--picker-muted);
@@ -625,9 +648,65 @@ export class SessionPicker extends LitElement {
 			transition: all 0.15s;
 		}
 
-		.folder-go-btn:hover {
+		.folder-go-btn:hover:not(:disabled),
+		.folder-new-btn:hover:not(:disabled) {
 			color: var(--picker-text);
 			border-color: var(--picker-active);
+		}
+
+		.folder-go-btn:disabled,
+		.folder-new-btn:disabled {
+			cursor: default;
+			opacity: 0.5;
+		}
+
+		.new-folder-row {
+			display: flex;
+			align-items: center;
+			gap: 0.4rem;
+			padding: 0.35rem 0.75rem;
+			background: var(--picker-active-bg);
+		}
+
+		.new-folder-row input {
+			flex: 1;
+			min-width: 0;
+			box-sizing: border-box;
+			padding: 0.3rem 0.4rem;
+			border: 1px solid var(--picker-active);
+			border-radius: 4px;
+			background: var(--picker-bg);
+			color: var(--picker-text);
+			font: inherit;
+			font-size: 0.75rem;
+			outline: none;
+		}
+
+		.new-folder-row button {
+			border: 1px solid var(--picker-border);
+			border-radius: 4px;
+			background: var(--picker-bg);
+			color: var(--picker-text);
+			cursor: pointer;
+			padding: 0.3rem 0.4rem;
+			font-size: 0.7rem;
+		}
+
+		.new-folder-row button.new-folder-confirm {
+			border-color: var(--picker-active);
+			background: var(--picker-active);
+			color: white;
+		}
+
+		.new-folder-row button:disabled {
+			cursor: default;
+			opacity: 0.5;
+		}
+
+		.folder-picker-error {
+			padding: 0.35rem 0.75rem;
+			color: #dc2626;
+			font-size: 0.72rem;
 		}
 
 		.folder-picker-actions {
@@ -685,6 +764,10 @@ export class SessionPicker extends LitElement {
 	@state() private folderPath = "~";
 	@state() private folderDirs: DirEntry[] = [];
 	@state() private folderLoading = false;
+	@state() private newFolderInputVisible = false;
+	@state() private newFolderName = "";
+	@state() private folderCreating = false;
+	@state() private folderError = "";
 
 	private unsubSessionChange?: () => void;
 	private unsubSessionsChanged?: () => void;
@@ -1055,15 +1138,21 @@ export class SessionPicker extends LitElement {
 	private openFolderPicker() {
 		this.showFolderPicker = true;
 		this.folderPath = "~";
-		this.browseTo("~");
+		this.resetNewFolderInput();
+		this.folderError = "";
+		void this.browseTo("~");
 	}
 
 	private closeFolderPicker() {
 		this.showFolderPicker = false;
+		this.resetNewFolderInput();
+		this.folderError = "";
 	}
 
 	private async browseTo(dirPath: string) {
 		this.folderLoading = true;
+		this.resetNewFolderInput();
+		this.folderError = "";
 		try {
 			const data = await this.agent.browseDirectory(dirPath);
 			this.folderPath = data.path;
@@ -1071,8 +1160,52 @@ export class SessionPicker extends LitElement {
 		} catch (err) {
 			console.error("Failed to browse directory:", err);
 			this.folderDirs = [];
+			this.folderError = err instanceof Error ? err.message : "Could not open this folder";
 		}
 		this.folderLoading = false;
+	}
+
+	private beginNewFolder() {
+		this.newFolderInputVisible = true;
+		this.newFolderName = "";
+		this.folderError = "";
+		void this.updateComplete.then(() => {
+			this.shadowRoot?.querySelector<HTMLInputElement>(".new-folder-row input")?.focus();
+		});
+	}
+
+	private resetNewFolderInput() {
+		this.newFolderInputVisible = false;
+		this.newFolderName = "";
+	}
+
+	private handleNewFolderInput(e: Event) {
+		this.newFolderName = (e.target as HTMLInputElement).value;
+	}
+
+	private handleNewFolderKeydown(e: KeyboardEvent) {
+		if (e.key === "Enter") {
+			e.preventDefault();
+			void this.handleCreateFolder();
+		} else if (e.key === "Escape") {
+			this.resetNewFolderInput();
+		}
+	}
+
+	private async handleCreateFolder() {
+		const name = this.newFolderName.trim();
+		if (!name || this.folderCreating) return;
+		this.folderCreating = true;
+		this.folderError = "";
+		try {
+			const created = await this.agent.createDirectory(this.folderPath, name);
+			await this.browseTo(created.path);
+		} catch (err) {
+			console.error("Failed to create directory:", err);
+			this.folderError = err instanceof Error ? err.message : "Could not create this folder";
+		} finally {
+			this.folderCreating = false;
+		}
 	}
 
 	private handleFolderInputChange(e: Event) {
@@ -1318,12 +1451,36 @@ export class SessionPicker extends LitElement {
 						})}
 					` : nothing}
 
-					<div class="folder-picker-section">
-						${this.folderPath}
-						${this.folderPath !== "/" ? html`
-							<button class="folder-go-btn" @click=${this.handleParentFolder} title="Go up">↑ up</button>
-						` : nothing}
+					<div class="folder-picker-section folder-picker-location">
+						<span class="folder-picker-location-path" title=${this.folderPath}>${this.folderPath}</span>
+						<span class="folder-picker-location-actions">
+							${this.folderPath !== "/" ? html`
+								<button class="folder-go-btn" @click=${this.handleParentFolder} title="Go up" ?disabled=${this.folderLoading || this.folderCreating}>↑ up</button>
+							` : nothing}
+							<button class="folder-new-btn" @click=${this.beginNewFolder} title="Create a new folder" ?disabled=${this.folderLoading || this.folderCreating}>+ folder</button>
+						</span>
 					</div>
+
+					${this.newFolderInputVisible ? html`
+						<div class="new-folder-row">
+							${folderIcon}
+							<input
+								type="text"
+								aria-label="New folder name"
+								placeholder="Folder name"
+								.value=${this.newFolderName}
+								@input=${this.handleNewFolderInput}
+								@keydown=${this.handleNewFolderKeydown}
+								?disabled=${this.folderCreating}
+							/>
+							<button @click=${this.resetNewFolderInput} ?disabled=${this.folderCreating}>Cancel</button>
+							<button class="new-folder-confirm" @click=${this.handleCreateFolder} ?disabled=${!this.newFolderName.trim() || this.folderCreating}>
+								${this.folderCreating ? "Creating…" : "Create"}
+							</button>
+						</div>
+					` : nothing}
+
+					${this.folderError ? html`<div class="folder-picker-error" role="alert">${this.folderError}</div>` : nothing}
 
 					${this.folderLoading
 						? html`<div class="loading">Loading…</div>`

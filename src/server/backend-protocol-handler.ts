@@ -95,6 +95,7 @@ export class BackendProtocolHandler {
 			case "files.upload.append": return this.api.appendFileUpload(request.params);
 			case "files.upload.complete": return this.api.completeFileUpload(request.params.uploadId);
 			case "host.browse": return this.api.browseDirectory(request.params.path);
+			case "host.mkdir": return this.api.createDirectory(request.params.parentPath, request.params.name);
 			case "settings.get": return this.api.getLocalSettings();
 			case "settings.validate": return this.api.validateLocalSettings(request.params.content);
 			case "settings.patch": return this.api.patchLocalSettings(request.params.patch);

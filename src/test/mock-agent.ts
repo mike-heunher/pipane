@@ -92,6 +92,10 @@ export class MockAgent implements SessionPickerBackendClient {
 		return { path, dirs: [] };
 	}
 
+	async createDirectory(parentPath: string, name: string) {
+		return { name, path: `${parentPath.replace(/\/$/u, "")}/${name}` };
+	}
+
 	// ── Test helpers ───────────────────────────────────────────────────────
 
 	/** Set the sessions that listSessions() will return. */

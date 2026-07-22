@@ -1,6 +1,7 @@
 import type {
 	BackendApi,
 	BackendCapabilities,
+	DirectoryEntry,
 	DirectoryListing,
 	FileContentResponse,
 	FileUploadChunk,
@@ -98,6 +99,14 @@ export class DataChannelBackendApi implements BackendApi {
 			throw new Error("Backend returned an invalid directory listing");
 		}
 		return value as unknown as DirectoryListing;
+	}
+
+	async createDirectory(parentPath: string, name: string): Promise<DirectoryEntry> {
+		const value = await this.request("host.mkdir", { parentPath, name });
+		if (!isRecord(value) || !isString(value.name) || !isString(value.path)) {
+			throw new Error("Backend returned an invalid created folder");
+		}
+		return value as unknown as DirectoryEntry;
 	}
 
 	async getRawSession(sessionPath: string): Promise<string> {

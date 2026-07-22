@@ -126,6 +126,18 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 		}
 	});
 
+	app.post("/api/directories", async (req, res) => {
+		try {
+			const body = await readJsonBody(req, 16 * 1024);
+			if (typeof body.parentPath !== "string" || typeof body.name !== "string") {
+				throw new LocalBackendApiError("Missing 'parentPath' or 'name' string", 400, "invalid_request");
+			}
+			res.status(201).json(await api.createDirectory(body.parentPath, body.name));
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
 	app.get("/api/settings/local", async (_req, res) => {
 		try {
 			res.json(await api.getLocalSettings());

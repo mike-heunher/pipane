@@ -1391,6 +1391,10 @@ export class WsAgentAdapter implements BackendClient {
 		return this.api.browseDirectory(path);
 	}
 
+	createDirectory(parentPath: string, name: string) {
+		return this.api.createDirectory(parentPath, name);
+	}
+
 	getRawSession(sessionPath: string) {
 		return this.api.getRawSession(sessionPath);
 	}

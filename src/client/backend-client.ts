@@ -95,6 +95,7 @@ export type SessionPickerBackendClient = Pick<
 	| "newSession"
 	| "deleteSession"
 	| "browseDirectory"
+	| "createDirectory"
 >;
 
 export type ForkBackendClient = Pick<BackendClient, "getForkMessages" | "fork">;

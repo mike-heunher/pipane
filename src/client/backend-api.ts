@@ -1,6 +1,7 @@
 import type { UpdateRunResponse, UpdateSnapshot, UpdateTarget } from "../shared/updates.js";
 import type {
 	BackendApi,
+	DirectoryEntry,
 	DirectoryListing,
 	FileContentResponse,
 	FileUploadChunk,
@@ -74,6 +75,14 @@ export class HttpBackendApi implements BackendApi {
 
 	browseDirectory(path: string): Promise<DirectoryListing> {
 		return this.requestJson(`/api/browse?path=${encodeURIComponent(path)}`);
+	}
+
+	createDirectory(parentPath: string, name: string): Promise<DirectoryEntry> {
+		return this.requestJson("/api/directories", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ parentPath, name }),
+		});
 	}
 
 	async getRawSession(sessionPath: string): Promise<string> {
