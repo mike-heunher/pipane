@@ -12,7 +12,7 @@ The server rejects invalid JSON, unsupported versions, unknown commands, and inv
 
 ### Client commands
 
-The v1 command union covers installation, session subscription, prompting and steering, steering removal, abort and hard kill, compaction, model and command discovery, session statuses, fork and fork/prompt, session naming, and process reload.
+The v1 command union covers installation, session subscription, prompting and steering, steering removal, abort and hard kill, compaction, model and command discovery, session statuses and authoritative session statistics, fork and fork/prompt, session naming, and process reload.
 
 `WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills.
 
@@ -116,7 +116,7 @@ Application streaming, turn control, and session snapshots remain on validated v
 
 ## Pi subprocess RPC protocol
 
-`src/server/pi-rpc-protocol.ts` defines the typed subset of Pi RPC commands used by pipane and validates all corresponding responses, agent/session events, and extension UI requests before they reach session state.
+`src/server/pi-rpc-protocol.ts` defines the typed subset of Pi RPC commands used by pipane and validates all corresponding responses, agent/session events, and extension UI requests before they reach session state. Pi's built-in TUI commands are not forwarded by RPC `prompt`; browser equivalents such as `/session` map to explicit typed RPC operations (`get_session_stats`) instead.
 
 `ProcessPool.sendRpc()` is generic over Pi's exported `RpcCommand`/`RpcResponse` types. Pending requests retain their expected command, and a mismatched response is rejected rather than resolving the wrong operation.
 

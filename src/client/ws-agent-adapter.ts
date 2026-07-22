@@ -28,6 +28,7 @@ import {
 	type ClientCommandType,
 	type CommandResponseData,
 	type ProtocolDecodeError,
+	type SessionStats,
 	type SessionSyncMessage,
 	type SlashCommandInfo,
 } from "../shared/ws-protocol.js";
@@ -160,6 +161,8 @@ export class WsAgentAdapter implements BackendClient {
 	private _sessionPath: string | undefined;
 	private _sessionName: string | undefined;
 	private _sessionStatus: SessionStatus = "virtual";
+	/** Browser-only command output retained across a following authoritative sync. */
+	private _localAssistantMessages: AgentMessage[] = [];
 
 	// ── Optimistic sessions ────────────────────────────────────────────────
 	/** Sessions that the client knows about before the JSONL scan catches up. */
@@ -791,9 +794,10 @@ export class WsAgentAdapter implements BackendClient {
 		const previousError = this._state.error;
 		const previousSteering = [...(this._steeringQueues.get(syncSessionPath) ?? [])];
 
-		// The server sends a flat messages array with everything merged in.
-		// Just use it directly — no splitting, no fixups.
-		this._state.messages = state.messages ?? [];
+		// The server sends a flat messages array with everything merged in. Browser
+		// slash-command output is not in JSONL, so retain it across a sync that was
+		// already in flight when the command response arrived.
+		this._state.messages = [...(state.messages ?? []), ...this._localAssistantMessages];
 		this._state.isStreaming = state.isStreaming ?? false;
 		if (this._sessionStatus !== "virtual") {
 			this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
@@ -1019,6 +1023,10 @@ export class WsAgentAdapter implements BackendClient {
 			text = this.extractText(input);
 		}
 
+		// Browser-only command output is informational and should disappear when the
+		// next input is submitted rather than drifting to the bottom of later syncs.
+		this.clearLocalAssistantMessages();
+
 		// Handle client-side slash commands
 		const handled = await this.handleSlashCommand(text);
 		if (handled) return;
@@ -1156,6 +1164,55 @@ export class WsAgentAdapter implements BackendClient {
 		}
 	}
 
+	private clearLocalAssistantMessages(): void {
+		if (this._localAssistantMessages.length === 0) return;
+		const localMessages = new Set(this._localAssistantMessages);
+		this._localAssistantMessages = [];
+		this._state.messages = this._state.messages.filter((message) => !localMessages.has(message));
+		this.emitContentChange();
+	}
+
+	private appendLocalAssistantMessage(text: string): void {
+		const message = {
+			role: "assistant",
+			content: [{ type: "text", text }],
+		} as AgentMessage;
+		this._localAssistantMessages.push(message);
+		this._state.messages = [...this._state.messages, message];
+		this.emitContentChange();
+	}
+
+	private formatSessionStats(stats: SessionStats): string {
+		const number = (value: number) => value.toLocaleString("en-US");
+		const cost = `$${stats.cost.toFixed(stats.cost < 0.01 ? 4 : stats.cost < 1 ? 3 : 2)}`;
+		const lines = [
+			"**Session information**",
+			"",
+			`- **File:** \`${stats.sessionFile}\``,
+			`- **ID:** \`${stats.sessionId}\``,
+			`- **Messages:** ${number(stats.totalMessages)} total (${number(stats.userMessages)} user, ${number(stats.assistantMessages)} assistant)`,
+			`- **Tools:** ${number(stats.toolCalls)} calls, ${number(stats.toolResults)} results`,
+			`- **Tokens:** ${number(stats.tokens.total)} total (${number(stats.tokens.input)} input, ${number(stats.tokens.output)} output, ${number(stats.tokens.cacheRead)} cache read, ${number(stats.tokens.cacheWrite)} cache write)`,
+			`- **Cost:** ${cost}`,
+		];
+		if (stats.contextUsage) {
+			const context = stats.contextUsage.tokens === null
+				? `unknown / ${number(stats.contextUsage.contextWindow)}`
+				: `${number(stats.contextUsage.tokens)} / ${number(stats.contextUsage.contextWindow)}${stats.contextUsage.percent === null ? "" : ` (${stats.contextUsage.percent}%)`}`;
+			lines.push(`- **Context:** ${context}`);
+		}
+		return lines.join("\n");
+	}
+
+	private async showSessionMessage(): Promise<void> {
+		if (!this._sessionPath) {
+			this.appendLocalAssistantMessage("No active session yet. Send a message first to create one.");
+			return;
+		}
+		const stats = await this.send({ type: "get_session_stats", sessionPath: this._sessionPath });
+		this.appendLocalAssistantMessage(this.formatSessionStats(stats));
+	}
+
 	private async showHelpMessage() {
 		const lines: string[] = [
 			"**Built-in commands:**",
@@ -1210,14 +1267,7 @@ export class WsAgentAdapter implements BackendClient {
 			"| `Escape` | Abort current turn |",
 		);
 
-		const helpText = lines.join("\n");
-
-		const helpMessage = {
-			role: "assistant" as const,
-			content: [{ type: "text" as const, text: helpText }],
-		} as AgentMessage;
-		this._state.messages = [...this._state.messages, helpMessage];
-		this.emitContentChange();
+		this.appendLocalAssistantMessage(lines.join("\n"));
 	}
 
 	private async handleSlashCommand(text: string): Promise<boolean> {
@@ -1231,6 +1281,11 @@ export class WsAgentAdapter implements BackendClient {
 
 		if (trimmed === "/new") {
 			await this.newSession();
+			return true;
+		}
+
+		if (trimmed === "/session") {
+			await this.showSessionMessage();
 			return true;
 		}
 
@@ -1276,28 +1331,16 @@ export class WsAgentAdapter implements BackendClient {
 			const name = trimmed.slice(6).trim();
 			if (!name) return true;
 			if (!this._sessionPath) {
-				this._state.messages = [...this._state.messages, {
-					role: "assistant",
-					content: [{ type: "text", text: "Cannot set name: no active session. Send a message first." }],
-				} as AgentMessage];
-				this.emitContentChange();
+				this.appendLocalAssistantMessage("Cannot set name: no active session. Send a message first.");
 				return true;
 			}
 			try {
 				await this.send({ type: "set_session_name", sessionPath: this._sessionPath, name });
 				this._sessionName = name;
-				this._state.messages = [...this._state.messages, {
-					role: "assistant",
-					content: [{ type: "text", text: `Session renamed to **${name}**` }],
-				} as AgentMessage];
-				this.emitContentChange();
+				this.appendLocalAssistantMessage(`Session renamed to **${name}**`);
 				this.emitSessionChange();
 			} catch (err: any) {
-				this._state.messages = [...this._state.messages, {
-					role: "assistant",
-					content: [{ type: "text", text: `Failed to rename session: ${err?.message || "unknown error"}` }],
-				} as AgentMessage];
-				this.emitContentChange();
+				this.appendLocalAssistantMessage(`Failed to rename session: ${err?.message || "unknown error"}`);
 			}
 			return true;
 		}
@@ -1307,17 +1350,9 @@ export class WsAgentAdapter implements BackendClient {
 				const data = await this.send({ type: "reload_processes" });
 				const killed = data?.killed ?? 0;
 				const draining = data?.draining ?? 0;
-				this._state.messages = [...this._state.messages, {
-					role: "assistant",
-					content: [{ type: "text", text: `Reload requested: killed ${killed} idle process(es), draining ${draining} running process(es).` }],
-				} as AgentMessage];
-				this.emitContentChange();
+				this.appendLocalAssistantMessage(`Reload requested: killed ${killed} idle process(es), draining ${draining} running process(es).`);
 			} catch (err: any) {
-				this._state.messages = [...this._state.messages, {
-					role: "assistant",
-					content: [{ type: "text", text: `Failed to reload pi processes: ${err?.message || "unknown error"}` }],
-				} as AgentMessage];
-				this.emitContentChange();
+				this.appendLocalAssistantMessage(`Failed to reload pi processes: ${err?.message || "unknown error"}`);
 			}
 			return true;
 		}
@@ -1558,6 +1593,7 @@ export class WsAgentAdapter implements BackendClient {
 		this._pendingControl = undefined;
 		this._lastAuthoritativeControl = undefined;
 		this._sessionPath = sessionPath;
+		this._localAssistantMessages = [];
 		this.clearExtensionStatuses();
 		// Extract session ID from filename
 		const filename = path.basename(sessionPath, ".jsonl");
@@ -1602,6 +1638,7 @@ export class WsAgentAdapter implements BackendClient {
 				.replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
 		this._sessionPath = undefined;
 		this._sessionName = undefined;
+		this._localAssistantMessages = [];
 		this.clearExtensionStatuses();
 		this._sessionStatus = "virtual";
 		this._pendingCwd = cwd;

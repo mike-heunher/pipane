@@ -19,6 +19,7 @@ describe("slash command discovery", () => {
 			.toEqual(PIPANE_SLASH_COMMANDS.map((command) => command.name));
 		expect(commands.slice(PIPANE_SLASH_COMMANDS.length).map((command) => command.name))
 			.toEqual(["deploy", "review", "skill:search"]);
+		expect(PIPANE_SLASH_COMMANDS.map((command) => command.name)).toContain("session");
 		expect(commands.find((command) => command.name === "deploy")).toMatchObject({
 			description: "Deploy the app",
 			source: "extension",

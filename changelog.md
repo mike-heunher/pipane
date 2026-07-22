@@ -1,5 +1,6 @@
 # Unreleased
 
+- Support `/session` in the browser with authoritative Pi session, message, token, context, and cost statistics.
 - Allow creating and opening a new folder directly from the New Project file explorer.
 - Inline compact generic tool parameters with their values in readable call signatures.
 - Delay sidebar pin and delete actions until a conversation has been hovered for 300 ms to prevent accidental clicks.

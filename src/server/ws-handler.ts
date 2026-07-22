@@ -474,6 +474,9 @@ export class WsHandler {
 				case "get_session_statuses":
 					this.handleGetSessionStatuses(ws, command);
 					break;
+				case "get_session_stats":
+					await this.handleGetSessionStats(ws, command);
+					break;
 				case "fork":
 					await this.handleFork(ws, command);
 					break;
@@ -836,6 +839,26 @@ export class WsHandler {
 
 	private handleGetSessionStatuses(ws: ServerFrameConnection, command: CommandOf<"get_session_statuses">): void {
 		this.sendSuccess(ws, command.id, "get_session_statuses", { statuses: this.registry.getAllStatuses() });
+	}
+
+	private async handleGetSessionStats(ws: ServerFrameConnection, command: CommandOf<"get_session_stats">): Promise<void> {
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
+		const actor = this.registry.get(sessionPath);
+		const response = await actor.enqueue("get session stats", async () => {
+			const wasAttached = actor.process !== undefined;
+			const proc = await this.acquireForActor(actor);
+			try {
+				return await this.pool.sendRpcChecked(proc, { type: "get_session_stats" });
+			} finally {
+				// A running turn owns its process lease. Only release a lease acquired
+				// temporarily to inspect a detached session.
+				if (!wasAttached) this.releaseActor(actor);
+			}
+		});
+		this.sendSuccess(ws, command.id, "get_session_stats", {
+			...response.data,
+			sessionFile: response.data.sessionFile ?? sessionPath,
+		});
 	}
 
 	private async handleFork(ws: ServerFrameConnection, command: CommandOf<"fork">): Promise<void> {

@@ -311,7 +311,7 @@ test.describe("UI behavior and visual goldens", () => {
 		const textarea = editor.locator("textarea").first();
 		await textarea.fill("/");
 		const slashMenu = editor.locator(".slash-command-menu");
-		await expect(slashMenu.locator(".slash-command-option")).toHaveCount(8);
+		await expect(slashMenu.locator(".slash-command-option")).toHaveCount(9);
 		await captureAndCompare(slashMenu, "slash-command-overview.png");
 
 		await textarea.fill("Can you help me refactor the database module to use connection pooling?");

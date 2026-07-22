@@ -94,6 +94,29 @@ test.describe("Real stack e2e", () => {
 		await expect(sessionItem.locator(".session-worktree")).toHaveText("root", { timeout: 10000 });
 	});
 
+	test("shows authoritative session statistics through /session", async ({ page, harness }) => {
+		harness.setScenarios([
+			{ match: "session-stats-e2e", chunks: textChunks("Session stats are ready.") },
+		]);
+
+		await gotoFreshSession(page, harness);
+		const textarea = page.locator("message-editor").locator("textarea").first();
+		await textarea.fill("session-stats-e2e");
+		await textarea.press("Enter");
+		await expect(page.getByText("Session stats are ready.", { exact: false })).toBeVisible({ timeout: 15000 });
+		await expect(page.locator(".status-stop-button")).toBeHidden({ timeout: 10_000 });
+
+		await textarea.fill("/session");
+		await textarea.press("Escape");
+		await textarea.press("Enter");
+
+		const conversation = page.locator("pi-message-list");
+		await expect(conversation).toContainText("Session information", { timeout: 10_000 });
+		await expect(conversation).toContainText("Messages:");
+		await expect(conversation).toContainText("Tokens:");
+		await expect(conversation).toContainText("Cost:");
+	});
+
 	test("keeps hash-dependent sync deltas ordered during burst streaming", async ({ page, harness }) => {
 		const syncFailures: string[] = [];
 		page.on("console", (message) => {

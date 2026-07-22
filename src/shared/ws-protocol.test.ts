@@ -12,6 +12,18 @@ import {
 
 const envelope = { protocolVersion: WS_PROTOCOL_VERSION, id: "req-1" };
 const model = { provider: "anthropic", modelId: "claude-sonnet" };
+const sessionStats = {
+	sessionFile: "/sessions/a.jsonl",
+	sessionId: "session-a",
+	userMessages: 2,
+	assistantMessages: 2,
+	toolCalls: 1,
+	toolResults: 1,
+	totalMessages: 6,
+	tokens: { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, total: 180 },
+	cost: 0.012,
+	contextUsage: { tokens: 180, contextWindow: 200_000, percent: 0.09 },
+};
 
 const clientCommands = [
 	{ type: "install_pi" },
@@ -25,6 +37,7 @@ const clientCommands = [
 	{ type: "get_available_models" },
 	{ type: "get_default_model" },
 	{ type: "get_session_statuses" },
+	{ type: "get_session_stats", sessionPath: "/sessions/a.jsonl" },
 	{ type: "fork", sessionPath: "/sessions/a.jsonl", entryId: "entry-1" },
 	{ type: "fork_prompt", sessionPath: "/sessions/a.jsonl", message: "branch", model, images: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
 	{ type: "set_session_name", sessionPath: "/sessions/a.jsonl", name: "typed-protocol" },
@@ -44,6 +57,7 @@ const successResponses: ServerMessagePayload[] = [
 	{ type: "response", id: "req-1", command: "get_available_models", success: true, data: { models: [{ provider: "anthropic", id: "claude-sonnet" }] } },
 	{ type: "response", id: "req-1", command: "get_default_model", success: true, data: { model: null, thinkingLevel: "off" } },
 	{ type: "response", id: "req-1", command: "get_session_statuses", success: true, data: { statuses: { "/sessions/a.jsonl": "running" } } },
+	{ type: "response", id: "req-1", command: "get_session_stats", success: true, data: sessionStats },
 	{ type: "response", id: "req-1", command: "fork", success: true, data: { text: "hello", cancelled: false, newSessionPath: "/sessions/b.jsonl" } },
 	{ type: "response", id: "req-1", command: "fork_prompt", success: true, data: { newSessionPath: "/sessions/b.jsonl" } },
 	{ type: "response", id: "req-1", command: "set_session_name", success: true, data: {} },
@@ -79,6 +93,8 @@ describe("WebSocket protocol contract", () => {
 			.toMatchObject({ ok: false, error: { code: "unknown_command", requestId: "req-1" } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "prompt", sessionPath: "x", message: "hi" })))
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("$command.model") } });
+		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "get_session_stats" })))
+			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("sessionPath") } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, protocolVersion: 999, type: "abort", sessionPath: "x" })))
 			.toMatchObject({ ok: false, error: { code: "unsupported_version", requestId: "req-1" } });
 	});

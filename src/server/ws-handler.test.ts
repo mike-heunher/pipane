@@ -631,6 +631,44 @@ describe("WsHandler session path confinement", () => {
 	});
 });
 
+describe("WsHandler session stats", () => {
+	it("queries the session-owning process without releasing a running turn's lease", async () => {
+		const sessionPath = "/tmp/stats.jsonl";
+		const proc = { id: 50 };
+		const stats = {
+			sessionFile: undefined,
+			sessionId: "session-stats",
+			userMessages: 2,
+			assistantMessages: 2,
+			toolCalls: 1,
+			toolResults: 1,
+			totalMessages: 6,
+			tokens: { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, total: 180 },
+			cost: 0.012,
+			contextUsage: { tokens: 180, contextWindow: 200_000, percent: 0.09 },
+		};
+		const sendRpcChecked = vi.fn(async () => ({ success: true, data: stats }));
+		const { handler, registry } = makeHandler({ sendRpcChecked });
+		const { release } = attachActor(registry, sessionPath, proc);
+		const { ws, sent } = makeWs();
+
+		await handler.handleGetSessionStats(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "stats",
+			type: "get_session_stats",
+			sessionPath,
+		});
+
+		expect(sendRpcChecked).toHaveBeenCalledWith(proc, { type: "get_session_stats" });
+		expect(release).not.toHaveBeenCalled();
+		expect(sent).toContainEqual(expect.objectContaining({
+			id: "stats",
+			success: true,
+			data: expect.objectContaining({ sessionFile: sessionPath, sessionId: "session-stats" }),
+		}));
+	});
+});
+
 describe("WsHandler slash command discovery", () => {
 	it("uses the canonical session cwd for project-scoped commands", async () => {
 		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-commands-"));

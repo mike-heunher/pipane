@@ -33,6 +33,29 @@ export interface SlashCommandInfo extends Record<string, unknown> {
 	path?: string;
 }
 
+export interface SessionStats {
+	sessionFile: string;
+	sessionId: string;
+	userMessages: number;
+	assistantMessages: number;
+	toolCalls: number;
+	toolResults: number;
+	totalMessages: number;
+	tokens: {
+		input: number;
+		output: number;
+		cacheRead: number;
+		cacheWrite: number;
+		total: number;
+	};
+	cost: number;
+	contextUsage?: {
+		tokens: number | null;
+		contextWindow: number;
+		percent: number | null;
+	};
+}
+
 interface CommandEnvelope {
 	protocolVersion: typeof WS_PROTOCOL_VERSION;
 	id: string;
@@ -62,6 +85,7 @@ export type ClientCommand = CommandEnvelope & (
 	| { type: "get_available_models" }
 	| { type: "get_default_model" }
 	| { type: "get_session_statuses" }
+	| ({ type: "get_session_stats" } & SessionCommand)
 	| ({ type: "fork"; entryId: string } & SessionCommand)
 	| ({
 		type: "fork_prompt";
@@ -95,6 +119,7 @@ export interface CommandResponseDataMap {
 	get_available_models: { models: WireModel[] };
 	get_default_model: { model: WireModel | null; thinkingLevel: ThinkingLevelValue };
 	get_session_statuses: { statuses: SessionRuntimeStatuses };
+	get_session_stats: SessionStats;
 	fork: { text: string; cancelled: boolean; newSessionPath: string | null };
 	fork_prompt: { newSessionPath: string };
 	set_session_name: Record<string, never>;
@@ -428,6 +453,7 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 			case "subscribe_session":
 			case "abort":
 			case "hard_kill":
+			case "get_session_stats":
 				sessionPath();
 				break;
 			case "prompt":
@@ -477,13 +503,35 @@ function validateSlashCommands(value: unknown, path: string): void {
 		const command = record(item, `${path}[${index}]`);
 		string(command.name, `${path}[${index}].name`, false);
 		optionalString(command.description, `${path}[${index}].description`);
-		if (!['extension', 'prompt', 'skill'].includes(String(command.source))) {
+		if (!["extension", "prompt", "skill"].includes(String(command.source))) {
 			fail(`${path}[${index}].source`, "expected extension, prompt, or skill");
 		}
 		if (command.sourceInfo !== undefined) record(command.sourceInfo, `${path}[${index}].sourceInfo`);
 		optionalString(command.location, `${path}[${index}].location`);
 		optionalString(command.path, `${path}[${index}].path`);
 	});
+}
+
+function validateSessionStats(value: unknown, path: string): void {
+	const stats = record(value, path);
+	string(stats.sessionFile, `${path}.sessionFile`, false);
+	string(stats.sessionId, `${path}.sessionId`, false);
+	for (const field of ["userMessages", "assistantMessages", "toolCalls", "toolResults", "totalMessages"] as const) {
+		integer(stats[field], `${path}.${field}`);
+	}
+	const tokens = record(stats.tokens, `${path}.tokens`);
+	for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+		integer(tokens[field], `${path}.tokens.${field}`);
+	}
+	if (finiteNumber(stats.cost, `${path}.cost`) < 0) fail(`${path}.cost`, "expected a non-negative number");
+	if (stats.contextUsage !== undefined) {
+		const context = record(stats.contextUsage, `${path}.contextUsage`);
+		if (context.tokens !== null) integer(context.tokens, `${path}.contextUsage.tokens`);
+		integer(context.contextWindow, `${path}.contextUsage.contextWindow`);
+		if (context.percent !== null && finiteNumber(context.percent, `${path}.contextUsage.percent`) < 0) {
+			fail(`${path}.contextUsage.percent`, "expected a non-negative number or null");
+		}
+	}
 }
 
 function validateSuccessData(command: ClientCommandType, value: unknown, path: string): void {
@@ -518,6 +566,9 @@ function validateSuccessData(command: ClientCommandType, value: unknown, path: s
 		case "get_session_statuses":
 			statusRecord(data.statuses, `${path}.statuses`);
 			break;
+		case "get_session_stats":
+			validateSessionStats(data, path);
+			break;
 		case "fork":
 			string(data.text, `${path}.text`);
 			boolean(data.cancelled, `${path}.cancelled`);
@@ -545,6 +596,7 @@ const CLIENT_COMMAND_TYPES = new Set<ClientCommandType>([
 	"get_available_models",
 	"get_default_model",
 	"get_session_statuses",
+	"get_session_stats",
 	"fork",
 	"fork_prompt",
 	"set_session_name",

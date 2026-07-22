@@ -16,6 +16,7 @@ const SUPPORTED_COMMAND_TYPES = [
 	"get_available_models",
 	"set_thinking_level",
 	"compact",
+	"get_session_stats",
 	"switch_session",
 	"fork",
 	"set_session_name",
@@ -98,6 +99,11 @@ function integer(value: unknown, path: string): number {
 	return value as number;
 }
 
+function finiteNumber(value: unknown, path: string): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) fail(path, "expected a finite number");
+	return value;
+}
+
 function array(value: unknown, path: string): unknown[] {
 	if (!Array.isArray(value)) fail(path, "expected an array");
 	return value;
@@ -156,6 +162,28 @@ function validateSlashCommands(value: unknown, path: string): void {
 	});
 }
 
+function validateSessionStats(value: unknown, path: string): void {
+	const stats = record(value, path);
+	optionalString(stats.sessionFile, `${path}.sessionFile`);
+	string(stats.sessionId, `${path}.sessionId`, false);
+	for (const field of ["userMessages", "assistantMessages", "toolCalls", "toolResults", "totalMessages"] as const) {
+		integer(stats[field], `${path}.${field}`);
+	}
+	const tokens = record(stats.tokens, `${path}.tokens`);
+	for (const field of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+		integer(tokens[field], `${path}.tokens.${field}`);
+	}
+	if (finiteNumber(stats.cost, `${path}.cost`) < 0) fail(`${path}.cost`, "expected a non-negative number");
+	if (stats.contextUsage !== undefined) {
+		const context = record(stats.contextUsage, `${path}.contextUsage`);
+		if (context.tokens !== null) integer(context.tokens, `${path}.contextUsage.tokens`);
+		integer(context.contextWindow, `${path}.contextUsage.contextWindow`);
+		if (context.percent !== null && finiteNumber(context.percent, `${path}.contextUsage.percent`) < 0) {
+			fail(`${path}.contextUsage.percent`, "expected a non-negative number or null");
+		}
+	}
+}
+
 const SUPPORTED_COMMAND_SET = new Set<string>(SUPPORTED_COMMAND_TYPES);
 
 function commandType(value: unknown, path: string): PiRpcCommandType {
@@ -199,6 +227,9 @@ function validateResponse(value: Record<string, unknown>): PiRpcResponse {
 		}
 		case "compact":
 			record(value.data, "$rpc.data");
+			break;
+		case "get_session_stats":
+			validateSessionStats(value.data, "$rpc.data");
 			break;
 		case "fork": {
 			const data = record(value.data, "$rpc.data");

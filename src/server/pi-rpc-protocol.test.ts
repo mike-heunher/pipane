@@ -22,6 +22,19 @@ const state = {
 	pendingMessageCount: 0,
 };
 
+const sessionStats = {
+	sessionFile: "/sessions/a.jsonl",
+	sessionId: "session-a",
+	userMessages: 2,
+	assistantMessages: 2,
+	toolCalls: 1,
+	toolResults: 1,
+	totalMessages: 6,
+	tokens: { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, total: 180 },
+	cost: 0.012,
+	contextUsage: { tokens: 180, contextWindow: 200_000, percent: 0.09 },
+};
+
 const responses = [
 	{ type: "response", id: "1", command: "prompt", success: true },
 	{ type: "response", id: "1", command: "steer", success: true },
@@ -32,6 +45,7 @@ const responses = [
 	{ type: "response", id: "1", command: "get_available_models", success: true, data: { models: [state.model] } },
 	{ type: "response", id: "1", command: "set_thinking_level", success: true },
 	{ type: "response", id: "1", command: "compact", success: true, data: { summary: "compact" } },
+	{ type: "response", id: "1", command: "get_session_stats", success: true, data: sessionStats },
 	{ type: "response", id: "1", command: "switch_session", success: true, data: { cancelled: false } },
 	{ type: "response", id: "1", command: "fork", success: true, data: { text: "hello", cancelled: false } },
 	{ type: "response", id: "1", command: "set_session_name", success: true },
@@ -96,6 +110,13 @@ describe("Pi RPC protocol contract", () => {
 			.toMatchObject({ ok: false, error: { message: expect.stringContaining("unknown event") } });
 		expect(decodePiRpcLine(JSON.stringify({ type: "response", id: "1", command: "get_state", success: true, data: {} })))
 			.toMatchObject({ ok: false, error: { message: expect.stringContaining("thinkingLevel") } });
+		expect(decodePiRpcLine(JSON.stringify({
+			type: "response",
+			id: "1",
+			command: "get_session_stats",
+			success: true,
+			data: { ...sessionStats, cost: "free" },
+		}))).toMatchObject({ ok: false, error: { message: expect.stringContaining("cost") } });
 		expect(decodePiRpcLine(JSON.stringify({ type: "message_update", message: null })))
 			.toMatchObject({ ok: false, error: { message: expect.stringContaining("message") } });
 	});

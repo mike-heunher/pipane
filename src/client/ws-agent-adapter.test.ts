@@ -54,6 +54,18 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 					case "get_available_models": return { models: [] };
 					case "get_default_model": return { model: null, thinkingLevel: "off" };
 					case "get_session_statuses": return { statuses: {} };
+					case "get_session_stats": return {
+						sessionFile: parsed.sessionPath,
+						sessionId: "test-session",
+						userMessages: 2,
+						assistantMessages: 2,
+						toolCalls: 3,
+						toolResults: 3,
+						totalMessages: 10,
+						tokens: { input: 1200, output: 300, cacheRead: 500, cacheWrite: 100, total: 2100 },
+						cost: 0.012,
+						contextUsage: { tokens: 2100, contextWindow: 200_000, percent: 1.05 },
+					};
 					case "fork": return { text: "", cancelled: false, newSessionPath: null };
 					case "get_commands": return { commands: [] };
 					case "reload_processes": return { killed: 0, draining: 0 };
@@ -1244,6 +1256,45 @@ describe("WsAgentAdapter prompt routing", () => {
 				type: "get_commands",
 				cwd: "/tmp/project-a",
 			}));
+		});
+
+		it("/session requests authoritative stats and renders them without prompting the model", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			await adapter.prompt("/session");
+
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "get_session_stats",
+				sessionPath,
+			}));
+			expect(sent.filter((message) => message.type === "prompt")).toHaveLength(0);
+			const text = (adapter.state.messages.at(-1) as any)?.content?.[0]?.text ?? "";
+			expect(text).toContain("**Session information**");
+			expect(text).toContain("`test-session`");
+			expect(text).toContain("2,100 total");
+			expect(text).toContain("$0.012");
+			expect(text).toContain("2,100 / 200,000 (1.05%)");
+
+			// Acquiring a Pi process for detached stats can publish an already queued
+			// authoritative snapshot after the command response. Keep browser-only
+			// output visible across that sync.
+			await pushSessionState(adapter, {
+				messages: [{ role: "user", content: "hello" }],
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-20250514" },
+			});
+			expect((adapter.state.messages.at(-1) as any)?.content?.[0]?.text)
+				.toContain("**Session information**");
+		});
+
+		it("/session explains that a virtual conversation has no persisted session yet", async () => {
+			const { adapter, sent } = createTestAdapter();
+
+			await adapter.prompt("/session");
+
+			expect(sent.filter((message) => message.type === "get_session_stats")).toHaveLength(0);
+			expect((adapter.state.messages.at(-1) as any)?.content?.[0]?.text)
+				.toContain("No active session yet");
 		});
 
 		it("keeps /compact pending beyond the generic 30-second command timeout", async () => {

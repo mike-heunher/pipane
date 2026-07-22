@@ -13,6 +13,7 @@ export interface SlashCommandSuggestion {
 export const PIPANE_SLASH_COMMANDS: readonly SlashCommandSuggestion[] = [
 	{ name: "help", description: "Show this help", source: "builtin" },
 	{ name: "new", description: "Start a new session", source: "builtin" },
+	{ name: "session", description: "Show session file, messages, tokens, and cost", source: "builtin" },
 	{ name: "fork", description: "Fork session from a previous message", source: "builtin" },
 	{
 		name: "compact",
