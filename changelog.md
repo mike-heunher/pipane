@@ -1,5 +1,6 @@
 # Unreleased
 
+- Allow resizing the linked file preview pane without iframe content interrupting the drag.
 - Render LaTeX in Markdown file previews and match previews to the active application theme.
 - Restore each conversation's open file preview when switching between sessions.
 - Support `/session` in the browser with authoritative Pi session, message, token, context, and cost statistics.

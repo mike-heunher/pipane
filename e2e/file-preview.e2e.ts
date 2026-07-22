@@ -100,6 +100,22 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		const previewBackground = await previewFrame.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor);
 		expect(previewBackground).toBe(panelBackground);
 
+		const panelContainer = page.locator(".file-preview-container");
+		const resizeHandle = page.getByRole("separator", { name: "Resize file preview" });
+		const initialBox = await panelContainer.boundingBox();
+		const handleBox = await resizeHandle.boundingBox();
+		if (!initialBox || !handleBox) throw new Error("Preview resize controls have no layout box");
+		await page.mouse.move(handleBox.x + handleBox.width / 2, initialBox.y + initialBox.height / 2);
+		await page.mouse.down();
+		await expect(page.locator(".file-preview-resize-overlay")).toBeVisible();
+		// The first move lands over the iframe's old bounds. The viewport overlay
+		// must retain the drag instead of allowing the child frame to take it.
+		await page.mouse.move(initialBox.x + 40, initialBox.y + initialBox.height / 2);
+		await expect.poll(async () => (await panelContainer.boundingBox())?.width ?? 0)
+			.toBeLessThan(initialBox.width - 20);
+		await page.mouse.up();
+		await expect(page.locator(".file-preview-resize-overlay")).toHaveCount(0);
+
 		await previewFrame.getByRole("link", { name: "More details" }).click();
 		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 		await expect(previewFrame.getByRole("heading", { name: "Details" })).toBeVisible();

@@ -210,4 +210,47 @@ describe("linked file preview", () => {
 
 		expect(container.querySelector("[role=alert]")?.textContent).toContain("File not found");
 	});
+
+	it("resizes behind a viewport overlay and supports keyboard adjustments", async () => {
+		const host = document.createElement("div");
+		document.body.appendChild(host);
+		const container = setupPanel();
+		host.appendChild(container);
+		vi.spyOn(host, "getBoundingClientRect").mockReturnValue({ width: 1000 } as DOMRect);
+		vi.spyOn(container, "getBoundingClientRect").mockReturnValue({ width: 450 } as DOMRect);
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+			path: "/work/project/docs/guide.md",
+			content: "# Guide",
+		}), { status: 200, headers: { "Content-Type": "application/json" } }));
+
+		openFilePreviewLink("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }));
+		await settle();
+
+		const handle = container.querySelector<HTMLElement>(".file-preview-resize-handle");
+		expect(handle?.getAttribute("role")).toBe("separator");
+		handle?.dispatchEvent(new PointerEvent("pointerdown", {
+			bubbles: true,
+			button: 0,
+			clientX: 500,
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		expect(document.body.classList.contains("is-file-preview-resizing")).toBe(true);
+		expect(document.querySelector(".file-preview-resize-overlay")).not.toBeNull();
+
+		window.dispatchEvent(new PointerEvent("pointermove", {
+			clientX: 440,
+			isPrimary: true,
+			pointerId: 7,
+		}));
+		expect(container.style.width).toBe("510px");
+		expect(handle?.getAttribute("aria-valuenow")).toBe("510");
+
+		window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7 }));
+		expect(document.querySelector(".file-preview-resize-overlay")).toBeNull();
+		expect(document.body.classList.contains("is-file-preview-resizing")).toBe(false);
+
+		handle?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight" }));
+		expect(container.style.width).toBe("494px");
+	});
 });

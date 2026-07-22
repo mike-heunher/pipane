@@ -22,6 +22,13 @@ let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
 let frameMessageListenerInstalled = false;
 let themeObserverInstalled = false;
+let previewWidth: number | null = null;
+let activeResize: {
+	pointerId: number;
+	startX: number;
+	startWidth: number;
+	overlay: HTMLDivElement;
+} | null = null;
 
 const MARKDOWN_FILE_PATTERN = /(?:^|\/)(?:readme|changelog|agents?)$|\.(?:md|markdown|mdown|mkd|mdx)$/i;
 const HTML_FILE_PATTERN = /\.html?$/i;
@@ -29,6 +36,11 @@ const PREVIEWABLE_FILE_PATTERN = /\.(?:md|markdown|mdown|mkd|mdx|txt|log|json|js
 const FRAME_LINK_MESSAGE = "pipane:file-preview-link";
 // Scripts run, but omitting allow-same-origin keeps preview code out of the app DOM.
 const FRAME_SANDBOX = "allow-scripts allow-forms allow-modals allow-popups allow-downloads";
+const PREVIEW_MIN_WIDTH = 320;
+const PREVIEW_MAX_WIDTH = 760;
+const MIN_CONVERSATION_WIDTH = 320;
+const MOBILE_BREAKPOINT = 768;
+const KEYBOARD_RESIZE_STEP = 16;
 
 const FRAME_LINK_BRIDGE = String.raw`<script>(() => {
 	const isLocalFile = (href) => {
@@ -163,6 +175,127 @@ function directoryName(value: string): string {
 
 function baseName(value: string): string {
 	return value.split("/").filter(Boolean).pop() || value;
+}
+
+function getResizeBounds(): { min: number; max: number } {
+	const parent = container?.parentElement;
+	const parentWidth = parent?.getBoundingClientRect().width || window.innerWidth;
+	let occupiedWidth = 0;
+	if (parent) {
+		for (const sibling of Array.from(parent.children)) {
+			if (sibling === container || sibling === parent.firstElementChild) continue;
+			occupiedWidth += sibling.getBoundingClientRect().width;
+		}
+	}
+	const availableWidth = parentWidth - occupiedWidth - MIN_CONVERSATION_WIDTH;
+	return {
+		min: PREVIEW_MIN_WIDTH,
+		max: Math.max(PREVIEW_MIN_WIDTH, Math.min(PREVIEW_MAX_WIDTH, availableWidth)),
+	};
+}
+
+function clampPreviewWidth(width: number): number {
+	const { min, max } = getResizeBounds();
+	return Math.min(max, Math.max(min, width));
+}
+
+function getCurrentPreviewWidth(): number {
+	if (previewWidth !== null) return clampPreviewWidth(previewWidth);
+	const renderedWidth = container?.getBoundingClientRect().width ?? 0;
+	if (renderedWidth > 0) return clampPreviewWidth(renderedWidth);
+	return clampPreviewWidth(window.innerWidth * 0.45);
+}
+
+function updateResizeHandle(width: number): void {
+	const handle = container?.querySelector<HTMLElement>(".file-preview-resize-handle");
+	if (!handle) return;
+	const { min, max } = getResizeBounds();
+	handle.setAttribute("aria-valuemin", String(Math.round(min)));
+	handle.setAttribute("aria-valuemax", String(Math.round(max)));
+	handle.setAttribute("aria-valuenow", String(Math.round(width)));
+	handle.setAttribute("aria-valuetext", `${Math.round(width)} pixels`);
+}
+
+function setPreviewWidth(width: number): void {
+	const nextWidth = clampPreviewWidth(width);
+	previewWidth = nextWidth;
+	if (container) container.style.width = `${nextWidth}px`;
+	updateResizeHandle(nextWidth);
+}
+
+function applyPreviewWidth(): void {
+	if (!container || previewWidth === null) return;
+	const width = clampPreviewWidth(previewWidth);
+	container.style.width = `${width}px`;
+	updateResizeHandle(width);
+}
+
+function handleResizePointerMove(event: PointerEvent): void {
+	if (!activeResize || event.pointerId !== activeResize.pointerId) return;
+	event.preventDefault();
+	setPreviewWidth(activeResize.startWidth + activeResize.startX - event.clientX);
+}
+
+function finishFilePreviewResize(event?: PointerEvent): void {
+	if (!activeResize || (event && event.pointerId !== activeResize.pointerId)) return;
+	window.removeEventListener("pointermove", handleResizePointerMove, true);
+	window.removeEventListener("pointerup", finishFilePreviewResize, true);
+	window.removeEventListener("pointercancel", finishFilePreviewResize, true);
+	window.removeEventListener("blur", handleResizeWindowBlur);
+	activeResize.overlay.remove();
+	activeResize = null;
+	document.body.classList.remove("is-file-preview-resizing");
+}
+
+function handleResizeWindowBlur(): void {
+	finishFilePreviewResize();
+}
+
+function startFilePreviewResize(event: PointerEvent): void {
+	if (event.button !== 0 || !event.isPrimary || window.innerWidth <= MOBILE_BREAKPOINT || !container) return;
+	event.preventDefault();
+	finishFilePreviewResize();
+
+	const overlay = document.createElement("div");
+	overlay.className = "file-preview-resize-overlay";
+	overlay.setAttribute("aria-hidden", "true");
+	document.body.appendChild(overlay);
+	document.body.classList.add("is-file-preview-resizing");
+	activeResize = {
+		pointerId: event.pointerId,
+		startX: event.clientX,
+		startWidth: getCurrentPreviewWidth(),
+		overlay,
+	};
+	window.addEventListener("pointermove", handleResizePointerMove, true);
+	window.addEventListener("pointerup", finishFilePreviewResize, true);
+	window.addEventListener("pointercancel", finishFilePreviewResize, true);
+	window.addEventListener("blur", handleResizeWindowBlur);
+}
+
+function handleFilePreviewResizeKeydown(event: KeyboardEvent): void {
+	if (window.innerWidth <= MOBILE_BREAKPOINT) return;
+	const { min, max } = getResizeBounds();
+	const currentWidth = getCurrentPreviewWidth();
+	let nextWidth: number;
+	switch (event.key) {
+		case "ArrowLeft":
+			nextWidth = currentWidth + KEYBOARD_RESIZE_STEP;
+			break;
+		case "ArrowRight":
+			nextWidth = currentWidth - KEYBOARD_RESIZE_STEP;
+			break;
+		case "Home":
+			nextWidth = min;
+			break;
+		case "End":
+			nextWidth = max;
+			break;
+		default:
+			return;
+	}
+	event.preventDefault();
+	setPreviewWidth(nextWidth);
 }
 
 export function isPreviewableFileHref(rawHref: string): boolean {
@@ -412,6 +545,7 @@ export function setFilePreviewSession(sessionPath: string | undefined): void {
 }
 
 export function closeFilePreview(): void {
+	finishFilePreviewResize();
 	const state = previewStates.get(activeSessionPath);
 	if (!state) return;
 	state.requestGeneration++;
@@ -433,6 +567,7 @@ export function initFilePreview(el: HTMLElement, onChange: () => void): void {
 	installFrameMessageListener();
 	installThemeObserver();
 	renderPanel();
+	applyPreviewWidth();
 }
 
 function renderPanel(): void {
@@ -445,6 +580,8 @@ function renderPanel(): void {
 
 	const title = baseName(state.path) || "File preview";
 	const framed = !state.loading && !state.error && (isMarkdownFile(state.path) || isHtmlFile(state.path));
+	const resizeBounds = getResizeBounds();
+	const currentWidth = Math.round(getCurrentPreviewWidth());
 	const body = state.loading
 		? html`<div class="file-preview-state" role="status">Loading file…</div>`
 		: state.error
@@ -460,6 +597,20 @@ function renderPanel(): void {
 				: html`<pre class="file-preview-source"><code>${state.content}</code></pre>`;
 
 	render(html`
+		<div
+			class="file-preview-resize-handle"
+			role="separator"
+			aria-label="Resize file preview"
+			aria-orientation="vertical"
+			aria-valuemin=${Math.round(resizeBounds.min)}
+			aria-valuemax=${Math.round(resizeBounds.max)}
+			aria-valuenow=${currentWidth}
+			aria-valuetext=${`${currentWidth} pixels`}
+			tabindex="0"
+			title="Drag to resize file preview"
+			@pointerdown=${startFilePreviewResize}
+			@keydown=${handleFilePreviewResizeKeydown}
+		></div>
 		<div class="file-preview-panel">
 			<div class="file-preview-header">
 				<div class="file-preview-heading">

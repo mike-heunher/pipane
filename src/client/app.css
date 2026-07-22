@@ -1204,6 +1204,10 @@ markdown-block pre code {
 		z-index: 900;
 		border-left: none !important;
 	}
+
+	.file-preview-resize-handle {
+		display: none !important;
+	}
 }
 
 @media (max-width: 520px) {
@@ -1262,11 +1266,58 @@ markdown-block pre code {
 /* ── Linked file preview side panel ───────────────────────────── */
 
 .file-preview-container {
+	position: relative;
 	width: 45%;
 	min-width: 320px;
 	max-width: 760px;
 	flex-shrink: 0;
 	overflow: hidden;
+}
+
+.file-preview-resize-handle {
+	position: absolute;
+	inset: 0 auto 0 0;
+	z-index: 3;
+	width: 0.7rem;
+	border: 0;
+	outline: none;
+	background: transparent;
+	cursor: col-resize;
+	touch-action: none;
+}
+
+.file-preview-resize-handle::after {
+	position: absolute;
+	inset: 0 auto 0 0;
+	width: 2px;
+	background: var(--primary, #2563eb);
+	content: "";
+	opacity: 0;
+	transition: opacity 0.15s;
+}
+
+.file-preview-resize-handle:hover::after,
+.file-preview-resize-handle:focus-visible::after,
+.is-file-preview-resizing .file-preview-resize-handle::after {
+	opacity: 1;
+}
+
+.file-preview-resize-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 2147483647;
+	background: transparent;
+	cursor: col-resize;
+	touch-action: none;
+}
+
+body.is-file-preview-resizing {
+	cursor: col-resize;
+	user-select: none;
+}
+
+body.is-file-preview-resizing .file-preview-frame {
+	pointer-events: none;
 }
 
 .file-preview-panel {
