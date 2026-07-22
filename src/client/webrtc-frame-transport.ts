@@ -7,6 +7,13 @@ import {
 } from "./device-identity.js";
 import type { ConnectionTicketClaims, ConnectionTicketResponse } from "../shared/trust-protocol.js";
 import {
+	DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES,
+	DATA_CHANNEL_BUFFER_LOW_WATER_BYTES,
+	DataChannelFrameDecoder,
+	MAX_DATA_CHANNEL_QUEUED_BYTES,
+	encodeDataChannelFrame,
+} from "../shared/data-channel-framing.js";
+import {
 	PIPANE_DATA_CHANNEL_LABEL,
 	PIPANE_DATA_CHANNEL_PROTOCOL,
 	TRUST_PROTOCOL_VERSION,
@@ -42,6 +49,8 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private readonly schedule: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
+	private readonly decoder = new DataChannelFrameDecoder();
+	private readonly outgoing: Array<{ message: string; byteLength: number }> = [];
 	private peer: RTCPeerConnection | undefined;
 	private channel: RTCDataChannel | undefined;
 	private rendezvous: BrowserRendezvousClient | undefined;
@@ -50,6 +59,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private everConnected = false;
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	private nextFrameId = 0;
+	private queuedBytes = 0;
+	private flushing = false;
 
 	constructor(options: WebRtcFrameTransportOptions) {
 		this.rendezvousUrl = options.rendezvousUrl;
@@ -102,6 +114,8 @@ export class WebRtcFrameTransport implements FrameTransport {
 			ordered: true,
 			protocol: PIPANE_DATA_CHANNEL_PROTOCOL,
 		});
+		channel.bufferedAmountLowThreshold = DATA_CHANNEL_BUFFER_LOW_WATER_BYTES;
+		channel.onbufferedamountlow = () => this.flushOutgoing();
 		this.rendezvous = rendezvous;
 		this.peer = peer;
 		this.channel = channel;
@@ -195,7 +209,13 @@ export class WebRtcFrameTransport implements FrameTransport {
 					resolve();
 					return;
 				}
-				for (const listener of this.frameListeners) listener(frame);
+				try {
+					const decoded = this.decoder.accept(frame);
+					if (decoded === undefined) return;
+					for (const listener of this.frameListeners) listener(decoded);
+				} catch {
+					this.handleDisconnected();
+				}
 			};
 
 			rendezvous.onSignal((signal) => {
@@ -238,7 +258,15 @@ export class WebRtcFrameTransport implements FrameTransport {
 
 	send(frame: string): void {
 		if (!this.isConnected || !this.channel) throw new Error("Backend transport is not connected");
-		this.channel.send(frame);
+		const messages = encodeDataChannelFrame(frame, `b${(++this.nextFrameId).toString(36)}`);
+		const additions = messages.map((message) => ({ message, byteLength: textEncoder.encode(message).byteLength }));
+		const addedBytes = additions.reduce((total, item) => total + item.byteLength, 0);
+		if (this.queuedBytes + addedBytes > MAX_DATA_CHANNEL_QUEUED_BYTES) {
+			throw new Error("DataChannel outgoing frame queue exceeds its limit");
+		}
+		this.outgoing.push(...additions);
+		this.queuedBytes += addedBytes;
+		this.flushOutgoing();
 	}
 
 	close(_code = 1000, reason = "Client closed"): void {
@@ -254,11 +282,32 @@ export class WebRtcFrameTransport implements FrameTransport {
 		this.connected = false;
 		this.channel?.close();
 		this.peer?.close();
+		this.outgoing.length = 0;
+		this.queuedBytes = 0;
+		this.decoder.reset();
 		this.rendezvous?.close();
 		this.channel = undefined;
 		this.peer = undefined;
 		this.rendezvous = undefined;
 		if (wasConnected) this.emitConnectionChange({ connected: false, reconnected: false });
+	}
+
+	private flushOutgoing(): void {
+		const channel = this.channel;
+		if (this.flushing || !channel || !this.isConnected) return;
+		this.flushing = true;
+		try {
+			while (this.outgoing.length > 0 && channel.bufferedAmount < DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES) {
+				const next = this.outgoing[0];
+				channel.send(next.message);
+				this.outgoing.shift();
+				this.queuedBytes -= next.byteLength;
+			}
+		} catch {
+			this.handleDisconnected();
+		} finally {
+			this.flushing = false;
+		}
 	}
 
 	private handleDisconnected(): void {
@@ -280,6 +329,8 @@ export class WebRtcFrameTransport implements FrameTransport {
 		for (const listener of this.connectionListeners) listener(event);
 	}
 }
+
+const textEncoder = new TextEncoder();
 
 function decodeTicketClaims(ticket: string): ConnectionTicketClaims {
 	const [encodedClaims] = ticket.split(".");

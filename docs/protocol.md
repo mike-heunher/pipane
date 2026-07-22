@@ -89,6 +89,8 @@ The answer-side implementation accepts only a reliable ordered DataChannel with 
 
 Authenticated DataChannels carry the existing versioned v1 application frames through the same server connection boundary as local WebSockets. A frame router keeps those application frames isolated from semantic v2 responses on the same ordered channel. Revocation closes active rendezvous routes and matching backend peers, prevents new ticket issuance, and is retained centrally so an offline backend clears stale local ownership when it next registers.
 
+After the unfragmented authentication exchange, the carrier transparently splits logical frames larger than 12,000 UTF-8 bytes into ordered base64 chunk envelopes no larger than 16 KiB. Browser and backend reassemble at most 64 MiB per logical frame with bounded pending-frame and outgoing-queue memory. Application v1 and semantic v2 decoders therefore continue to receive exactly one complete JSON frame regardless of the negotiated SCTP message-size limit.
+
 ### Semantic backend protocol v2
 
 `src/shared/backend-protocol.ts` defines the carrier-neutral request protocol independently from application v1:

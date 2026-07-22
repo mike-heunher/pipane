@@ -1,5 +1,6 @@
 # Unreleased
 
+- Fragment large WebRTC DataChannel frames so multi-megabyte session snapshots do not exceed negotiated SCTP message limits or crash the backend.
 - Hide pipane self-update notices when running a development commit while preserving Pi and package updates.
 - Let users dismiss Pi, pipane, and managed package update notices for 24 hours.
 

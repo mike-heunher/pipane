@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IceSignal } from "../shared/rendezvous-protocol.js";
+import {
+	DataChannelFrameDecoder,
+	MAX_DATA_CHANNEL_MESSAGE_BYTES,
+	encodeDataChannelFrame,
+} from "../shared/data-channel-framing.js";
 import type { BackendIdentityBinding, ConnectionTicketClaims } from "../shared/trust-protocol.js";
 import { loadOrCreateBackendIdentity, signBackendIdentityBinding } from "../server/backend-identity.js";
 import { generateBrowserDeviceIdentity } from "./device-identity.js";
@@ -23,6 +28,9 @@ class FakeChannel {
 	onclose: ((event: Event) => unknown) | null = null;
 	onerror: ((event: Event) => unknown) | null = null;
 	onmessage: ((event: MessageEvent) => unknown) | null = null;
+	onbufferedamountlow: ((event: Event) => unknown) | null = null;
+	bufferedAmount = 0;
+	bufferedAmountLowThreshold = 0;
 	sent: string[] = [];
 
 	send(value: string): void {
@@ -145,6 +153,23 @@ describe("WebRtcFrameTransport", () => {
 		expect(frame).toHaveBeenCalledWith("server-frame");
 		transport.send("client-frame");
 		expect(peer.channel.sent.at(-1)).toBe("client-frame");
+
+		frame.mockClear();
+		const largeServerFrame = JSON.stringify({ type: "session_sync", content: "remote history 🙂 ".repeat(20_000) });
+		for (const chunk of encodeDataChannelFrame(largeServerFrame, "server_large")) peer.channel.receive(chunk);
+		expect(frame).toHaveBeenCalledTimes(1);
+		expect(frame).toHaveBeenCalledWith(largeServerFrame);
+
+		const sentBeforeLargeFrame = peer.channel.sent.length;
+		const largeClientFrame = JSON.stringify({ v: 2, kind: "request", content: "upload data ".repeat(20_000) });
+		transport.send(largeClientFrame);
+		const clientChunks = peer.channel.sent.slice(sentBeforeLargeFrame);
+		expect(clientChunks.length).toBeGreaterThan(1);
+		expect(clientChunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= MAX_DATA_CHANNEL_MESSAGE_BYTES)).toBe(true);
+		const decoder = new DataChannelFrameDecoder();
+		let decoded: string | undefined;
+		for (const chunk of clientChunks) decoded = decoder.accept(chunk) ?? decoded;
+		expect(decoded).toBe(largeClientFrame);
 		transport.close();
 	});
 

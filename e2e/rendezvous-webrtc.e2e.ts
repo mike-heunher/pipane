@@ -86,6 +86,8 @@ function attachTestBackendProtocols(peers: BackendWebRtcManager, backendId: stri
 				sessionStatuses: {},
 				steeringQueues: {},
 				providerUsageStatuses: {},
+				// Exercise carrier fragmentation before normal remote app startup.
+				carrierPadding: "x".repeat(512 * 1024),
 			}));
 		}
 	});
