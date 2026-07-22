@@ -71,7 +71,7 @@ describe("DataChannelFrameConnection", () => {
 		expect(message.mock.calls[0][0].toString()).toBe(largeFrame);
 	});
 
-	it("waits for native backpressure without closing or resending accepted chunks", () => {
+	it("keeps flushing after libdatachannel accepts a chunk into native buffering", () => {
 		const sender = fakeChannel();
 		const receiver = fakeChannel();
 		const outgoing = new DataChannelFrameConnection(sender.channel);
@@ -82,12 +82,9 @@ describe("DataChannelFrameConnection", () => {
 
 		sender.bufferSend();
 		outgoing.send(largeFrame);
-		expect(sender.sendMessage).toHaveBeenCalledTimes(1);
-		expect(outgoing.readyState).toBe(FRAME_CONNECTION_OPEN);
-
-		sender.drain();
 		const chunks = sender.sendMessage.mock.calls.map(([chunk]) => chunk);
 		expect(chunks.length).toBeGreaterThan(1);
+		expect(outgoing.readyState).toBe(FRAME_CONNECTION_OPEN);
 		for (const chunk of chunks) receiver.message(chunk);
 		expect(message).toHaveBeenCalledOnce();
 		expect(message.mock.calls[0][0].toString()).toBe(largeFrame);

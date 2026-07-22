@@ -88,12 +88,11 @@ export class DataChannelFrameConnection implements ServerFrameConnection {
 		try {
 			while (this.outgoing.length > 0 && this.channel.bufferedAmount() < DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES) {
 				const next = this.outgoing[0];
-				const sentWithoutBuffering = this.channel.sendMessage(next.message);
-				// libdatachannel returns false after accepting and buffering a
-				// message. Dequeue it, then resume when its native buffer drains.
+				// A false result means libdatachannel accepted the message into
+				// native buffering. bufferedAmount, not the result, controls flow.
+				this.channel.sendMessage(next.message);
 				this.outgoing.shift();
 				this.queuedBytes -= next.byteLength;
-				if (!sentWithoutBuffering) return;
 			}
 		} catch {
 			this.close();
