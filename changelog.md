@@ -1,5 +1,7 @@
 # Unreleased
 
+- Render LaTeX in Markdown file previews and match previews to the active application theme.
+- Restore each conversation's open file preview when switching between sessions.
 - Support `/session` in the browser with authoritative Pi session, message, token, context, and cost statistics.
 - Allow creating and opening a new folder directly from the New Project file explorer.
 - Inline compact generic tool parameters with their values in readable call signatures.

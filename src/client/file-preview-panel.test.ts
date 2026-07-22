@@ -9,6 +9,7 @@ import {
 	linkifyPreviewableInlineCode,
 	openFilePreviewLink,
 	resolveFileHref,
+	setFilePreviewSession,
 } from "./file-preview-panel.js";
 
 async function settle(): Promise<void> {
@@ -25,6 +26,11 @@ function setupPanel(): HTMLElement {
 afterEach(() => {
 	closeFilePreview();
 	document.body.replaceChildren();
+	document.documentElement.classList.remove("dark");
+	document.documentElement.removeAttribute("data-color-theme");
+	for (const property of ["--background", "--foreground", "--muted-foreground", "--border", "--muted", "--primary"]) {
+		document.documentElement.style.removeProperty(property);
+	}
 	vi.restoreAllMocks();
 });
 
@@ -84,6 +90,77 @@ describe("linked file preview", () => {
 		expect(frame?.srcdoc).toContain("<table>");
 		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
 		expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+	});
+
+	it("renders KaTeX math with the active application theme", async () => {
+		const root = document.documentElement;
+		root.classList.add("dark");
+		root.style.setProperty("--background", "#282828");
+		root.style.setProperty("--foreground", "#ebdbb2");
+		root.style.setProperty("--muted-foreground", "#a89984");
+		root.style.setProperty("--border", "#665c54");
+		root.style.setProperty("--muted", "#504945");
+		root.style.setProperty("--primary", "#83a598");
+
+		const container = setupPanel();
+		const api = {
+			getFileContent: vi.fn(async () => ({
+				path: "/work/project/math.md",
+				content: "Dollar $E = mc^2$ and LaTeX \\(a^2 + b^2 = c^2\\).\n\n$$\n\\int_0^1 x^2 \\, dx\n$$\n\n\\[\n\\sum_{n=1}^{\\infty} n^{-2}\n\\]",
+			})),
+		};
+		openFilePreviewLink("math.md", "/work/project", "/sessions/math.jsonl", undefined, api);
+		await settle();
+
+		let frame = container.querySelector<HTMLIFrameElement>(".file-preview-frame");
+		expect(frame?.srcdoc.match(/class="katex"/g)).toHaveLength(4);
+		expect(frame?.srcdoc.match(/class="katex-display"/g)).toHaveLength(2);
+		expect(frame?.srcdoc).toContain("color-scheme: dark");
+		expect(frame?.srcdoc).toContain("--bg: #282828");
+		expect(frame?.srcdoc).toContain("--link: #83a598");
+
+		root.style.setProperty("--background", "#fbf1c7");
+		root.classList.remove("dark");
+		root.setAttribute("data-color-theme", "gruvbox");
+		await settle();
+		frame = container.querySelector<HTMLIFrameElement>(".file-preview-frame");
+		expect(frame?.srcdoc).toContain("color-scheme: light");
+		expect(frame?.srcdoc).toContain("--bg: #fbf1c7");
+	});
+
+	it("keeps each session's open preview isolated and restores it without reloading", async () => {
+		const container = setupPanel();
+		const sessionA = "/sessions/a.jsonl";
+		const sessionB = "/sessions/b.jsonl";
+		const api = {
+			getFileContent: vi.fn(async (_sessionPath: string, filePath: string) => ({
+				path: filePath,
+				content: filePath.endsWith("guide.md") ? "# Guide A" : "# Notes B",
+			})),
+		};
+
+		openFilePreviewLink("guide.md", "/work/a", sessionA, undefined, api);
+		await settle();
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("guide.md");
+
+		setFilePreviewSession(sessionB);
+		expect(isFilePreviewVisible()).toBe(false);
+		expect(container.querySelector(".file-preview-panel")).toBeNull();
+
+		openFilePreviewLink("notes.md", "/work/b", sessionB, undefined, api);
+		await settle();
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("notes.md");
+
+		setFilePreviewSession(sessionA);
+		expect(isFilePreviewVisible()).toBe(true);
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("guide.md");
+		expect(api.getFileContent).toHaveBeenCalledTimes(2);
+
+		setFilePreviewSession(sessionB);
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("notes.md");
+		closeFilePreview();
+		setFilePreviewSession(sessionA);
+		closeFilePreview();
 	});
 
 	it("renders HTML with active scripts in an isolated iframe", async () => {

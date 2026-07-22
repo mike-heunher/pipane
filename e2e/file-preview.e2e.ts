@@ -1,24 +1,49 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { startMockPipaneServer } from "./mock-pipane-server.js";
 
 const SESSION_PATH = "/tmp/mock-sessions/file-preview.jsonl";
+const OTHER_SESSION_PATH = "/tmp/mock-sessions/file-preview-other.jsonl";
 const PROJECT_CWD = "/tmp/file-preview-project";
 const GUIDE_PATH = `${PROJECT_CWD}/docs/guide.md`;
 const DETAILS_PATH = `${PROJECT_CWD}/docs/details.md`;
 const HTML_PATH = `${PROJECT_CWD}/examples/demo.html`;
 
+async function switchSession(page: Page, sessionPath: string): Promise<void> {
+	await page.evaluate(async (path) => {
+		const picker = document.querySelector("session-picker") as any;
+		if (!picker?.agent) throw new Error("Session picker agent was not ready");
+		await picker.agent.switchSession(path);
+	}, sessionPath);
+	await expect.poll(async () => page.evaluate(() => {
+		const picker = document.querySelector("session-picker") as any;
+		return picker?.agent?.sessionFile;
+	})).toBe(sessionPath);
+}
+
 async function startServer() {
 	return startMockPipaneServer({
-		sessions: [{
-			id: "file-preview",
-			path: SESSION_PATH,
-			cwd: PROJECT_CWD,
-			created: "2026-07-21T12:00:00.000Z",
-			modified: "2026-07-21T12:01:00.000Z",
-			lastUserPromptTime: "2026-07-21T12:01:00.000Z",
-			messageCount: 4,
-			firstMessage: "Show the project guide",
-		}],
+		sessions: [
+			{
+				id: "file-preview",
+				path: SESSION_PATH,
+				cwd: PROJECT_CWD,
+				created: "2026-07-21T12:00:00.000Z",
+				modified: "2026-07-21T12:01:00.000Z",
+				lastUserPromptTime: "2026-07-21T12:01:00.000Z",
+				messageCount: 4,
+				firstMessage: "Show the project guide",
+			},
+			{
+				id: "file-preview-other",
+				path: OTHER_SESSION_PATH,
+				cwd: PROJECT_CWD,
+				created: "2026-07-21T11:00:00.000Z",
+				modified: "2026-07-21T11:01:00.000Z",
+				lastUserPromptTime: "2026-07-21T11:01:00.000Z",
+				messageCount: 1,
+				firstMessage: "A conversation without a preview",
+			},
+		],
 		states: {
 			[SESSION_PATH]: {
 				messages: [
@@ -43,9 +68,12 @@ async function startServer() {
 					},
 				],
 			},
+			[OTHER_SESSION_PATH]: {
+				messages: [{ role: "user", content: "No file is open here.", timestamp: 1 }],
+			},
 		},
 		files: {
-			[GUIDE_PATH]: "# Project Guide\n\nThis is **rendered markdown**.\n\n[More details](details.md)",
+			[GUIDE_PATH]: "# Project Guide\n\nThis is **rendered markdown** with $E = mc^2$.\n\n\\[\n\\int_0^1 x^2 \\, dx\n\\]\n\n[More details](details.md)",
 			[DETAILS_PATH]: "# Details\n\nNested file links resolve beside the open document.",
 			[HTML_PATH]: "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive HTML</h1><output id=\"script-status\"></output><a href=\"../docs/details.md\">Open details</a><script>document.getElementById('script-status').textContent = 'Scripts work';<\/script></body></html>",
 		},
@@ -66,8 +94,19 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		await expect(panel.locator(".file-preview-title")).toHaveText("guide.md");
 		await expect(previewFrame.getByRole("heading", { name: "Project Guide" })).toBeVisible();
 		await expect(previewFrame.locator("strong")).toHaveText("rendered markdown");
+		await expect(previewFrame.locator(".katex")).toHaveCount(2);
+		await expect(previewFrame.locator(".katex-display")).toBeVisible();
+		const panelBackground = await panel.evaluate((element) => getComputedStyle(element).backgroundColor);
+		const previewBackground = await previewFrame.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor);
+		expect(previewBackground).toBe(panelBackground);
 
 		await previewFrame.getByRole("link", { name: "More details" }).click();
+		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
+		await expect(previewFrame.getByRole("heading", { name: "Details" })).toBeVisible();
+
+		await switchSession(page, OTHER_SESSION_PATH);
+		await expect(panel).toBeHidden();
+		await switchSession(page, SESSION_PATH);
 		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 		await expect(previewFrame.getByRole("heading", { name: "Details" })).toBeVisible();
 

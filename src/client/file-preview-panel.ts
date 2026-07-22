@@ -1,19 +1,27 @@
+import katex from "katex";
+import katexStyles from "katex/dist/katex.min.css?inline";
 import { html, render } from "lit";
-import { marked } from "marked";
+import { Marked, type MarkedExtension, type Tokens } from "marked";
+import markedKatex from "marked-katex-extension";
 import type { BackendApi } from "./backend-api.js";
 
-let visible = false;
-let loading = false;
-let previewPath = "";
-let previewContent = "";
-let previewFrameDocument = "";
-let previewError = "";
-let previewSessionPath = "";
-let previewApi: Pick<BackendApi, "getFileContent"> | null = null;
+interface FilePreviewState {
+	readonly sessionPath: string;
+	readonly api: Pick<BackendApi, "getFileContent">;
+	loading: boolean;
+	path: string;
+	content: string;
+	frameDocument: string;
+	error: string;
+	requestGeneration: number;
+}
+
+const previewStates = new Map<string, FilePreviewState>();
+let activeSessionPath = "";
 let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
-let requestGeneration = 0;
 let frameMessageListenerInstalled = false;
+let themeObserverInstalled = false;
 
 const MARKDOWN_FILE_PATTERN = /(?:^|\/)(?:readme|changelog|agents?)$|\.(?:md|markdown|mdown|mkd|mdx)$/i;
 const HTML_FILE_PATTERN = /\.html?$/i;
@@ -39,9 +47,41 @@ const FRAME_LINK_BRIDGE = String.raw`<script>(() => {
 	}, true);
 })();</script>`;
 
+const KATEX_OPTIONS = { throwOnError: false, strict: false } as const;
+const latexDelimiterExtension: MarkedExtension = {
+	extensions: [
+		{
+			name: "inlineLatex",
+			level: "inline",
+			start: (source) => source.indexOf("\\("),
+			tokenizer(source) {
+				const match = /^\\\(([^\n]+?)\\\)/.exec(source);
+				return match ? { type: "inlineLatex", raw: match[0], text: match[1].trim() } : undefined;
+			},
+			renderer: (token: Tokens.Generic) => katex.renderToString(String(token.text), {
+				...KATEX_OPTIONS,
+				displayMode: false,
+			}),
+		},
+		{
+			name: "blockLatex",
+			level: "block",
+			start: (source) => source.indexOf("\\["),
+			tokenizer(source) {
+				const match = /^\\\[([\s\S]+?)\\\](?:\n|$)/.exec(source);
+				return match ? { type: "blockLatex", raw: match[0], text: match[1].trim() } : undefined;
+			},
+			renderer: (token: Tokens.Generic) => `${katex.renderToString(String(token.text), {
+				...KATEX_OPTIONS,
+				displayMode: true,
+			})}\n`,
+		},
+	],
+};
+const markdownParser = new Marked({ async: false, gfm: true });
+markdownParser.use(markedKatex(KATEX_OPTIONS), latexDelimiterExtension);
+
 const MARKDOWN_STYLES = `<style>
-	:root { color-scheme: light; --bg: #fff; --fg: #24292f; --muted: #57606a; --border: #d0d7de; --soft: #f6f8fa; --link: #0969da; }
-	:root[data-color-scheme="dark"] { color-scheme: dark; --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d; --soft: #161b22; --link: #58a6ff; }
 	* { box-sizing: border-box; }
 	html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--fg); }
 	body { padding: 1rem 1.1rem 2rem; font: 14px/1.6 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow-wrap: anywhere; }
@@ -62,7 +102,35 @@ const MARKDOWN_STYLES = `<style>
 	th, td { padding: 0.42em 0.8em; border: 1px solid var(--border); } th { background: var(--soft); font-weight: 600; }
 	img, video { max-width: 100%; height: auto; } hr { height: 1px; margin: 1.5em 0; border: 0; background: var(--border); }
 	li + li { margin-top: 0.25em; } input[type="checkbox"] { margin-right: 0.45em; }
+	.katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 0.2em 0; }
 </style>`;
+
+const THEME_FALLBACKS = {
+	"--bg": "#fff",
+	"--fg": "#24292f",
+	"--muted": "#57606a",
+	"--border": "#d0d7de",
+	"--soft": "#f6f8fa",
+	"--link": "#0969da",
+} as const;
+
+function renderPreviewThemeStyles(): string {
+	const root = document.documentElement;
+	const computed = getComputedStyle(root);
+	const sourceVariables: Record<keyof typeof THEME_FALLBACKS, string> = {
+		"--bg": "--background",
+		"--fg": "--foreground",
+		"--muted": "--muted-foreground",
+		"--border": "--border",
+		"--soft": "--muted",
+		"--link": "--primary",
+	};
+	const variables = Object.entries(sourceVariables)
+		.map(([target, source]) => `${target}: ${computed.getPropertyValue(source).trim() || THEME_FALLBACKS[target as keyof typeof THEME_FALLBACKS]};`)
+		.join(" ");
+	const colorScheme = root.classList.contains("dark") ? "dark" : "light";
+	return `<style>:root { color-scheme: ${colorScheme}; ${variables} }</style>`;
+}
 
 function stripLinkSuffix(value: string): string {
 	const suffixIndex = value.search(/[?#]/);
@@ -236,12 +304,25 @@ function injectFrameBridge(content: string): string {
 }
 
 function renderMarkdownDocument(markdown: string): string {
-	const rendered = marked.parse(linkifyPreviewableInlineCode(markdown), {
-		async: false,
-		gfm: true,
+	const rendered = markdownParser.parse(linkifyPreviewableInlineCode(markdown));
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${renderPreviewThemeStyles()}<style>${katexStyles}</style>${MARKDOWN_STYLES}${FRAME_LINK_BRIDGE}</head><body><main class="markdown-preview">${rendered}</main></body></html>`;
+}
+
+function installThemeObserver(): void {
+	if (themeObserverInstalled) return;
+	themeObserverInstalled = true;
+	new MutationObserver(() => {
+		let changed = false;
+		for (const state of previewStates.values()) {
+			if (state.loading || state.error || !isMarkdownFile(state.path)) continue;
+			state.frameDocument = renderMarkdownDocument(state.content);
+			changed = true;
+		}
+		if (changed) renderPanel();
+	}).observe(document.documentElement, {
+		attributes: true,
+		attributeFilter: ["class", "data-color-theme"],
 	});
-	const colorScheme = document.documentElement.classList.contains("dark") ? "dark" : "light";
-	return `<!doctype html><html data-color-scheme="${colorScheme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${MARKDOWN_STYLES}${FRAME_LINK_BRIDGE}</head><body><main class="markdown-preview">${rendered}</main></body></html>`;
 }
 
 function installFrameMessageListener(): void {
@@ -252,8 +333,9 @@ function installFrameMessageListener(): void {
 		if (!frame?.contentWindow || event.source !== frame.contentWindow) return;
 		const data = event.data as { type?: unknown; href?: unknown } | null;
 		if (data?.type !== FRAME_LINK_MESSAGE || typeof data.href !== "string" || data.href.length > 4096) return;
-		if (!previewSessionPath || !previewApi || !isPreviewableFileHref(data.href)) return;
-		openFilePreviewLink(data.href, "/", previewSessionPath, previewPath, previewApi);
+		const state = previewStates.get(activeSessionPath);
+		if (!state || !isPreviewableFileHref(data.href)) return;
+		openFilePreviewLink(data.href, "/", state.sessionPath, state.path, state.api);
 	});
 }
 
@@ -262,32 +344,28 @@ function notifyChanged(): void {
 	onChangeCallback?.();
 }
 
-async function loadFile(
-	sessionPath: string,
-	filePath: string,
-	generation: number,
-	api: Pick<BackendApi, "getFileContent">,
-): Promise<void> {
+async function loadFile(state: FilePreviewState, filePath: string): Promise<void> {
+	const generation = state.requestGeneration;
 	try {
-		const payload = await api.getFileContent(sessionPath, filePath);
-		if (generation !== requestGeneration) return;
-		previewPath = typeof payload.path === "string" ? payload.path : filePath;
-		previewContent = payload.content;
-		previewFrameDocument = isMarkdownFile(previewPath)
-			? renderMarkdownDocument(previewContent)
-			: isHtmlFile(previewPath)
-				? injectFrameBridge(previewContent)
+		const payload = await state.api.getFileContent(state.sessionPath, filePath);
+		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		state.path = typeof payload.path === "string" ? payload.path : filePath;
+		state.content = payload.content;
+		state.frameDocument = isMarkdownFile(state.path)
+			? renderMarkdownDocument(state.content)
+			: isHtmlFile(state.path)
+				? injectFrameBridge(state.content)
 				: "";
-		previewError = "";
+		state.error = "";
 	} catch (error) {
-		if (generation !== requestGeneration) return;
-		previewContent = "";
-		previewFrameDocument = "";
-		previewError = error instanceof Error ? error.message : String(error);
+		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		state.content = "";
+		state.frameDocument = "";
+		state.error = error instanceof Error ? error.message : String(error);
 	} finally {
-		if (generation !== requestGeneration) return;
-		loading = false;
-		notifyChanged();
+		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		state.loading = false;
+		if (activeSessionPath === state.sessionPath) notifyChanged();
 	}
 }
 
@@ -308,73 +386,85 @@ export function openFilePreviewLink(
 	const resolved = resolveFileHref(rawHref, baseDirectory);
 	if (!resolved) return false;
 
-	visible = true;
-	loading = true;
-	previewPath = resolved;
-	previewContent = "";
-	previewFrameDocument = "";
-	previewError = "";
-	previewSessionPath = sessionPath;
-	previewApi = api;
-	const generation = ++requestGeneration;
+	const previous = previewStates.get(sessionPath);
+	const state: FilePreviewState = {
+		sessionPath,
+		api,
+		loading: true,
+		path: resolved,
+		content: "",
+		frameDocument: "",
+		error: "",
+		requestGeneration: (previous?.requestGeneration ?? 0) + 1,
+	};
+	previewStates.set(sessionPath, state);
+	activeSessionPath = sessionPath;
 	notifyChanged();
-	void loadFile(sessionPath, resolved, generation, api);
+	void loadFile(state, resolved);
 	return true;
 }
 
+export function setFilePreviewSession(sessionPath: string | undefined): void {
+	const nextSessionPath = sessionPath ?? "";
+	if (nextSessionPath === activeSessionPath) return;
+	activeSessionPath = nextSessionPath;
+	notifyChanged();
+}
+
 export function closeFilePreview(): void {
-	if (!visible) return;
-	visible = false;
-	previewSessionPath = "";
-	previewApi = null;
-	requestGeneration++;
+	const state = previewStates.get(activeSessionPath);
+	if (!state) return;
+	state.requestGeneration++;
+	previewStates.delete(activeSessionPath);
 	notifyChanged();
 }
 
 export function isFilePreviewVisible(): boolean {
-	return visible;
+	return previewStates.has(activeSessionPath);
 }
 
 export function getFilePreviewPath(): string | undefined {
-	return visible && previewPath ? previewPath : undefined;
+	return previewStates.get(activeSessionPath)?.path;
 }
 
 export function initFilePreview(el: HTMLElement, onChange: () => void): void {
 	container = el;
 	onChangeCallback = onChange;
 	installFrameMessageListener();
+	installThemeObserver();
 	renderPanel();
 }
 
 function renderPanel(): void {
 	if (!container) return;
-	if (!visible) {
+	const state = previewStates.get(activeSessionPath);
+	if (!state) {
 		render(html``, container);
 		return;
 	}
 
-	const title = baseName(previewPath) || "File preview";
-	const framed = !loading && !previewError && (isMarkdownFile(previewPath) || isHtmlFile(previewPath));
-	const body = loading
+	const title = baseName(state.path) || "File preview";
+	const framed = !state.loading && !state.error && (isMarkdownFile(state.path) || isHtmlFile(state.path));
+	const body = state.loading
 		? html`<div class="file-preview-state" role="status">Loading file…</div>`
-		: previewError
-			? html`<div class="file-preview-state is-error" role="alert">${previewError}</div>`
+		: state.error
+			? html`<div class="file-preview-state is-error" role="alert">${state.error}</div>`
 			: framed
 				? html`<iframe
 					class="file-preview-frame"
 					title=${`${title} preview`}
 					sandbox=${FRAME_SANDBOX}
 					referrerpolicy="no-referrer"
-					.srcdoc=${previewFrameDocument}
+					.srcdoc=${state.frameDocument}
 				></iframe>`
-				: html`<pre class="file-preview-source"><code>${previewContent}</code></pre>`;
+				: html`<pre class="file-preview-source"><code>${state.content}</code></pre>`;
 
 	render(html`
 		<div class="file-preview-panel">
 			<div class="file-preview-header">
 				<div class="file-preview-heading">
 					<span class="file-preview-title">${title}</span>
-					<span class="file-preview-path" title=${previewPath}>${previewPath}</span>
+					<span class="file-preview-path" title=${state.path}>${state.path}</span>
 				</div>
 				<button
 					type="button"

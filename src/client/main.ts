@@ -26,6 +26,7 @@ import {
 	isFilePreviewVisible,
 	isPreviewableFileHref,
 	openFilePreviewLink,
+	setFilePreviewSession,
 } from "./file-preview-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
@@ -963,7 +964,7 @@ async function initApp() {
 	// Session switch
 	agent.onSessionChange(async () => {
 		clearPendingHardKillOffer();
-		closeFilePreview();
+		setFilePreviewSession(agent.sessionFile);
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
