@@ -21,7 +21,7 @@ import { routeFrameConnection } from "../src/server/frame-router.js";
 import { createRendezvousServer } from "../src/rendezvous/server.js";
 import { MockTurnServer } from "./mock-turn-server.js";
 
-function attachTestBackendProtocols(peers: BackendWebRtcManager, backendId: string): void {
+function attachTestBackendProtocols(peers: BackendWebRtcManager, backendId: string, projectName: string): void {
 	let acceptedConnections = 0;
 	const api: BackendApi = {
 		getCapabilities: async () => ({
@@ -30,7 +30,17 @@ function attachTestBackendProtocols(peers: BackendWebRtcManager, backendId: stri
 			applicationProtocolVersions: [1],
 			features: ["sessions", "local-settings", "updates"],
 		}),
-		listSessions: async () => [],
+		listSessions: async () => [{
+			id: projectName,
+			path: `/sessions/${projectName}.jsonl`,
+			cwd: `/work/${projectName}`,
+			cwdDisplay: `~/work/${projectName}`,
+			name: `${projectName} session`,
+			created: "2026-07-20T10:00:00.000Z",
+			modified: projectName === "first-project" ? "2026-07-22T10:00:00.000Z" : "2026-07-21T10:00:00.000Z",
+			messageCount: 1,
+			firstMessage: `Work on ${projectName}`,
+		}],
 		deleteSession: async () => undefined,
 		listForkMessages: async () => [],
 		browseDirectory: async (requestedPath) => ({ path: requestedPath || "/", dirs: [] }),
@@ -104,7 +114,7 @@ interface BrowserPairResult {
 	forcedTurn: boolean;
 }
 
-test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel", async ({ page }) => {
+test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", async ({ page }) => {
 	const dir = mkdtempSync(path.join(tmpdir(), "pipane-webrtc-e2e-"));
 	const turn = new MockTurnServer();
 	await turn.listen();
@@ -139,7 +149,7 @@ test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel"
 			iceTransportPolicy: "relay",
 			bindAddress: "127.0.0.1",
 		});
-		attachTestBackendProtocols(peers, identity.backendId);
+		attachTestBackendProtocols(peers, identity.backendId, "first-project");
 		signaling.onAuthorizationRevoked(({ accountId, deviceId }) => {
 			backendTrust.applyRevocation(accountId, deviceId);
 			peers?.closeAuthorization(accountId, deviceId);
@@ -494,29 +504,31 @@ test("pairs, forces TURN, switches semantic backends, and revokes a DataChannel"
 			iceTransportPolicy: "relay",
 			bindAddress: "127.0.0.1",
 		});
-		attachTestBackendProtocols(secondPeers, secondIdentity.backendId);
+		attachTestBackendProtocols(secondPeers, secondIdentity.backendId, "second-project");
 		const secondQrUrl = new URL(`${baseUrl}/pair/${encodeURIComponent(secondPairing.pairId)}`);
 		secondQrUrl.hash = new URLSearchParams({ backend: secondIdentity.backendId, secret: secondPairing.secret }).toString();
 		await page.goto(secondQrUrl.toString());
 		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully", { timeout: 10_000 });
 
 		await page.goto(baseUrl);
-		await expect(page.locator("[data-testid='backend-landing'] [data-backend-id]")).toHaveCount(2);
-		await page.goto(`${baseUrl}/backend/${identity.backendId}`);
-		const switcher = page.locator("[data-testid='backend-switcher']");
-		await expect(switcher).toBeVisible();
-		await expect(switcher.locator("option")).toHaveCount(2);
+		await expect(page.locator("session-picker [data-backend-id]")).toHaveCount(2, { timeout: 15_000 });
+		await expect(page.locator("session-picker .host-name")).toHaveText(["First backend", "Second backend"]);
+		await expect(page.locator("session-picker .group-label")).toHaveText(["first-project", "second-project"]);
 		await expect(page.locator("message-editor")).toBeVisible();
-		await page.locator("[data-testid='connection-diagnostics-button']").click();
+		await expect(page.locator("[data-testid='backend-switcher']")).toHaveCount(0);
+
+		const firstHost = page.locator(`session-picker [data-backend-id='${identity.backendId}']`);
+		await firstHost.locator(".host-status").click();
 		const diagnosticsDialog = page.locator("[data-testid='connection-diagnostics']");
 		await expect(diagnosticsDialog).toContainText(/TURN relay|Direct via STUN/u, { timeout: 10_000 });
 		await expect(diagnosticsDialog).toContainText(turn.url);
 		await diagnosticsDialog.locator("[aria-label='Close connection diagnostics']").click();
-		await switcher.locator("select").selectOption(secondIdentity.backendId);
-		await expect(page).toHaveURL(new RegExp(`/backend/${secondIdentity.backendId}$`));
-		// Wait for the route's new document explicitly; URL assignment precedes unload.
-		await page.goto(`${baseUrl}/backend/${secondIdentity.backendId}`);
-		await expect(page.locator("[data-testid='backend-switcher'] select")).toHaveValue(secondIdentity.backendId);
+
+		const secondHost = page.locator(`session-picker [data-backend-id='${secondIdentity.backendId}']`);
+		await secondHost.locator(".session-item").click();
+		await expect(secondHost.locator(".host-header")).toHaveClass(/active/u);
+		await expect(secondHost.locator(".session-item")).toHaveClass(/active/u);
+		await expect(page).toHaveURL(baseUrl + "/");
 		expect(secondTrust.ownerAccountId).toBe(result.accountId);
 	} finally {
 		secondPeers?.close();

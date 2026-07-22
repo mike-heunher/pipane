@@ -6,6 +6,7 @@ import markedKatex from "marked-katex-extension";
 import type { BackendApi } from "./backend-api.js";
 
 interface FilePreviewState {
+	readonly key: string;
 	readonly sessionPath: string;
 	readonly api: Pick<BackendApi, "getFileContent">;
 	loading: boolean;
@@ -17,7 +18,7 @@ interface FilePreviewState {
 }
 
 const previewStates = new Map<string, FilePreviewState>();
-let activeSessionPath = "";
+let activeSessionKey = "";
 let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
 let frameMessageListenerInstalled = false;
@@ -466,9 +467,9 @@ function installFrameMessageListener(): void {
 		if (!frame?.contentWindow || event.source !== frame.contentWindow) return;
 		const data = event.data as { type?: unknown; href?: unknown } | null;
 		if (data?.type !== FRAME_LINK_MESSAGE || typeof data.href !== "string" || data.href.length > 4096) return;
-		const state = previewStates.get(activeSessionPath);
+		const state = previewStates.get(activeSessionKey);
 		if (!state || !isPreviewableFileHref(data.href)) return;
-		openFilePreviewLink(data.href, "/", state.sessionPath, state.path, state.api);
+		openFilePreviewLink(data.href, "/", state.sessionPath, state.path, state.api, state.key);
 	});
 }
 
@@ -481,7 +482,7 @@ async function loadFile(state: FilePreviewState, filePath: string): Promise<void
 	const generation = state.requestGeneration;
 	try {
 		const payload = await state.api.getFileContent(state.sessionPath, filePath);
-		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		if (previewStates.get(state.key) !== state || generation !== state.requestGeneration) return;
 		state.path = typeof payload.path === "string" ? payload.path : filePath;
 		state.content = payload.content;
 		state.frameDocument = isMarkdownFile(state.path)
@@ -491,14 +492,14 @@ async function loadFile(state: FilePreviewState, filePath: string): Promise<void
 				: "";
 		state.error = "";
 	} catch (error) {
-		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		if (previewStates.get(state.key) !== state || generation !== state.requestGeneration) return;
 		state.content = "";
 		state.frameDocument = "";
 		state.error = error instanceof Error ? error.message : String(error);
 	} finally {
-		if (previewStates.get(state.sessionPath) !== state || generation !== state.requestGeneration) return;
+		if (previewStates.get(state.key) !== state || generation !== state.requestGeneration) return;
 		state.loading = false;
-		if (activeSessionPath === state.sessionPath) notifyChanged();
+		if (activeSessionKey === state.key) notifyChanged();
 	}
 }
 
@@ -514,13 +515,15 @@ export function openFilePreviewLink(
 	sessionPath: string,
 	baseFilePath: string | undefined,
 	api: Pick<BackendApi, "getFileContent">,
+	stateKey = sessionPath,
 ): boolean {
 	const baseDirectory = baseFilePath ? directoryName(baseFilePath) : cwd;
 	const resolved = resolveFileHref(rawHref, baseDirectory);
 	if (!resolved) return false;
 
-	const previous = previewStates.get(sessionPath);
+	const previous = previewStates.get(stateKey);
 	const state: FilePreviewState = {
+		key: stateKey,
 		sessionPath,
 		api,
 		loading: true,
@@ -530,35 +533,35 @@ export function openFilePreviewLink(
 		error: "",
 		requestGeneration: (previous?.requestGeneration ?? 0) + 1,
 	};
-	previewStates.set(sessionPath, state);
-	activeSessionPath = sessionPath;
+	previewStates.set(stateKey, state);
+	activeSessionKey = stateKey;
 	notifyChanged();
 	void loadFile(state, resolved);
 	return true;
 }
 
-export function setFilePreviewSession(sessionPath: string | undefined): void {
-	const nextSessionPath = sessionPath ?? "";
-	if (nextSessionPath === activeSessionPath) return;
-	activeSessionPath = nextSessionPath;
+export function setFilePreviewSession(sessionPath: string | undefined, stateKey = sessionPath): void {
+	const nextSessionKey = stateKey ?? "";
+	if (nextSessionKey === activeSessionKey) return;
+	activeSessionKey = nextSessionKey;
 	notifyChanged();
 }
 
 export function closeFilePreview(): void {
 	finishFilePreviewResize();
-	const state = previewStates.get(activeSessionPath);
+	const state = previewStates.get(activeSessionKey);
 	if (!state) return;
 	state.requestGeneration++;
-	previewStates.delete(activeSessionPath);
+	previewStates.delete(activeSessionKey);
 	notifyChanged();
 }
 
 export function isFilePreviewVisible(): boolean {
-	return previewStates.has(activeSessionPath);
+	return previewStates.has(activeSessionKey);
 }
 
 export function getFilePreviewPath(): string | undefined {
-	return previewStates.get(activeSessionPath)?.path;
+	return previewStates.get(activeSessionKey)?.path;
 }
 
 export function initFilePreview(el: HTMLElement, onChange: () => void): void {
@@ -572,7 +575,7 @@ export function initFilePreview(el: HTMLElement, onChange: () => void): void {
 
 function renderPanel(): void {
 	if (!container) return;
-	const state = previewStates.get(activeSessionPath);
+	const state = previewStates.get(activeSessionKey);
 	if (!state) {
 		render(html``, container);
 		return;

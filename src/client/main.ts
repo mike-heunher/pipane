@@ -48,7 +48,6 @@ import {
 
 const appRuntime = consumeAppRuntime(() => new WsAgentAdapter());
 const agent: BackendClient = appRuntime.client;
-const remoteRuntime = appRuntime.remote;
 initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
 document.addEventListener("keydown", handleConversationKeyDown);
@@ -114,8 +113,19 @@ function getMessageEditor(): MessageEditor | null {
 	return document.querySelector("message-editor") as MessageEditor | null;
 }
 
+function currentSessionScopeKey(): string {
+	const session = agent.sessionFile ?? `virtual:${agent.sessionId}`;
+	return agent.activeBackendId ? `${agent.activeBackendId}\u0000${session}` : session;
+}
+
+function currentCanvasTrackingScope(): string | undefined {
+	if (!agent.sessionFile) return undefined;
+	const basename = agent.sessionFile.split("/").pop() || agent.sessionFile;
+	return agent.activeBackendId ? `${agent.activeBackendId}:${basename}` : basename;
+}
+
 function currentConversationDraftKey(): string {
-	return conversationDraftKey(agent.sessionFile, agent.sessionId);
+	return conversationDraftKey(agent.sessionFile, agent.sessionId, agent.activeBackendId);
 }
 
 function clearCurrentConversationDraft(): void {
@@ -127,7 +137,8 @@ function clearCurrentConversationDraft(): void {
 }
 
 function slashCommandScope(): string {
-	return agent.sessionFile ? `session:${agent.sessionFile}` : `cwd:${agent.cwd ?? ""}`;
+	const scope = agent.sessionFile ? `session:${agent.sessionFile}` : `cwd:${agent.cwd ?? ""}`;
+	return agent.activeBackendId ? `${agent.activeBackendId}\u0000${scope}` : scope;
 }
 
 async function refreshSlashCommands(): Promise<void> {
@@ -174,16 +185,17 @@ function clearPendingHardKillOffer(): void {
 function handleStopClick(): void {
 	if (!agent?.sessionFile) return;
 	const sessionPath = agent.sessionFile;
-	const isStillRunning = agent.getSessionStatus(sessionPath) === "running";
+	const sessionKey = currentSessionScopeKey();
+	const isStillRunning = agent.getSessionStatus(sessionPath, agent.activeBackendId) === "running";
 
-	if (pendingHardKillOfferFor === sessionPath && isStillRunning) {
+	if (pendingHardKillOfferFor === sessionKey && isStillRunning) {
 		const confirmed = window.confirm("The agent still appears to be running.\n\nHard kill the connected pi process? A new one will be spawned automatically for future prompts.");
 		if (confirmed) agent.hardKill();
 		clearPendingHardKillOffer();
 		return;
 	}
 
-	pendingHardKillOfferFor = sessionPath;
+	pendingHardKillOfferFor = sessionKey;
 	agent.abort();
 }
 
@@ -254,7 +266,7 @@ function installFilePreviewLinkListener() {
 		const cwd = agent?.cwd;
 		const sessionPath = agent?.sessionFile;
 		if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;
-		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent)) return;
+		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent, currentSessionScopeKey())) return;
 
 		event.preventDefault();
 		if (isCanvasVisible()) closeCanvas();
@@ -467,10 +479,11 @@ function renderToolbarExtras() {
 	`;
 }
 
-async function openLocalSettingsModal() {
+async function openLocalSettingsModal(backendId?: string) {
 	if (localSettingsModalOpen) return;
 	localSettingsModalOpen = true;
 	try {
+		if (backendId && backendId !== agent.activeBackendId) await agent.activateBackend?.(backendId);
 		await openLocalSettingsDialog({
 			api: agent,
 			isJsonlVisible: isJsonlPanelVisible(),
@@ -488,19 +501,23 @@ async function openLocalSettingsModal() {
 				picker?.refreshSessions?.();
 			},
 		});
+	} catch (error) {
+		agent.reportError(error, "Failed to open backend settings");
 	} finally {
 		localSettingsModalOpen = false;
 	}
 }
 
-async function openConnectionDiagnosticsModal(): Promise<void> {
-	if (!remoteRuntime || connectionDiagnosticsOpen) return;
+async function openConnectionDiagnosticsModal(backendId = agent.activeBackendId): Promise<void> {
+	if (!backendId || connectionDiagnosticsOpen) return;
 	connectionDiagnosticsOpen = true;
 	try {
 		await openConnectionDiagnosticsDialog({
-			backendName: backendDisplayName(remoteRuntime.backendId),
-			backendId: remoteRuntime.backendId,
-			getDiagnostics: () => agent.getConnectionDiagnostics?.() ?? Promise.resolve(undefined),
+			backendName: backendDisplayName(backendId),
+			backendId,
+			getDiagnostics: () => agent.getBackendConnectionDiagnostics?.(backendId)
+				?? agent.getConnectionDiagnostics?.()
+				?? Promise.resolve(undefined),
 		});
 	} finally {
 		connectionDiagnosticsOpen = false;
@@ -582,8 +599,10 @@ function scheduleUpdateSnoozeRefresh(): void {
 }
 
 async function refreshUpdateNotices(): Promise<void> {
+	const requestedBackendId = agent.activeBackendId;
 	try {
 		const snapshot = await agent.getUpdates();
+		if (requestedBackendId !== agent.activeBackendId) return;
 		updateNotices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
 		scheduleUpdateSnoozeRefresh();
 		renderApp();
@@ -671,76 +690,24 @@ function renderUpdateNotifications() {
 }
 
 function backendDisplayName(backendId: string): string {
-	const descriptor = remoteRuntime?.backends.find((backend) => backend.backendId === backendId);
+	const descriptor = agent.workspaceBackends?.find((backend) => backend.backendId === backendId);
 	return descriptor?.name || `${backendId.slice(0, 12)}…`;
 }
 
-function switchBackend(event: Event): void {
-	const backendId = (event.currentTarget as HTMLSelectElement).value;
-	if (backendId && backendId !== remoteRuntime?.backendId) {
-		window.location.assign(`/backend/${encodeURIComponent(backendId)}`);
-	}
+function showPairRecoveryInstructions(): void {
+	window.alert("Run `pipane pair` in an owned backend terminal, then scan its QR code. This also restores access after browser storage loss.");
 }
 
-async function removeCurrentBackend(): Promise<void> {
-	if (!remoteRuntime) return;
-	const name = backendDisplayName(remoteRuntime.backendId);
+async function removeBackend(backendId: string): Promise<void> {
+	const name = backendDisplayName(backendId);
 	if (!window.confirm(`Remove ${name} from this account? Active connections will close immediately.`)) return;
 	try {
-		await remoteRuntime.manager.revokeBackend(remoteRuntime.backendId);
-		const next = remoteRuntime.backends.find((backend) => backend.backendId !== remoteRuntime.backendId && backend.online)
-			?? remoteRuntime.backends.find((backend) => backend.backendId !== remoteRuntime.backendId);
-		if (next) window.location.assign(`/backend/${encodeURIComponent(next.backendId)}`);
-		else window.location.reload();
+		await agent.removeBackend?.(backendId);
+		if ((agent.workspaceBackends?.length ?? 0) === 0) window.location.reload();
+		else renderApp();
 	} catch (error) {
 		agent.reportError(error, "Failed to remove backend");
 	}
-}
-
-function renderBackendBar() {
-	if (!remoteRuntime) return "";
-	const active = remoteRuntime.backends.find((backend) => backend.backendId === remoteRuntime.backendId);
-	return html`
-		<div class="flex items-center gap-2 px-3 py-1.5 border-b border-border bg-muted/40 text-sm" data-testid="backend-switcher">
-			<span class="text-muted-foreground shrink-0">Backend</span>
-			<select
-				class="min-w-0 max-w-64 rounded border border-border bg-background px-2 py-1 text-foreground"
-				@change=${switchBackend}
-				aria-label="Active backend"
-			>
-				${remoteRuntime.backends.map((backend) => html`
-					<option
-						value=${backend.backendId}
-						?selected=${backend.backendId === remoteRuntime.backendId}
-						?disabled=${!backend.online}
-					>
-						${backendDisplayName(backend.backendId)}${backend.online ? "" : " (offline)"}
-					</option>
-				`)}
-			</select>
-			<button
-				type="button"
-				class=${agent.isConnected ? "text-green-600 hover:underline" : "text-amber-600 hover:underline"}
-				data-testid="connection-diagnostics-button"
-				title="Inspect WebRTC, ICE, STUN, candidates, and connection statistics"
-				@click=${() => { void openConnectionDiagnosticsModal(); }}
-			>
-				${agent.isConnected ? "Connected" : active?.online ? "Reconnecting" : "Offline"}
-			</button>
-			<span class="flex-1"></span>
-			<button
-				type="button"
-				class="text-muted-foreground hover:text-foreground"
-				title="Pair or recover another browser or backend"
-				@click=${() => window.alert("Run `pipane pair` in an owned backend terminal, then scan its QR code. This also restores access after browser storage loss.")}
-			>Pair / recover</button>
-			<button
-				type="button"
-				class="text-red-600 hover:text-red-700"
-				@click=${() => { void removeCurrentBackend(); }}
-			>Remove</button>
-		</div>
-	`;
 }
 
 const renderApp = () => {
@@ -760,13 +727,15 @@ const renderApp = () => {
 	const draft = conversationDrafts.get(draftKey);
 
 	const settingsMenuCallbacks = {
-		onOpenSettings: () => { void openLocalSettingsModal(); },
+		onOpenSettings: (backendId?: string) => { void openLocalSettingsModal(backendId); },
+		onOpenDiagnostics: (backendId: string) => { void openConnectionDiagnosticsModal(backendId); },
+		onRemoveBackend: (backendId: string) => { void removeBackend(backendId); },
+		onPairRecover: showPairRecoveryInstructions,
 		isDevMode,
 	};
 
 	const appHtml = html`
 		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
-			${renderBackendBar()}
 			<!-- Main content: sidebar + chat -->
 			<div class="flex flex-1 overflow-hidden">
 				${!isMobile()
@@ -963,27 +932,25 @@ async function initApp() {
 		await agent.connect(wsUrl);
 	} catch (err) {
 		clearTimeout(connectingOverlayTimer);
+		const backends = agent.workspaceBackends ?? [];
 		render(
 			html`
 				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground p-6">
 					<div class="max-w-lg rounded-lg border border-border p-6">
-						<h1 class="text-lg font-semibold mb-2">Backend unavailable</h1>
-						<p class="text-destructive mb-4">Failed to connect to the selected backend. It may be offline or unreachable.</p>
-						${remoteRuntime ? html`
-							<button class="text-red-600 underline mb-4" type="button" @click=${() => { void removeCurrentBackend(); }}>
-								Remove this backend from the account
-							</button>
+						<h1 class="text-lg font-semibold mb-2">Backends unavailable</h1>
+						<p class="text-destructive mb-4">${err instanceof Error ? err.message : "No authorized backend could be reached."}</p>
+						${backends.length > 0 ? html`
+							<div class="grid gap-2 mb-4">
+								${backends.map((backend) => html`
+									<div class="flex items-center gap-3 rounded border border-border px-3 py-2">
+										<span class="flex-1">${backendDisplayName(backend.backendId)}</span>
+										<span class="text-sm text-muted-foreground">${backend.error || (backend.online ? "Unavailable" : "Offline")}</span>
+										<button class="text-red-600 text-sm" type="button" @click=${() => { void removeBackend(backend.backendId); }}>Remove</button>
+									</div>
+								`)}
+							</div>
 						` : ""}
-						${remoteRuntime?.backends.some((backend) => backend.backendId !== remoteRuntime.backendId && backend.online)
-							? html`
-								<p class="text-sm text-muted-foreground mb-2">Open another authorized backend:</p>
-								<div class="flex flex-wrap gap-2">
-									${remoteRuntime.backends.filter((backend) => backend.backendId !== remoteRuntime.backendId && backend.online).map((backend) => html`
-										<a class="underline" href=${`/backend/${encodeURIComponent(backend.backendId)}`}>${backendDisplayName(backend.backendId)}</a>
-									`)}
-								</div>
-							`
-							: html`<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to restore access.</p>`}
+						<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to add or recover access.</p>
 					</div>
 				</div>
 			`,
@@ -1012,21 +979,32 @@ async function initApp() {
 	// Re-fetch feature flags and appearance when local settings change
 	agent.onSessionsChanged(async (file) => {
 		if (file !== "__local_settings__") return;
+		const requestedBackendId = agent.activeBackendId;
 		try {
-			applyBackendSettings(await agent.getLocalSettings());
+			const settings = await agent.getLocalSettings();
+			if (requestedBackendId !== agent.activeBackendId) return;
+			applyBackendSettings(settings);
 		} catch { /* ignore */ }
+		if (requestedBackendId !== agent.activeBackendId) return;
 		await resyncAppearanceFromServer();
-		renderApp();
+		if (requestedBackendId === agent.activeBackendId) renderApp();
 	});
 
 	// Session switch
+	let observedBackendId = agent.activeBackendId;
 	agent.onSessionChange(async () => {
+		if (observedBackendId !== agent.activeBackendId) {
+			observedBackendId = agent.activeBackendId;
+			updateNotices = [];
+			updateFeedback = null;
+			void refreshUpdateNotices();
+		}
 		clearPendingHardKillOffer();
-		setFilePreviewSession(agent.sessionFile);
+		setFilePreviewSession(agent.sessionFile, currentSessionScopeKey());
 		steeringQueue = agent.steeringQueue;
 		resetAutoCollapse();
-		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
-		setJsonlSessionPath(agent.sessionFile);
+		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile, currentCanvasTrackingScope());
+		setJsonlSessionPath(agent.sessionFile, currentSessionScopeKey());
 		conversationScroll.pinToBottom();
 		// Auto-close sidebar overlay on mobile after session switch
 		if (isMobile()) mobileSidebarOpen = false;
@@ -1041,7 +1019,7 @@ async function initApp() {
 
 	// Content change — just re-render
 	agent.onContentChange(() => {
-		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile);
+		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile, currentCanvasTrackingScope());
 		refreshJsonlPanel();
 		renderApp();
 		scrollToBottomIfNeeded();
@@ -1049,7 +1027,7 @@ async function initApp() {
 
 	// Status change
 	agent.onStatusChange(() => {
-		if (!agent.sessionFile || agent.getSessionStatus(agent.sessionFile) !== "running") {
+		if (!agent.sessionFile || agent.getSessionStatus(agent.sessionFile, agent.activeBackendId) !== "running") {
 			clearPendingHardKillOffer();
 		}
 		renderApp();
@@ -1140,7 +1118,7 @@ async function initApp() {
 			const sTime = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
 			return sTime > bestTime ? s : best;
 		});
-		await agent.switchSession(mostRecent.path, mostRecent.cwd);
+		await agent.switchSession(mostRecent.path, mostRecent.cwd, mostRecent.backendId);
 	} else {
 		await agent.newSession();
 	}

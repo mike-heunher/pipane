@@ -17,6 +17,7 @@ let visible = false;
 let container: HTMLElement | null = null;
 let onChangeCallback: (() => void) | null = null;
 let currentSessionPath: string | undefined;
+let currentSessionKey: string | undefined;
 let jsonlLines: string[] = [];
 let collapsedLines = new Set<number>();
 let scrollContainer: HTMLElement | null = null;
@@ -73,8 +74,9 @@ export function initJsonlPanel(
 	renderPanel();
 }
 
-export function setJsonlSessionPath(sessionPath: string | undefined) {
-	if (sessionPath === currentSessionPath) return;
+export function setJsonlSessionPath(sessionPath: string | undefined, sessionKey = sessionPath) {
+	if (sessionKey === currentSessionKey) return;
+	currentSessionKey = sessionKey;
 	currentSessionPath = sessionPath;
 	jsonlLines = [];
 	collapsedLines.clear();
@@ -155,10 +157,13 @@ async function fetchAndRender() {
 		renderPanel();
 		return;
 	}
+	const requestedPath = currentSessionPath;
+	const requestedKey = currentSessionKey;
 
 	try {
 		if (!api) return;
-		const text = await api.getRawSession(currentSessionPath);
+		const text = await api.getRawSession(requestedPath);
+		if (requestedPath !== currentSessionPath || requestedKey !== currentSessionKey) return;
 		const newLines = text.split("\n").filter((l) => l.trim());
 		// Only re-render if content actually changed
 		if (newLines.length !== jsonlLines.length || newLines.some((l, i) => l !== jsonlLines[i])) {

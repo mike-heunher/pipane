@@ -109,6 +109,35 @@ describe("session-picker", () => {
 		expect(onOpenSettings).toHaveBeenCalledOnce();
 	});
 
+	it("merges backend-scoped sessions under compact host and project rows", async () => {
+		const agent = new MockAgent();
+		agent.setWorkspace([
+			{ backendId: "b_one", name: "alpha", protocolVersions: [1, 2], online: true, connected: true, reconnecting: false },
+			{ backendId: "b_two", name: "beta", protocolVersions: [1, 2], online: true, connected: true, reconnecting: false },
+		], "b_one");
+		agent.setSessions([
+			createSession({ id: "same", backendId: "b_one", name: "Alpha work", cwd: "/srv/project" }),
+			createSession({ id: "same", backendId: "b_two", name: "Beta work", cwd: "/srv/project" }),
+		]);
+		const switchSession = vi.spyOn(agent, "switchSession");
+
+		const el = await createPicker(agent);
+		const hosts = el.shadowRoot!.querySelectorAll(".host-section");
+		expect(hosts).toHaveLength(2);
+		expect(hosts[0].querySelector(".host-name")?.textContent).toBe("alpha");
+		expect(hosts[1].querySelector(".host-name")?.textContent).toBe("beta");
+		expect(el.shadowRoot!.querySelectorAll(".group-label")).toHaveLength(2);
+		expect(Array.from(el.shadowRoot!.querySelectorAll(".group-label"), (label) => label.textContent)).toEqual(["project", "project"]);
+		expect(getSessionItems(el)).toHaveLength(2);
+
+		getSessionItems(el)[1].click();
+		await vi.waitFor(() => expect(switchSession).toHaveBeenCalledWith(
+			"/srv/project/.pi/sessions/same.jsonl",
+			"/srv/project",
+			"b_two",
+		));
+	});
+
 	it("creates and enters a new folder from the project explorer", async () => {
 		const agent = new MockAgent();
 		const browseDirectory = vi.spyOn(agent, "browseDirectory").mockImplementation(async (requestedPath) => ({

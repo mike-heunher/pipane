@@ -15,30 +15,44 @@ async function bootstrap(): Promise<void> {
 		await initializePairingPage();
 		return;
 	}
-	if (window.location.pathname === "/" && await isRendezvousHost()) {
-		const { initializeBackendLandingPage } = await import("./backend-landing-page.js");
-		await initializeBackendLandingPage();
-		return;
-	}
 	const backendId = backendIdFromPath(window.location.pathname);
-	if (backendId) {
+	const rendezvousWorkspace = backendId !== undefined
+		|| (window.location.pathname === "/" && await isRendezvousHost());
+	if (rendezvousWorkspace) {
 		try {
-			const [{ configureAppRuntime }, { RemoteBackendManager }] = await Promise.all([
+			const [
+				{ configureAppRuntime },
+				{ RemoteBackendManager },
+				{ WorkspaceBackendClient },
+				{ loadBrowserDeviceIdentity },
+			] = await Promise.all([
 				import("./app-runtime.js"),
 				import("./remote-backend-manager.js"),
+				import("./workspace-backend-client.js"),
+				import("./device-identity.js"),
 			]);
+			if (!await loadBrowserDeviceIdentity()) {
+				await renderBackendLandingPage();
+				return;
+			}
 			const manager = new RemoteBackendManager(window.location.origin);
 			const backends = await manager.initialize();
-			configureAppRuntime({
-				client: manager.getClient(backendId),
-				remote: { backendId, backends, manager },
-			});
+			if (backends.length === 0) {
+				await renderBackendLandingPage();
+				return;
+			}
+			configureAppRuntime({ client: new WorkspaceBackendClient(backends, manager, backendId) });
 		} catch (error) {
 			renderBootstrapError(error);
 			return;
 		}
 	}
 	await import("./main.js");
+}
+
+async function renderBackendLandingPage(): Promise<void> {
+	const { initializeBackendLandingPage } = await import("./backend-landing-page.js");
+	await initializeBackendLandingPage();
 }
 
 async function isRendezvousHost(): Promise<boolean> {

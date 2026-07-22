@@ -5,6 +5,7 @@ import type { SlashCommandInfo } from "../shared/ws-protocol.js";
 import type { ThinkingLevelValue } from "../shared/thinking-levels.js";
 import type { BackendApi, SessionInfoDTO } from "./backend-api.js";
 import type { ConnectionDiagnostics } from "./frame-transport.js";
+import type { AuthorizedBackendDescriptor } from "../shared/trust-protocol.js";
 
 export type { SessionInfoDTO } from "./backend-api.js";
 
@@ -31,6 +32,12 @@ export interface PiInstallRequiredInfo {
  * The current implementation uses HTTP plus WebSocket. A remote implementation
  * can use a WebRTC DataChannel without changing components or application state.
  */
+export interface WorkspaceBackendState extends AuthorizedBackendDescriptor {
+	connected: boolean;
+	reconnecting: boolean;
+	error?: string;
+}
+
 export interface BackendClient extends BackendApi {
 	readonly state: BackendClientState;
 	readonly sessionId: string;
@@ -46,6 +53,9 @@ export interface BackendClient extends BackendApi {
 	readonly cwd: string | undefined;
 	readonly optimisticSessions: SessionInfoDTO[];
 	readonly virtualSessionInfo: SessionInfoDTO | undefined;
+	/** Present for the account-wide remote workspace; absent for a local backend. */
+	readonly activeBackendId?: string;
+	readonly workspaceBackends?: readonly WorkspaceBackendState[];
 
 	connect(endpoint: string): Promise<void>;
 	disconnect(): void;
@@ -59,8 +69,13 @@ export interface BackendClient extends BackendApi {
 	onStatusChange(fn: () => void): () => void;
 	onSessionsChanged(fn: (file: string) => void): () => void;
 	onPiInstallRequired(fn: (info: PiInstallRequiredInfo) => void): () => void;
+	/** Account-wide backend/session catalog changes. */
+	onWorkspaceChange?(fn: () => void): () => void;
 
-	getSessionStatus(sessionPath: string): "running" | "done" | undefined;
+	getSessionStatus(sessionPath: string, backendId?: string): "running" | "done" | undefined;
+	deleteSession(sessionPath: string, backendId?: string): Promise<void>;
+	browseDirectory(path: string, backendId?: string): ReturnType<BackendApi["browseDirectory"]>;
+	createDirectory(parentPath: string, name: string, backendId?: string): ReturnType<BackendApi["createDirectory"]>;
 	reportError(error: unknown, prefix?: string): void;
 	fetchAvailableModels(): Promise<any[]>;
 	installPi(): Promise<void>;
@@ -77,8 +92,13 @@ export interface BackendClient extends BackendApi {
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>>;
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }>;
 	forkAndPrompt(text: string, images?: ImageContent[]): Promise<void>;
-	switchSession(sessionPath: string, cwd?: string): Promise<void>;
-	newSession(cwd?: string): Promise<void>;
+	switchSession(sessionPath: string, cwd?: string, backendId?: string): Promise<void>;
+	newSession(cwd?: string, backendId?: string): Promise<void>;
+	/** Pause or restore full session snapshots while retaining host-level status/catalog events. */
+	setSessionSubscriptionActive?(active: boolean): Promise<void>;
+	activateBackend?(backendId: string): Promise<void>;
+	getBackendConnectionDiagnostics?(backendId: string): Promise<ConnectionDiagnostics | undefined>;
+	removeBackend?(backendId: string): Promise<void>;
 }
 
 export type SessionPickerBackendClient = Pick<
@@ -92,6 +112,12 @@ export type SessionPickerBackendClient = Pick<
 	| "onSessionChange"
 	| "onSessionsChanged"
 	| "onStatusChange"
+	| "onWorkspaceChange"
+	| "activeBackendId"
+	| "workspaceBackends"
+	| "activateBackend"
+	| "getBackendConnectionDiagnostics"
+	| "removeBackend"
 	| "listSessions"
 	| "switchSession"
 	| "newSession"

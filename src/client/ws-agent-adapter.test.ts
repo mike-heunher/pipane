@@ -729,6 +729,19 @@ describe("WsAgentAdapter prompt routing", () => {
 		});
 	});
 
+	describe("workspace session subscription", () => {
+		it("pauses full snapshots for an inactive host and restores the current session", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			await adapter.setSessionSubscriptionActive(false);
+			await adapter.setSessionSubscriptionActive(true);
+
+			const subscriptions = sent.filter((message) => message.type === "subscribe_session");
+			expect(subscriptions.map((message) => message.sessionPath)).toEqual(["", sessionPath]);
+		});
+	});
+
 	describe("stop button visibility (isStreaming) for running sessions", () => {
 		it("sets isStreaming=true when switching to a session that is running", async () => {
 			const sessionA = "/tmp/sessions/session-a.jsonl";

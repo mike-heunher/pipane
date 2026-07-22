@@ -11,17 +11,34 @@ import { html, css, LitElement, nothing, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionInfoDTO, SessionPickerBackendClient } from "./backend-client.js";
+import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 
 export interface SettingsMenuCallbacks {
-	onOpenSettings: () => void;
+	onOpenSettings: (backendId?: string) => void;
+	onOpenDiagnostics?: (backendId: string) => void;
+	onRemoveBackend?: (backendId: string) => void;
+	onPairRecover?: () => void;
 	isDevMode: boolean;
 }
 
 interface SessionGroup {
+	key: string;
+	backendId?: string;
 	cwd: string;
 	label: string;
 	displayCwd: string;
 	sessions: SessionInfoDTO[];
+}
+
+interface SessionHost {
+	backendId: string;
+	name: string;
+	connected: boolean;
+	reconnecting: boolean;
+	online: boolean;
+	compatible: boolean;
+	error?: string;
+	groups: SessionGroup[];
 }
 
 interface DirEntry {
@@ -166,6 +183,112 @@ export class SessionPicker extends LitElement {
 			flex: 1;
 			overflow-y: auto;
 			padding: 0.25rem 0;
+		}
+
+		.host-section {
+			position: relative;
+			border-bottom: 1px solid color-mix(in srgb, var(--picker-border) 65%, transparent);
+			padding-bottom: 0.25rem;
+		}
+
+		.host-section:last-child {
+			border-bottom: 0;
+		}
+
+		.host-header {
+			display: flex;
+			align-items: center;
+			gap: 0.42rem;
+			min-height: 1.9rem;
+			padding: 0.35rem 0.5rem 0.25rem 0.7rem;
+			color: var(--picker-text);
+		}
+
+		.host-header.active {
+			background: color-mix(in srgb, var(--picker-active) 5%, transparent);
+		}
+
+		.host-status {
+			width: 0.48rem;
+			height: 0.48rem;
+			border: 0;
+			border-radius: 999px;
+			padding: 0;
+			background: #9ca3af;
+			flex-shrink: 0;
+			cursor: pointer;
+		}
+
+		.host-status.connected { background: #22c55e; }
+		.host-status.reconnecting { background: #f59e0b; }
+		.host-status.offline { background: #9ca3af; }
+
+		.host-name {
+			flex: 1;
+			min-width: 0;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+			font-size: 0.67rem;
+			font-weight: 700;
+			letter-spacing: 0.055em;
+			text-transform: uppercase;
+		}
+
+		.host-action {
+			border: 0;
+			background: none;
+			color: var(--picker-muted);
+			padding: 0.12rem 0.25rem;
+			font-size: 0.65rem;
+			cursor: pointer;
+			border-radius: 0.25rem;
+		}
+
+		.host-action:hover:not(:disabled) { color: var(--picker-active); background: var(--picker-hover); }
+		.host-action:disabled { cursor: default; opacity: 0.4; }
+
+		.host-menu {
+			position: absolute;
+			top: 1.8rem;
+			right: 0.45rem;
+			z-index: 8;
+			display: grid;
+			min-width: 9.5rem;
+			padding: 0.25rem;
+			border: 1px solid var(--picker-border);
+			border-radius: 0.45rem;
+			background: var(--picker-bg);
+			box-shadow: 0 8px 24px color-mix(in srgb, #000 20%, transparent);
+		}
+
+		.host-menu button {
+			border: 0;
+			border-radius: 0.3rem;
+			background: none;
+			color: var(--picker-text);
+			padding: 0.38rem 0.5rem;
+			text-align: left;
+			font: inherit;
+			font-size: 0.7rem;
+			cursor: pointer;
+		}
+
+		.host-menu button:hover:not(:disabled) { background: var(--picker-hover); }
+		.host-menu button:disabled { cursor: default; opacity: 0.45; }
+		.host-menu button.danger { color: #dc2626; }
+		.host-empty { padding: 0.25rem 0.75rem 0.45rem 1.6rem; color: var(--picker-muted); font-size: 0.68rem; }
+
+		.host-section .group-header {
+			padding-left: 1.6rem;
+		}
+
+		.host-section .session-item {
+			padding-left: 1.7rem;
+		}
+
+		.host-section .session-item.active {
+			padding-left: calc(1.7rem - 2px);
 		}
 
 		.group-header {
@@ -544,6 +667,18 @@ export class SessionPicker extends LitElement {
 			flex-shrink: 0;
 		}
 
+		.folder-picker-host {
+			width: 100%;
+			box-sizing: border-box;
+			margin-bottom: 0.45rem;
+			padding: 0.32rem 0.45rem;
+			border: 1px solid var(--picker-border);
+			border-radius: 4px;
+			background: var(--picker-bg);
+			color: var(--picker-text);
+			font-size: 0.75rem;
+		}
+
 		.folder-picker-input input {
 			width: 100%;
 			box-sizing: border-box;
@@ -758,9 +893,11 @@ export class SessionPicker extends LitElement {
 	@state() private searchQuery = "";
 	@state() private expandedGroups = new Set<string>();
 	@state() private pinnedSessions = loadPinnedSessions();
+	@state() private openHostMenu: string | undefined;
 
 	// Folder picker state
 	@state() private showFolderPicker = false;
+	@state() private folderBackendId: string | undefined;
 	@state() private folderPath = "~";
 	@state() private folderDirs: DirEntry[] = [];
 	@state() private folderLoading = false;
@@ -773,6 +910,7 @@ export class SessionPicker extends LitElement {
 	private unsubSessionsChanged?: () => void;
 	private unsubGlobalStatus?: () => void;
 	private unsubStatusChange?: () => void;
+	private unsubWorkspaceChange?: () => void;
 
 	// ── Single-flight coalescing fetch state ────────────────────────────────
 	private _fetchInFlight = false;
@@ -816,6 +954,10 @@ export class SessionPicker extends LitElement {
 			this.unsubGlobalStatus = this.agent.onGlobalStatusChange(() => {
 				this.requestUpdate();
 			});
+			this.unsubWorkspaceChange = this.agent.onWorkspaceChange?.(() => {
+				this.requestUpdate();
+				this.refreshSessions();
+			});
 			this.unsubStatusChange = this.agent.onStatusChange(() => {
 				const prev = this._lastObservedSessionStatus;
 				const next = this.agent.sessionStatus;
@@ -835,6 +977,7 @@ export class SessionPicker extends LitElement {
 		this.unsubSessionsChanged?.();
 		this.unsubGlobalStatus?.();
 		this.unsubStatusChange?.();
+		this.unsubWorkspaceChange?.();
 		if (this._sessionsChangedDebounceTimer) {
 			clearTimeout(this._sessionsChangedDebounceTimer);
 			this._sessionsChangedDebounceTimer = null;
@@ -859,19 +1002,20 @@ export class SessionPicker extends LitElement {
 		if (virtual) toMerge.push(virtual);
 		if (toMerge.length === 0) return;
 
-		// Remove any stale virtual entries before merging
+		// Remove any stale virtual entries before merging.
 		let sessions = this.sessions.filter((s) => !s.path.startsWith("__virtual__"));
-		const existingPaths = new Set(sessions.map((s) => s.path));
+		const existingPaths = new Set(sessions.map((s) => this.sessionKey(s)));
 		let changed = sessions.length !== this.sessions.length;
 
 		for (const opt of toMerge) {
-			if (existingPaths.has(opt.path)) {
+			const optKey = this.sessionKey(opt);
+			if (existingPaths.has(optKey)) {
 				// Path exists — backfill cwd if the cached entry has none.
 				// This happens when a file watcher notification arrives before
 				// session_attached, and the REST API returns the session with
 				// an empty cwd (JSONL header not yet fully written).
 				if (opt.cwd) {
-					const existing = sessions.find((s) => s.path === opt.path);
+					const existing = sessions.find((s) => this.sessionKey(s) === optKey);
 					if (existing && !existing.cwd) {
 						existing.cwd = opt.cwd;
 						changed = true;
@@ -879,6 +1023,7 @@ export class SessionPicker extends LitElement {
 				}
 			} else {
 				sessions = [...sessions, opt];
+				existingPaths.add(optKey);
 				changed = true;
 			}
 		}
@@ -943,9 +1088,17 @@ export class SessionPicker extends LitElement {
 	private get knownCwds(): string[] {
 		const cwds = new Set<string>();
 		for (const s of this.sessions) {
-			if (s.cwd) cwds.add(s.cwd);
+			if (s.cwd && (!this.folderBackendId || s.backendId === this.folderBackendId)) cwds.add(s.cwd);
 		}
 		return Array.from(cwds).sort();
+	}
+
+	private sessionKey(session: Pick<SessionInfoDTO, "backendId" | "path">): string {
+		return session.backendId ? `${session.backendId}\u0000${session.path}` : session.path;
+	}
+
+	private groupKey(backendId: string | undefined, cwd: string): string {
+		return backendId ? `${backendId}\u0000${cwd}` : cwd;
 	}
 
 	private get filteredGroups(): SessionGroup[] {
@@ -953,27 +1106,33 @@ export class SessionPicker extends LitElement {
 		let filtered = this.sessions;
 
 		if (query) {
+			const backendNames = new Map((this.agent.workspaceBackends ?? []).map((backend) => [backend.backendId, backend.name ?? backend.backendId]));
 			filtered = filtered.filter(
 				(s) =>
 					(s.name?.toLowerCase().includes(query)) ||
 					s.firstMessage.toLowerCase().includes(query) ||
 					s.cwd.toLowerCase().includes(query) ||
 					(s.cwdDisplay?.toLowerCase().includes(query) ?? false) ||
-					(s.worktreeName ?? "root").toLowerCase().includes(query),
+					(s.worktreeName ?? "root").toLowerCase().includes(query) ||
+					(s.backendId ? backendNames.get(s.backendId)?.toLowerCase().includes(query) : false),
 			);
 		}
 
 		const groupMap = new Map<string, SessionInfoDTO[]>();
 		for (const s of filtered) {
-			const key = s.cwd || "(unknown)";
+			const cwd = s.cwd || "(unknown)";
+			const key = this.groupKey(s.backendId, cwd);
 			if (!groupMap.has(key)) groupMap.set(key, []);
 			groupMap.get(key)!.push(s);
 		}
 
 		const groups: SessionGroup[] = [];
-		for (const [cwd, sessions] of groupMap) {
+		for (const [key, sessions] of groupMap) {
+			const cwd = sessions[0]?.cwd || "(unknown)";
+			const backendId = sessions[0]?.backendId;
 			const displayCwd = sessions[0]?.cwdDisplay || cwd;
-			groups.push({ cwd, displayCwd, label: displayCwd, sessions });
+			const label = backendId ? (displayCwd.split("/").filter(Boolean).pop() || displayCwd) : displayCwd;
+			groups.push({ key, backendId, cwd, displayCwd, label, sessions });
 		}
 
 		// Sort sessions within each group:
@@ -982,8 +1141,8 @@ export class SessionPicker extends LitElement {
 		//   3. Unpinned sessions (sorted by recency)
 		for (const g of groups) {
 			g.sessions.sort((a, b) => {
-				const aRunning = this.agent.getSessionStatus(a.path) === "running";
-				const bRunning = this.agent.getSessionStatus(b.path) === "running";
+				const aRunning = this.agent.getSessionStatus(a.path, a.backendId) === "running";
+				const bRunning = this.agent.getSessionStatus(b.path, b.backendId) === "running";
 
 				if (aRunning && bRunning) {
 					const aName = this.getSessionDisplayName(a);
@@ -993,8 +1152,8 @@ export class SessionPicker extends LitElement {
 				if (aRunning) return -1;
 				if (bRunning) return 1;
 
-				const aPinned = this.pinnedSessions.has(a.path);
-				const bPinned = this.pinnedSessions.has(b.path);
+				const aPinned = this.pinnedSessions.has(this.sessionKey(a));
+				const bPinned = this.pinnedSessions.has(this.sessionKey(b));
 				if (aPinned && !bPinned) return -1;
 				if (!aPinned && bPinned) return 1;
 
@@ -1010,7 +1169,7 @@ export class SessionPicker extends LitElement {
 			const groupRecency = (g: SessionGroup): number => {
 				let best = 0;
 				for (const s of g.sessions) {
-					if (this.agent.getSessionStatus(s.path) === "running") return Infinity;
+					if (this.agent.getSessionStatus(s.path, s.backendId) === "running") return Infinity;
 					const t = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
 					best = Math.max(best, t);
 				}
@@ -1023,6 +1182,37 @@ export class SessionPicker extends LitElement {
 		});
 
 		return groups;
+	}
+
+	private get filteredHosts(): SessionHost[] {
+		const groups = this.filteredGroups;
+		const workspaceBackends = this.agent.workspaceBackends;
+		if (!workspaceBackends) return [];
+		const query = this.searchQuery.toLowerCase().trim();
+		const hosts = workspaceBackends.map((backend) => ({
+			backendId: backend.backendId,
+			name: backend.name || `${backend.backendId.slice(0, 12)}…`,
+			connected: backend.connected,
+			reconnecting: backend.reconnecting,
+			online: backend.online,
+			compatible: backend.protocolVersions.includes(BACKEND_PROTOCOL_VERSION),
+			error: backend.error,
+			groups: groups.filter((group) => group.backendId === backend.backendId),
+		}));
+		return hosts
+			.filter((host) => !query || host.groups.length > 0 || host.name.toLowerCase().includes(query))
+			.sort((a, b) => {
+				const aActive = a.backendId === this.agent.activeBackendId;
+				const bActive = b.backendId === this.agent.activeBackendId;
+				if (aActive !== bActive) return aActive ? -1 : 1;
+				const recency = (host: SessionHost) => Math.max(0, ...host.groups.flatMap((group) => group.sessions.map((session) =>
+					this.agent.getSessionStatus(session.path, session.backendId) === "running"
+						? Infinity
+						: new Date(session.lastUserPromptTime || session.modified).getTime(),
+				)));
+				const difference = recency(b) - recency(a);
+				return difference || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+			});
 	}
 
 	private getSessionDisplayName(s: SessionInfoDTO): string {
@@ -1050,7 +1240,7 @@ export class SessionPicker extends LitElement {
 	// ── Actions ─────────────────────────────────────────────────────────────
 
 	private async handleSessionClick(session: SessionInfoDTO) {
-		if (session.id === this.agent?.sessionId) return;
+		if (session.id === this.agent?.sessionId && (!session.backendId || session.backendId === this.agent.activeBackendId)) return;
 		if (session.path.startsWith("__virtual__")) return; // Can't switch to another virtual session
 		this.clearSearchFilter();
 		// Collapse all expanded groups when picking a session
@@ -1058,16 +1248,18 @@ export class SessionPicker extends LitElement {
 			this.expandedGroups = new Set();
 		}
 		try {
-			await this.agent.switchSession(session.path, session.cwd);
+			if (session.backendId) await this.agent.switchSession(session.path, session.cwd, session.backendId);
+			else await this.agent.switchSession(session.path, session.cwd);
 		} catch (err) {
 			console.error("Failed to switch session:", err);
 		}
 	}
 
-	private async handleNewSessionInGroup(cwd: string) {
+	private async handleNewSessionInGroup(cwd: string, backendId?: string) {
 		this.clearSearchFilter();
 		try {
-			await this.agent.newSession(cwd);
+			if (backendId) await this.agent.newSession(cwd, backendId);
+			else await this.agent.newSession(cwd);
 		} catch (err) {
 			console.error("Failed to create new session:", err);
 		}
@@ -1077,10 +1269,11 @@ export class SessionPicker extends LitElement {
 		e.stopPropagation();
 		e.preventDefault();
 		const next = new Set(this.pinnedSessions);
-		if (next.has(session.path)) {
-			next.delete(session.path);
+		const key = this.sessionKey(session);
+		if (next.has(key)) {
+			next.delete(key);
 		} else {
-			next.add(session.path);
+			next.add(key);
 		}
 		this.pinnedSessions = next;
 		savePinnedSessions(next);
@@ -1092,29 +1285,33 @@ export class SessionPicker extends LitElement {
 
 		// Virtual sessions have no file to delete — just create a fresh session
 		if (session.path.startsWith("__virtual__")) {
-			this.agent.newSession();
+			if (session.backendId) this.agent.newSession(undefined, session.backendId);
+			else this.agent.newSession();
 			return;
 		}
 
-		const isActive = session.id === this.agent?.sessionId;
+		const isActive = session.id === this.agent?.sessionId && (!session.backendId || session.backendId === this.agent.activeBackendId);
 		const name = session.name || session.firstMessage || "this session";
 		if (!confirm(`Delete "${name.slice(0, 60)}"?`)) return;
 
 		// Optimistically remove from UI immediately
-		this.sessions = this.sessions.filter((s) => s.path !== session.path);
-		if (this.pinnedSessions.has(session.path)) {
+		const sessionKey = this.sessionKey(session);
+		this.sessions = this.sessions.filter((candidate) => this.sessionKey(candidate) !== sessionKey);
+		if (this.pinnedSessions.has(sessionKey)) {
 			const next = new Set(this.pinnedSessions);
-			next.delete(session.path);
+			next.delete(sessionKey);
 			this.pinnedSessions = next;
 			savePinnedSessions(next);
 		}
 		if (isActive) {
-			this.agent.newSession();
+			if (session.backendId) this.agent.newSession(undefined, session.backendId);
+			else this.agent.newSession();
 		}
 
 		// Delete in background — restore on failure
 		try {
-			await this.agent.deleteSession(session.path);
+			if (session.backendId) await this.agent.deleteSession(session.path, session.backendId);
+			else await this.agent.deleteSession(session.path);
 		} catch (err) {
 			console.error("Failed to delete session:", err);
 			// Restore the session on failure
@@ -1135,11 +1332,18 @@ export class SessionPicker extends LitElement {
 
 	// ── Folder picker ───────────────────────────────────────────────────────
 
-	private openFolderPicker() {
+	private openFolderPicker(backendId = this.agent.activeBackendId) {
 		this.showFolderPicker = true;
+		this.folderBackendId = backendId;
 		this.folderPath = "~";
 		this.resetNewFolderInput();
 		this.folderError = "";
+		void this.browseTo("~");
+	}
+
+	private handleFolderBackendChange(event: Event) {
+		this.folderBackendId = (event.currentTarget as HTMLSelectElement).value;
+		this.folderPath = "~";
 		void this.browseTo("~");
 	}
 
@@ -1154,7 +1358,9 @@ export class SessionPicker extends LitElement {
 		this.resetNewFolderInput();
 		this.folderError = "";
 		try {
-			const data = await this.agent.browseDirectory(dirPath);
+			const data = this.folderBackendId
+				? await this.agent.browseDirectory(dirPath, this.folderBackendId)
+				: await this.agent.browseDirectory(dirPath);
 			this.folderPath = data.path;
 			this.folderDirs = data.dirs;
 		} catch (err) {
@@ -1198,7 +1404,9 @@ export class SessionPicker extends LitElement {
 		this.folderCreating = true;
 		this.folderError = "";
 		try {
-			const created = await this.agent.createDirectory(this.folderPath, name);
+			const created = this.folderBackendId
+				? await this.agent.createDirectory(this.folderPath, name, this.folderBackendId)
+				: await this.agent.createDirectory(this.folderPath, name);
 			await this.browseTo(created.path);
 		} catch (err) {
 			console.error("Failed to create directory:", err);
@@ -1228,7 +1436,8 @@ export class SessionPicker extends LitElement {
 	private handleFolderSelect() {
 		this.showFolderPicker = false;
 		this.clearSearchFilter();
-		this.agent.newSession(this.folderPath);
+		if (this.folderBackendId) this.agent.newSession(this.folderPath, this.folderBackendId);
+		else this.agent.newSession(this.folderPath);
 	}
 
 	private handleParentFolder() {
@@ -1241,7 +1450,9 @@ export class SessionPicker extends LitElement {
 
 	render() {
 		const groups = this.filteredGroups;
+		const hosts = this.filteredHosts;
 		const activeId = this.agent?.sessionId;
+		const isWorkspace = this.agent.workspaceBackends !== undefined;
 
 		return html`
 			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
@@ -1250,10 +1461,10 @@ export class SessionPicker extends LitElement {
 						<span class="header-title">${this.settingsMenu?.isDevMode ? 'pipane · dev' : 'pipane'}</span>
 					</div>
 					<div class="header-right">
-						<button class="new-btn" @click=${this.openFolderPicker}>NEW PROJECT</button>
+						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>
 						<button
 							class="settings-btn"
-							@click=${() => this.settingsMenu?.onOpenSettings()}
+							@click=${() => this.settingsMenu?.onOpenSettings(this.agent.activeBackendId)}
 							title="Settings"
 							aria-label="Settings"
 						>
@@ -1277,13 +1488,48 @@ export class SessionPicker extends LitElement {
 						? this.renderSkeletonSessions()
 						: this.loading
 							? nothing
-							: groups.length === 0
-							? html`<div class="empty">No sessions found</div>`
-							: repeat(groups, (g) => g.cwd, (group) => this.renderGroup(group, activeId))}
+							: isWorkspace
+								? hosts.length === 0
+									? html`<div class="empty">No hosts or sessions found</div>`
+									: repeat(hosts, (host) => host.backendId, (host) => this.renderHost(host, activeId))
+								: groups.length === 0
+									? html`<div class="empty">No sessions found</div>`
+									: repeat(groups, (group) => group.key, (group) => this.renderGroup(group, activeId))}
 				</div>
 
 				${this.showFolderPicker ? this.renderFolderPicker() : nothing}
 			</div>
+		`;
+	}
+
+	private renderHost(host: SessionHost, activeId: string): TemplateResult {
+		const state = host.connected ? "connected" : host.reconnecting ? "reconnecting" : "offline";
+		const statusTitle = host.connected ? "Connected" : host.reconnecting ? "Reconnecting" : host.error || (host.online ? "Unavailable" : "Offline");
+		return html`
+			<section class="host-section" data-backend-id=${host.backendId}>
+				<div class="host-header ${host.backendId === this.agent.activeBackendId ? "active" : ""}">
+					<button
+						class="host-status ${state}"
+						title=${statusTitle}
+						aria-label=${`${host.name}: ${statusTitle}`}
+						@click=${() => this.settingsMenu?.onOpenDiagnostics?.(host.backendId)}
+					></button>
+					<span class="host-name" title=${host.name}>${host.name}</span>
+					<button class="host-action" title=${`New project on ${host.name}`} ?disabled=${!host.online || !host.compatible} @click=${() => this.openFolderPicker(host.backendId)}>+ PROJECT</button>
+					<button class="host-action" title=${`Manage ${host.name}`} aria-label=${`Manage ${host.name}`} @click=${() => { this.openHostMenu = this.openHostMenu === host.backendId ? undefined : host.backendId; }}>•••</button>
+				</div>
+				${this.openHostMenu === host.backendId ? html`
+					<div class="host-menu">
+						<button ?disabled=${!host.online || !host.compatible} @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenSettings(host.backendId); }}>Host settings</button>
+						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenDiagnostics?.(host.backendId); }}>Connection details</button>
+						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onPairRecover?.(); }}>Pair / recover</button>
+						<button class="danger" @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onRemoveBackend?.(host.backendId); }}>Remove host</button>
+					</div>
+				` : nothing}
+				${host.groups.length > 0
+					? repeat(host.groups, (group) => group.key, (group) => this.renderGroup(group, activeId))
+					: html`<div class="host-empty">${host.error || (host.online ? "No sessions" : "Host offline")}</div>`}
+			</section>
 		`;
 	}
 
@@ -1313,11 +1559,11 @@ export class SessionPicker extends LitElement {
 	}
 
 	private renderGroup(group: SessionGroup, activeId: string): TemplateResult {
-		const isExpanded = this.expandedGroups.has(group.cwd);
+		const isExpanded = this.expandedGroups.has(group.key);
 
 		// Count running sessions in this group
 		const runningCount = group.sessions.filter(
-			(s) => this.agent.getSessionStatus(s.path) === "running"
+			(s) => this.agent.getSessionStatus(s.path, s.backendId) === "running"
 		).length;
 
 		// Show at least sessionsPerProject or all running sessions, whichever is more
@@ -1330,21 +1576,21 @@ export class SessionPicker extends LitElement {
 		const hiddenCount = totalCount - visibleSessions.length;
 
 		return html`
-			<div class="group-header" title=${group.cwd}>
+			<div class="group-header" title=${group.displayCwd}>
 				<span class="group-label">${group.label}</span>
 				<button
 					class="group-new-btn"
-					@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd); }}
+					@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd, group.backendId); }}
 					title="New session in ${group.cwd}"
 				>+ NEW</button>
 			</div>
 			${repeat(
 				visibleSessions,
-				(s) => s.id,
+				(s) => this.sessionKey(s),
 				(s) => {
-					const status = this.agent.getSessionStatus(s.path);
+					const status = this.agent.getSessionStatus(s.path, s.backendId);
 					const effectiveStatus = status ?? "idle";
-					const isPinned = this.pinnedSessions.has(s.path);
+					const isPinned = this.pinnedSessions.has(this.sessionKey(s));
 					const worktreeName = s.worktreeName ?? "root";
 					const sessionTitle = [
 						s.cwd,
@@ -1353,7 +1599,7 @@ export class SessionPicker extends LitElement {
 					].filter(Boolean).join("\n");
 					return html`
 					<button
-						class="session-item ${s.id === activeId ? "active" : ""}"
+						class="session-item ${s.id === activeId && (!s.backendId || s.backendId === this.agent.activeBackendId) ? "active" : ""}"
 						@click=${() => this.handleSessionClick(s)}
 						title=${sessionTitle}
 					>
@@ -1396,23 +1642,24 @@ export class SessionPicker extends LitElement {
 			)}
 			${needsTruncation
 				? isExpanded
-					? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.cwd)}>▴ Show less</button>`
-					: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.cwd)}>▾ Show ${hiddenCount} more…</button>`
+					? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▴ Show less</button>`
+					: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▾ Show ${hiddenCount} more…</button>`
 				: nothing}
 		`;
 	}
 
-	private toggleGroupExpansion(cwd: string) {
-		if (this.expandedGroups.has(cwd)) {
-			this.expandedGroups.delete(cwd);
+	private toggleGroupExpansion(groupKey: string) {
+		if (this.expandedGroups.has(groupKey)) {
+			this.expandedGroups.delete(groupKey);
 		} else {
-			this.expandedGroups.add(cwd);
+			this.expandedGroups.add(groupKey);
 		}
 		this.requestUpdate();
 	}
 
 	private renderFolderPicker(): TemplateResult {
 		const knownCwds = this.knownCwds;
+		const workspaceBackends = this.agent.workspaceBackends?.filter((backend) => backend.online && backend.protocolVersions.includes(BACKEND_PROTOCOL_VERSION)) ?? [];
 		// Folder icon SVG
 		const folderIcon = html`
 			<svg class="folder-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1428,6 +1675,11 @@ export class SessionPicker extends LitElement {
 				</div>
 
 				<div class="folder-picker-input">
+					${workspaceBackends.length > 1 ? html`
+						<select class="folder-picker-host" aria-label="Project host" .value=${this.folderBackendId ?? ""} @change=${this.handleFolderBackendChange}>
+							${workspaceBackends.map((backend) => html`<option value=${backend.backendId}>${backend.name || backend.backendId}</option>`)}
+						</select>
+					` : nothing}
 					<input
 						type="text"
 						.value=${this.folderPath}

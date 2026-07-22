@@ -104,7 +104,7 @@ export function resetCanvasTracking() {
  * hasn't been auto-opened before (keyed by JSONL filename + message index).
  * Used on session load to restore canvas state.
  */
-export function restoreCanvasFromMessages(messages: any[], sessionFile?: string) {
+export function restoreCanvasFromMessages(messages: any[], sessionFile?: string, trackingScope = sessionFile) {
 	let lastIndex = -1;
 	let last: { title: string; markdown: string } | null = null;
 	for (let i = 0; i < messages.length; i++) {
@@ -115,8 +115,8 @@ export function restoreCanvasFromMessages(messages: any[], sessionFile?: string)
 		}
 	}
 	if (last && lastIndex >= 0) {
-		if (sessionFile) {
-			const key = canvasKey(sessionFile, lastIndex);
+		if (trackingScope) {
+			const key = canvasKey(trackingScope, lastIndex);
 			if (hasCanvasBeenOpened(key)) return; // already shown once, don't reopen
 			markCanvasOpened(key);
 		}

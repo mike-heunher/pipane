@@ -6,6 +6,8 @@ describe("conversation drafts", () => {
 		expect(conversationDraftKey("/tmp/sessions/a.jsonl", "ignored"))
 			.toBe("session:/tmp/sessions/a.jsonl");
 		expect(conversationDraftKey(undefined, "new-a")).toBe("virtual:new-a");
+		expect(conversationDraftKey("/tmp/sessions/a.jsonl", "ignored", "b_host"))
+			.toBe("backend:b_host:session:/tmp/sessions/a.jsonl");
 	});
 
 	it("keeps text and attachments isolated by conversation", () => {

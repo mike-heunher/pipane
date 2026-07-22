@@ -161,6 +161,8 @@ export class WsAgentAdapter implements BackendClient {
 	private _sessionPath: string | undefined;
 	private _sessionName: string | undefined;
 	private _sessionStatus: SessionStatus = "virtual";
+	/** Inactive workspace hosts retain status events without streaming full session snapshots. */
+	private _sessionSubscriptionActive = true;
 	/** Browser-only command output retained across a following authoritative sync. */
 	private _localAssistantMessages: AgentMessage[] = [];
 
@@ -432,6 +434,21 @@ export class WsAgentAdapter implements BackendClient {
 		this.transport.close();
 	}
 
+	async setSessionSubscriptionActive(active: boolean): Promise<void> {
+		if (active === this._sessionSubscriptionActive) return;
+		this._sessionSubscriptionActive = active;
+		this._sessionNonce++;
+		this._awaitingFullSync = undefined;
+		this.clearSessionSyncQueue();
+		if (!active) {
+			await this.subscribeToSession(undefined);
+			return;
+		}
+		if (this._sessionPath && this._sessionStatus !== "virtual") {
+			await this.requestFullSessionSync(this._sessionPath);
+		}
+	}
+
 	getConnectionDiagnostics(): Promise<ConnectionDiagnostics | undefined> {
 		return this.transport.getConnectionDiagnostics?.() ?? Promise.resolve(undefined);
 	}
@@ -468,7 +485,7 @@ export class WsAgentAdapter implements BackendClient {
 	 */
 	private async onReconnected() {
 		// Re-subscribe to the current session to get fresh state
-		if (this._sessionPath && this._sessionStatus !== "virtual") {
+		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
 			// A request associated with the old socket can never complete here.
 			this._awaitingFullSync = undefined;
 			void this.requestFullSessionSync(this._sessionPath);
@@ -485,7 +502,7 @@ export class WsAgentAdapter implements BackendClient {
 		this.refreshSessionStatuses();
 
 		// Re-subscribe to get fresh messages from the server
-		if (this._sessionPath && this._sessionStatus !== "virtual") {
+		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
 			this.subscribeToSession(this._sessionPath);
 		}
 
@@ -1591,6 +1608,7 @@ export class WsAgentAdapter implements BackendClient {
 
 	/** Switch to an existing session (load messages from server cache) */
 	async switchSession(sessionPath: string, cwd?: string): Promise<void> {
+		this._sessionSubscriptionActive = true;
 		const nonce = ++this._sessionNonce;
 		if (cwd !== undefined) this._pendingCwd = cwd;
 		this._pendingNewPrompt = false;
@@ -1632,6 +1650,7 @@ export class WsAgentAdapter implements BackendClient {
 
 	/** Create a new virtual session (no JSONL file until first message) */
 	async newSession(cwd?: string): Promise<void> {
+		this._sessionSubscriptionActive = true;
 		this._sessionNonce++;
 		this._pendingNewPrompt = false;
 		this._pendingControl = undefined;

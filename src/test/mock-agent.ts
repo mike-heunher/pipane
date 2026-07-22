@@ -5,7 +5,7 @@
  * without requiring a real WebSocket connection or pi-mono backend.
  */
 
-import type { SessionInfoDTO, SessionPickerBackendClient } from "../client/backend-client.js";
+import type { SessionInfoDTO, SessionPickerBackendClient, WorkspaceBackendState } from "../client/backend-client.js";
 
 export type SessionStatusValue = "running" | "done" | undefined;
 
@@ -21,6 +21,9 @@ export class MockAgent implements SessionPickerBackendClient {
 	private _globalStatusListeners = new Set<() => void>();
 	private _statusChangeListeners = new Set<() => void>();
 	private _sessionStatus: "virtual" | "attached" | "detached" = "virtual";
+	private _workspaceBackends: readonly WorkspaceBackendState[] | undefined;
+	private _activeBackendId: string | undefined;
+	private _workspaceListeners = new Set<() => void>();
 
 	// ── Public API (matches WsAgentAdapter interface used by session-picker) ──
 
@@ -32,7 +35,10 @@ export class MockAgent implements SessionPickerBackendClient {
 		this._sessionId = id;
 	}
 
-	getSessionStatus(sessionPath: string): "running" | "done" | undefined {
+	get activeBackendId(): string | undefined { return this._activeBackendId; }
+	get workspaceBackends(): readonly WorkspaceBackendState[] | undefined { return this._workspaceBackends; }
+
+	getSessionStatus(sessionPath: string, _backendId?: string): "running" | "done" | undefined {
 		return this._sessionStatuses.get(sessionPath);
 	}
 
@@ -59,6 +65,11 @@ export class MockAgent implements SessionPickerBackendClient {
 		this._sessionStatus = status;
 	}
 
+	onWorkspaceChange(fn: () => void): () => void {
+		this._workspaceListeners.add(fn);
+		return () => this._workspaceListeners.delete(fn);
+	}
+
 	onStatusChange(fn: () => void): () => void {
 		this._statusChangeListeners.add(fn);
 		return () => this._statusChangeListeners.delete(fn);
@@ -76,11 +87,11 @@ export class MockAgent implements SessionPickerBackendClient {
 		return this._sessions;
 	}
 
-	async switchSession(_sessionPath: string): Promise<void> {
+	async switchSession(_sessionPath: string, _cwd?: string, _backendId?: string): Promise<void> {
 		// no-op in mock
 	}
 
-	async newSession(_cwd?: string): Promise<void> {
+	async newSession(_cwd?: string, _backendId?: string): Promise<void> {
 		// no-op in mock
 	}
 
@@ -101,6 +112,11 @@ export class MockAgent implements SessionPickerBackendClient {
 	/** Set the sessions that listSessions() will return. */
 	setSessions(sessions: SessionInfoDTO[]) {
 		this._sessions = sessions;
+	}
+
+	setWorkspace(backends: readonly WorkspaceBackendState[], activeBackendId: string) {
+		this._workspaceBackends = backends;
+		this._activeBackendId = activeBackendId;
 	}
 
 	/** Set the status for a session path. */
@@ -129,6 +145,10 @@ export class MockAgent implements SessionPickerBackendClient {
 	}
 
 	/** Emit a global status change event (triggers status badge re-render). */
+	emitWorkspaceChange() {
+		for (const fn of this._workspaceListeners) fn();
+	}
+
 	emitGlobalStatusChange() {
 		for (const fn of this._globalStatusListeners) fn();
 	}
@@ -145,6 +165,7 @@ let sessionCounter = 0;
 
 export interface SessionOptions {
 	id?: string;
+	backendId?: string;
 	name?: string;
 	cwd?: string;
 	cwdDisplay?: string;
@@ -166,6 +187,7 @@ export function createSession(opts: SessionOptions = {}): SessionInfoDTO {
 	const cwd = opts.cwd ?? "/home/user/project";
 	return {
 		id,
+		backendId: opts.backendId,
 		path: `${cwd}/.pi/sessions/${id}.jsonl`,
 		cwd,
 		cwdDisplay: opts.cwdDisplay,

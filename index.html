@@ -23,25 +23,13 @@
 			<!-- Static skeleton shell: visible until JS renders the real app.
 			     Uses only inline styles so it works before any CSS loads. -->
 			<div id="skeleton-shell" style="display:flex;flex-direction:column;width:100%;height:100vh;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var(--sk-background, #ffffff);color:var(--sk-muted-foreground, #6b7280);">
-				<!-- Header bar -->
-				<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 1rem;border-bottom:1px solid var(--sk-border, #e5e7eb);flex-shrink:0;">
-					<div style="display:flex;align-items:center;gap:0.5rem;">
-						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
-						<div class="skeleton-bar" style="width:56px;height:14px;border-radius:4px;"></div>
-					</div>
-					<div style="display:flex;gap:0.35rem;">
-						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
-						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
-						<div class="skeleton-bar" style="width:18px;height:18px;border-radius:4px;"></div>
-					</div>
-				</div>
-				<!-- Body: sidebar + content -->
+				<!-- Body: sidebar + content. Navigation chrome stays inside the sidebar. -->
 				<div style="display:flex;flex:1;overflow:hidden;">
 					<!-- Sidebar skeleton -->
 					<div style="width:280px;flex-shrink:0;border-right:1px solid var(--sk-border, #e5e7eb);padding:0;">
-						<!-- Sessions header -->
+						<!-- Pipane sidebar header -->
 						<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;border-bottom:1px solid var(--sk-border, #e5e7eb);">
-							<div class="skeleton-bar" style="width:64px;height:12px;border-radius:3px;"></div>
+							<div class="skeleton-bar" style="width:54px;height:12px;border-radius:3px;"></div>
 							<div class="skeleton-bar" style="width:44px;height:20px;border-radius:4px;"></div>
 						</div>
 						<!-- Search bar -->

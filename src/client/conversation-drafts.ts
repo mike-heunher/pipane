@@ -9,8 +9,9 @@ const EMPTY_DRAFT: ConversationDraft<never> = {
 };
 
 /** Stable identity for the currently selected persisted or virtual conversation. */
-export function conversationDraftKey(sessionFile: string | undefined, sessionId: string): string {
-	return sessionFile ? `session:${sessionFile}` : `virtual:${sessionId}`;
+export function conversationDraftKey(sessionFile: string | undefined, sessionId: string, backendId?: string): string {
+	const conversation = sessionFile ? `session:${sessionFile}` : `virtual:${sessionId}`;
+	return backendId ? `backend:${backendId}:${conversation}` : conversation;
 }
 
 /** In-memory composer drafts, isolated by conversation identity. */

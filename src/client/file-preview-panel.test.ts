@@ -163,6 +163,27 @@ describe("linked file preview", () => {
 		closeFilePreview();
 	});
 
+	it("scopes equal backend-local session paths independently", async () => {
+		const container = setupPanel();
+		const sessionPath = "/sessions/shared.jsonl";
+		const api = {
+			getFileContent: vi.fn(async (_sessionPath: string, filePath: string) => ({ path: filePath, content: filePath })),
+		};
+
+		openFilePreviewLink("alpha.md", "/work", sessionPath, undefined, api, "b_alpha\u0000shared");
+		await settle();
+		openFilePreviewLink("beta.md", "/work", sessionPath, undefined, api, "b_beta\u0000shared");
+		await settle();
+
+		setFilePreviewSession(sessionPath, "b_alpha\u0000shared");
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("alpha.md");
+		setFilePreviewSession(sessionPath, "b_beta\u0000shared");
+		expect(container.querySelector(".file-preview-title")?.textContent).toBe("beta.md");
+		closeFilePreview();
+		setFilePreviewSession(sessionPath, "b_alpha\u0000shared");
+		closeFilePreview();
+	});
+
 	it("renders HTML with active scripts in an isolated iframe", async () => {
 		const container = setupPanel();
 		const source = "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive</h1><script>const template = '<head>'; document.body.dataset.ready = 'yes';<\/script></body></html>";
