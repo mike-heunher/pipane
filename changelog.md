@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.10 - 2026-07-22
+
 - Coalesce detached-session changes into deltas and prioritize controls while cancelling stale bulk transfers on WebSocket and WebRTC carriers.
 - Merge authorized hosts and their projects into one pipane.dev session sidebar without a persistent backend top bar.
 
