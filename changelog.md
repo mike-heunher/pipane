@@ -1,5 +1,7 @@
 # Unreleased
 
+- Let users dismiss Pi, pipane, and managed package update notices for 24 hours.
+
 # 0.1.7 - 2026-07-22
 
 - Allow resizing the linked file preview pane without iframe content interrupting the drag.

@@ -34,6 +34,7 @@ import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
 import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
 import {
+	UpdateNoticeSnoozeStore,
 	updateConfirmationMessage,
 	updateNoticeDetail,
 	updateNoticeTitle,
@@ -82,6 +83,8 @@ let pendingHardKillOfferFor: string | null = null;
 let updateNotices: UpdateNotice[] = [];
 let updatingTarget: UpdateTarget | null = null;
 let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
+const updateNoticeSnoozes = new UpdateNoticeSnoozeStore(window.localStorage);
+let updateSnoozeRefreshTimer: number | undefined;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
 let slashCommandRequest = 0;
 const conversationDrafts = new ConversationDraftStore<Attachment>();
@@ -548,14 +551,36 @@ function scrollToBottomIfNeeded(): void {
 	conversationScroll.scrollToBottomIfNeeded(() => document.getElementById("chat-scroll-area"));
 }
 
+function scheduleUpdateSnoozeRefresh(): void {
+	if (updateSnoozeRefreshTimer !== undefined) window.clearTimeout(updateSnoozeRefreshTimer);
+	updateSnoozeRefreshTimer = undefined;
+	const expiresAt = updateNoticeSnoozes.nextExpiry(updateNotices);
+	if (expiresAt === undefined) return;
+
+	const delay = Math.min(Math.max(0, expiresAt - Date.now()), 2_147_483_647);
+	updateSnoozeRefreshTimer = window.setTimeout(() => {
+		updateSnoozeRefreshTimer = undefined;
+		scheduleUpdateSnoozeRefresh();
+		renderApp();
+	}, delay);
+}
+
 async function refreshUpdateNotices(): Promise<void> {
 	try {
 		const snapshot = await agent.getUpdates();
 		updateNotices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
+		scheduleUpdateSnoozeRefresh();
 		renderApp();
 	} catch {
 		// Update checks are optional and must never interfere with the chat UI.
 	}
+}
+
+function handleUpdateSnooze(notice: UpdateNotice): void {
+	if (updatingTarget) return;
+	updateNoticeSnoozes.snooze(notice);
+	scheduleUpdateSnoozeRefresh();
+	renderApp();
 }
 
 async function handleUpdateClick(notice: UpdateNotice): Promise<void> {
@@ -576,37 +601,48 @@ async function handleUpdateClick(notice: UpdateNotice): Promise<void> {
 		};
 	} finally {
 		updatingTarget = null;
+		scheduleUpdateSnoozeRefresh();
 		renderApp();
 	}
 }
 
 function renderUpdateNotifications() {
-	if (updateNotices.length === 0 && !updateFeedback) return "";
+	const visibleNotices = updateNotices.filter((notice) => !updateNoticeSnoozes.isSnoozed(notice));
+	if (visibleNotices.length === 0 && !updateFeedback) return "";
 	return html`
 		<div class="update-notifications" aria-live="polite">
-			${updateNotices.map((notice) => html`
-				<button
-					type="button"
-					class="update-notice"
-					data-update-target=${notice.target}
-					?disabled=${updatingTarget !== null}
-					@click=${() => { void handleUpdateClick(notice); }}
-				>
-					<span class="update-notice-icon" aria-hidden="true">
-						<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-							<path d="M12 3v12"></path>
-							<path d="m7 10 5 5 5-5"></path>
-							<path d="M5 21h14"></path>
-						</svg>
-					</span>
-					<span class="update-notice-copy">
-						<strong>${updateNoticeTitle(notice)}</strong>
-						<small title=${updateNoticeDetail(notice)}>${updateNoticeDetail(notice)}</small>
-					</span>
-					<span class="update-notice-action">
-						${updatingTarget === notice.target ? "Updating…" : "Update"}
-					</span>
-				</button>
+			${visibleNotices.map((notice) => html`
+				<div class="update-notice" data-update-target=${notice.target}>
+					<button
+						type="button"
+						class="update-notice-update"
+						?disabled=${updatingTarget !== null}
+						@click=${() => { void handleUpdateClick(notice); }}
+					>
+						<span class="update-notice-icon" aria-hidden="true">
+							<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M12 3v12"></path>
+								<path d="m7 10 5 5 5-5"></path>
+								<path d="M5 21h14"></path>
+							</svg>
+						</span>
+						<span class="update-notice-copy">
+							<strong>${updateNoticeTitle(notice)}</strong>
+							<small title=${updateNoticeDetail(notice)}>${updateNoticeDetail(notice)}</small>
+						</span>
+						<span class="update-notice-action">
+							${updatingTarget === notice.target ? "Updating…" : "Update"}
+						</span>
+					</button>
+					<button
+						type="button"
+						class="update-notice-dismiss"
+						?disabled=${updatingTarget !== null}
+						@click=${() => handleUpdateSnooze(notice)}
+						aria-label=${`Remind me about ${updateNoticeTitle(notice)} tomorrow`}
+						title="Hide this update for 24 hours"
+					>Remind me tomorrow</button>
+				</div>
 			`)}
 			${updateFeedback ? html`
 				<div class="update-feedback is-${updateFeedback.kind}" role=${updateFeedback.kind === "error" ? "alert" : "status"}>
