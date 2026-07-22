@@ -247,6 +247,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 			...sanitizedEnv,
 			PORT: "0",
 			PIPANE_INSTANCE_ID: instanceId,
+			PIPANE_RENDEZVOUS_URL: "",
 			PIPANE_SKIP_UPDATE_CHECK: "1",
 			PI_CWD: projectDir,
 			PI_CODING_AGENT_DIR: agentDir,

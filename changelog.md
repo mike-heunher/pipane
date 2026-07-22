@@ -1,5 +1,7 @@
 # Unreleased
 
+- Register new backends with pipane.dev by default and identify them by their short hostname when no name is configured.
+
 # 0.1.8 - 2026-07-22
 
 - Keep large WebRTC session transfers connected and flowing when libdatachannel applies native send buffering.

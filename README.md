@@ -30,6 +30,8 @@ If `pi` is missing, install it like this:
 npm install -g @earendil-works/pi-coding-agent
 ```
 
+Run `pipane` to start the backend. It registers with `https://pipane.dev` by default and uses the machine's short hostname as its backend name, so no remote-access environment variables are required. Set `PIPANE_BACKEND_NAME` to customize the name, `PIPANE_RENDEZVOUS_URL` to use another rendezvous service, or set `PIPANE_RENDEZVOUS_URL` to an empty value to disable remote registration.
+
 ### Explicit local deployments
 
 Deploy the current working tree to the separate dev instance with:

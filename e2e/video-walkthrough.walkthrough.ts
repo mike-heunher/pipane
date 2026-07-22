@@ -287,6 +287,7 @@ async function startRealServer(): Promise<RealServer> {
 		env: {
 			...process.env,
 			PORT: String(port),
+			PIPANE_RENDEZVOUS_URL: "",
 			PI_CWD: projectDir,
 			PI_CODING_AGENT_DIR: agentDir,
 			HOME: fakeHome,

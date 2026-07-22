@@ -47,6 +47,7 @@ import { DataChannelFrameConnection } from "./frame-connection.js";
 import { routeFrameConnection } from "./frame-router.js";
 import { BackendProtocolHandler } from "./backend-protocol-handler.js";
 import { LocalBackendApi } from "./local-backend-api.js";
+import { resolveBackendName, resolveRendezvousUrl } from "./backend-registration-config.js";
 import qrcode from "qrcode-terminal";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
@@ -76,7 +77,7 @@ const PI_AVAILABLE = checkCommandAvailable(PI_LAUNCH.command);
 const PI_MAX_PROCESSES = parseInt(process.env.PI_MAX_PROCESSES || "24", 10);
 const PI_PREWARM_COUNT = parseInt(process.env.PI_PREWARM_COUNT || "2", 10);
 const USAGE_EXTENSION_ENABLED = process.env.PIPANE_USAGE_EXTENSION !== "0";
-const RENDEZVOUS_URL = process.env.PIPANE_RENDEZVOUS_URL;
+const RENDEZVOUS_URL = resolveRendezvousUrl(process.env.PIPANE_RENDEZVOUS_URL);
 let rendezvousPairingRuntime: { createPairingUrl(): Promise<string> } | undefined;
 let registeredBackendId: string | undefined;
 
@@ -104,7 +105,7 @@ async function startRendezvousRegistration(): Promise<void> {
 		url: RENDEZVOUS_URL,
 		identity,
 		metadata: {
-			name: process.env.PIPANE_BACKEND_NAME || hostname(),
+			name: resolveBackendName(process.env.PIPANE_BACKEND_NAME, hostname()),
 			softwareVersion: PKG_VERSION,
 			protocolVersions: [WS_PROTOCOL_VERSION, BACKEND_PROTOCOL_VERSION],
 		},

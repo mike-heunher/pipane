@@ -52,7 +52,7 @@ The server sends a fresh random `challenge`. A backend responds with `register_b
 
 The backend client reconnects its outbound WebSocket with bounded exponential backoff and repeats challenge authentication. STUN servers may be static. TURN credentials use coturn's REST convention: an expiring `timestamp:subject` username and HMAC-SHA1 credential; fresh backend credentials accompany each `connection_request` rather than expiring in a long-running peer manager. Browser and backend support relay-only ICE policy; deterministic E2E forces both peers through a local UDP TURN relay.
 
-Backend registration uses `PIPANE_RENDEZVOUS_URL` and optional `PIPANE_APP_URL`/`PIPANE_BACKEND_NAME`. The rendezvous executable reads comma-separated `PIPANE_STUN_URLS` and `PIPANE_TURN_URLS`, plus `PIPANE_TURN_SECRET`; durable central identity/account state defaults to `~/.config/pipane-rendezvous` or `PIPANE_RENDEZVOUS_DATA_DIR`.
+Backends register with `https://pipane.dev` by default. `PIPANE_RENDEZVOUS_URL` overrides that endpoint (or disables registration when set to an empty value), while `PIPANE_APP_URL` optionally overrides generated browser links. `PIPANE_BACKEND_NAME` is optional and defaults to the machine's non-fully-qualified hostname. The rendezvous executable reads comma-separated `PIPANE_STUN_URLS` and `PIPANE_TURN_URLS`, plus `PIPANE_TURN_SECRET`; durable central identity/account state defaults to `~/.config/pipane-rendezvous` or `PIPANE_RENDEZVOUS_DATA_DIR`.
 
 ### Device identity and anonymous accounts
 
