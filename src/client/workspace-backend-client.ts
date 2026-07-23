@@ -132,7 +132,11 @@ export class WorkspaceBackendClient implements BackendClient {
 	async connect(endpoint: string): Promise<void> {
 		this.endpoint = endpoint;
 		const candidates = [...this.contexts.values()].filter((context) => context.descriptor.online && this.isCompatible(context.descriptor));
-		const results = await Promise.allSettled(candidates.map(async (context) => {
+		if (candidates.length === 0) {
+			this.emitWorkspaceChange();
+			throw new Error("All authorized backends are offline");
+		}
+		const attempts = candidates.map(async (context) => {
 			const client = this.ensureClient(context);
 			try {
 				await client.connect(endpoint);
@@ -141,19 +145,23 @@ export class WorkspaceBackendClient implements BackendClient {
 				return context;
 			} catch (error) {
 				context.error = errorMessage(error);
+				this.emitWorkspaceChange();
 				throw error;
 			}
-		}));
-		const connected = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-		if (connected.length === 0) {
+		});
+		let firstConnected: BackendContext;
+		try {
+			firstConnected = await Promise.any(attempts);
+		} catch {
 			this.emitWorkspaceChange();
-			throw new Error(candidates.length === 0
-				? "All authorized backends are offline"
-				: "Could not connect to any authorized backend");
+			throw new Error("Could not connect to any authorized backend");
 		}
 		this.connectedOnce = true;
-		if (!this.activeClient?.isConnected) this.setActiveBackend(connected[0].descriptor.backendId);
+		if (!this.activeClient?.isConnected) this.setActiveBackend(firstConnected.descriptor.backendId);
 		this.emitWorkspaceChange();
+		// Remaining reachable hosts continue connecting in the background. Their
+		// catalog/status events update the sidebar without blocking first paint.
+		void Promise.allSettled(attempts);
 	}
 
 	disconnect(): void {

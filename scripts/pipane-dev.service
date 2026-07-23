@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=/root
 EnvironmentFile=/etc/pipane.env
 Environment="PATH=/root/.local/bin:/root/.pi/agent/npm/node_modules/.bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/usr/bin/env PORT=8223 NODE_ENV=production PI_CWD=/root /usr/bin/node /opt/pipane-dev/current/bin/pipane.js --verbose
+ExecStart=/usr/bin/env PORT=8223 NODE_ENV=production PI_CWD=/root PIPANE_CONFIG_DIR=/root/.config/pipane-dev PIPANE_BACKEND_NAME=piweb-dev /usr/bin/node /opt/pipane-dev/current/bin/pipane.js --verbose
 Restart=always
 RestartSec=5
 KillMode=control-group

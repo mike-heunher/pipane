@@ -31,6 +31,14 @@ describe("local deployment scripts", () => {
 		expect(result.stderr).toContain("Usage:");
 	});
 
+	it("keeps development on a distinct remote backend identity", () => {
+		const service = readFileSync(path.join(repositoryRoot, "scripts/pipane-dev.service"), "utf8");
+
+		expect(service).toContain("PORT=8223");
+		expect(service).toContain("PIPANE_CONFIG_DIR=/root/.config/pipane-dev");
+		expect(service).toContain("PIPANE_BACKEND_NAME=piweb-dev");
+	});
+
 	it("keeps production on the global binary for self-updates", () => {
 		const service = readFileSync(path.join(repositoryRoot, "scripts/pipane.service"), "utf8");
 		const deployScript = readFileSync(

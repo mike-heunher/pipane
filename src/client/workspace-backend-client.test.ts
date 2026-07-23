@@ -126,6 +126,23 @@ describe("WorkspaceBackendClient", () => {
 		expect(window.location.pathname).toBe("/");
 	});
 
+	it("renders after the first reachable host without waiting for another ICE attempt", async () => {
+		const available = fakeClient([session("ok", "/sessions/ok.jsonl", "/work/ok")]);
+		const stalled = fakeClient([]);
+		stalled.client.connect = vi.fn(() => new Promise<void>(() => {}));
+		const clients = new Map([["b_stalled", stalled.client], ["b_ok", available.client]]);
+		const workspace = new WorkspaceBackendClient([
+			{ backendId: "b_stalled", name: "Stalled", online: true, protocolVersions: [1, 2] },
+			{ backendId: "b_ok", name: "Available", online: true, protocolVersions: [1, 2] },
+		], { getClient: (id) => clients.get(id)!, revokeBackend: vi.fn() }, "b_stalled");
+
+		await expect(workspace.connect("webrtc")).resolves.toBeUndefined();
+		expect(workspace.activeBackendId).toBe("b_ok");
+		expect(await workspace.listSessions()).toEqual([
+			expect.objectContaining({ backendId: "b_ok", path: "/sessions/ok.jsonl" }),
+		]);
+	});
+
 	it("keeps the workspace available when one online host cannot connect", async () => {
 		const available = fakeClient([session("ok", "/sessions/ok.jsonl", "/work/ok")]);
 		const failed = fakeClient([], new Error("host failed"));
