@@ -42,6 +42,14 @@ npm run deploy:dev
 
 This builds a release, atomically advances the `pipane-dev` systemd service, and verifies it on port `8223`. It does not change production.
 
+To try the same working-tree change through the public site without publishing npm, deploy a preview stack:
+
+```bash
+npm run deploy:preview
+```
+
+This first deploys the local `pipane-dev` backend, then atomically uploads its matching browser bundle to `pipane.dev`. It leaves the central rendezvous process, the npm registry, and the local production backend untouched. The public browser bundle is health-checked and rolled back automatically if activation fails. Override the deployment target with `PIPANE_PREVIEW_WEB_HOST`, `PIPANE_PREVIEW_WEB_ROOT`, or `PIPANE_PREVIEW_PUBLIC_URL` when needed.
+
 Deploy the current committed working tree to local production with:
 
 ```bash

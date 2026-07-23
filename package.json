@@ -43,6 +43,7 @@
 	"scripts": {
 		"dev": "./dev.sh",
 		"deploy:dev": "./deploy-dev.sh",
+		"deploy:preview": "./deploy-preview.sh",
 		"deploy:prod": "./deploy-prod.sh",
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
