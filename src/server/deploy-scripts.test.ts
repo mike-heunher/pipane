@@ -138,6 +138,8 @@ describe("deployment scripts", () => {
 		expect(pkg.scripts["deploy:preview"]).toBe("./deploy-preview.sh");
 		expect(previewScript).toContain('deploy-local-release.sh" dev');
 		expect(previewScript).toContain("dist/client/");
+		expect(previewScript).toContain("systemd-run --quiet --no-block --collect");
+		expect(previewScript).toContain("PIPANE_PREVIEW_DEPLOY_IN_SYSTEMD=1");
 		expect(previewScript).not.toContain("npm publish");
 		expect(activationScript).toContain("/usr/lib/node_modules/pipane/dist/client");
 		expect(activationScript).toContain("PUBLIC_INDEX_HASH");

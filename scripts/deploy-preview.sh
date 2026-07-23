@@ -8,6 +8,7 @@ REMOTE_ROOT="${PIPANE_PREVIEW_WEB_ROOT:-/opt/pipane-web-preview}"
 PUBLIC_URL="${PIPANE_PREVIEW_PUBLIC_URL:-https://pipane.dev}"
 REMOTE_STAGING=""
 ACTIVATED=0
+SYSTEMD_UNIT="${PIPANE_PREVIEW_SYSTEMD_UNIT:-pipane-preview-deploy}"
 
 usage() {
 	cat <<'EOF'
@@ -41,12 +42,36 @@ if [[ ! "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]]; then
 	echo "❌ PIPANE_PREVIEW_PUBLIC_URL must be an HTTP(S) origin." >&2
 	exit 1
 fi
-for command_name in ssh rsync sha256sum git; do
+if [[ ! "$SYSTEMD_UNIT" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
+	echo "❌ PIPANE_PREVIEW_SYSTEMD_UNIT must be a valid systemd unit name." >&2
+	exit 1
+fi
+for command_name in ssh rsync sha256sum git systemctl systemd-run; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		echo "❌ Missing required command: $command_name" >&2
 		exit 1
 	fi
 done
+
+if [[ "${PIPANE_PREVIEW_DEPLOY_IN_SYSTEMD:-0}" != "1" ]]; then
+	if systemctl is-active --quiet "$SYSTEMD_UNIT"; then
+		echo "❌ Preview deployment unit $SYSTEMD_UNIT is already running." >&2
+		exit 1
+	fi
+	systemd-run --quiet --no-block --collect \
+		--unit="$SYSTEMD_UNIT" \
+		--property=Type=exec \
+		--property=TimeoutStartSec=infinity \
+		--working-directory="$SOURCE_DIR" \
+		--setenv=PIPANE_PREVIEW_DEPLOY_IN_SYSTEMD=1 \
+		--setenv=PIPANE_PREVIEW_WEB_HOST="$REMOTE_HOST" \
+		--setenv=PIPANE_PREVIEW_WEB_ROOT="$REMOTE_ROOT" \
+		--setenv=PIPANE_PREVIEW_PUBLIC_URL="$PUBLIC_URL" \
+		"$SOURCE_DIR/scripts/deploy-preview.sh"
+	echo "🚀 Preview deployment started in $SYSTEMD_UNIT."
+	echo "📊 Logs: journalctl -u $SYSTEMD_UNIT -f"
+	exit 0
+fi
 
 cleanup() {
 	local exit_code=$?
