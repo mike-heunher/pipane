@@ -1,5 +1,7 @@
 # Unreleased
 
+- Retry transient missing-model responses while a newly started Pi worker finishes refreshing its model catalog.
+
 # 0.1.11 - 2026-07-23
 
 - Give the local dev deployment its own `piweb-dev` rendezvous identity instead of displacing production `piweb`.

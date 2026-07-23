@@ -78,6 +78,7 @@ type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
 const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
+const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 interface ClientState {
 	subscribedSession: string | null;
@@ -1041,11 +1042,7 @@ export class WsHandler {
 
 		let stateResponse = await this.pool.sendRpcChecked(proc, { type: "get_state" });
 		if (!modelsMatch(stateResponse.data?.model, command.model)) {
-			await this.pool.sendRpcChecked(proc, {
-				type: "set_model",
-				provider: command.model.provider,
-				modelId: command.model.modelId,
-			});
+			await this.setRequestedModel(proc, command.model);
 		}
 		if (typeof command.thinkingLevel === "string") {
 			await this.pool.sendRpcChecked(proc, {
@@ -1072,6 +1069,35 @@ export class WsHandler {
 				thinkingLevel: stateResponse.data.thinkingLevel,
 			});
 		}
+	}
+
+	/**
+	 * Pi refreshes remote model catalogs in the background after RPC startup.
+	 * A freshly spawned worker can therefore reject a model that becomes visible
+	 * moments later. Retry only Pi's exact missing-model response; auth and other
+	 * control failures must still surface immediately.
+	 */
+	private async setRequestedModel(
+		proc: RpcProcess,
+		model: { provider: string; modelId: string },
+	): Promise<void> {
+		let lastError: unknown;
+		for (const delayMs of [0, ...MODEL_CATALOG_RETRY_DELAYS_MS]) {
+			if (delayMs > 0) await this.sleep(delayMs);
+			try {
+				await this.pool.sendRpcChecked(proc, {
+					type: "set_model",
+					provider: model.provider,
+					modelId: model.modelId,
+				});
+				return;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (message !== `Model not found: ${model.provider}/${model.modelId}`) throw error;
+				lastError = error;
+			}
+		}
+		throw lastError;
 	}
 
 	private async waitForPromptSettlement(proc: RpcProcess, observer: TurnEventObserver): Promise<void> {

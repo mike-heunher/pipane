@@ -293,6 +293,84 @@ describe("WsHandler actor orchestration", () => {
 		}));
 	});
 
+	it("retries a missing model while a new Pi worker refreshes its startup catalog", async () => {
+		const calls: any[] = [];
+		let stateCalls = 0;
+		let setModelCalls = 0;
+		const sendRpcChecked = vi.fn(async (_proc: any, command: any) => {
+			calls.push(command);
+			if (command.type === "get_state") {
+				stateCalls += 1;
+				return {
+					success: true,
+					data: {
+						model: stateCalls === 1
+							? { provider: "anthropic", id: "old-model" }
+							: { provider: "openai-codex", id: "gpt-5.6-sol" },
+						thinkingLevel: "xhigh",
+					},
+				};
+			}
+			if (command.type === "set_model") {
+				setModelCalls += 1;
+				if (setModelCalls < 3) {
+					throw new Error("Model not found: openai-codex/gpt-5.6-sol");
+				}
+			}
+			return { success: true, data: {} };
+		});
+		const { handler, registry } = makeHandler({ sendRpcChecked });
+		const sleep = vi.fn(async () => {});
+		handler.sleep = sleep;
+		const proc = { id: 24 };
+		const { actor } = attachActor(registry, "/tmp/catalog-refresh.jsonl", proc);
+		const { ws } = makeWs();
+
+		await handler.applyRequestedControlState(proc, actor, ws, {
+			model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+			thinkingLevel: "xhigh",
+			controlRevision: 8,
+		});
+
+		expect(calls.map((call) => call.type)).toEqual([
+			"get_state", "set_model", "set_model", "set_model", "set_thinking_level", "get_state",
+		]);
+		expect(sleep.mock.calls).toEqual([[100], [250]]);
+		expect(actor.session?.toState().model).toEqual({
+			provider: "openai-codex",
+			modelId: "gpt-5.6-sol",
+		});
+	});
+
+	it("does not retry unrelated model-switch failures", async () => {
+		const sendRpcChecked = vi.fn(async (_proc: any, command: any) => {
+			if (command.type === "get_state") {
+				return {
+					success: true,
+					data: { model: { provider: "anthropic", id: "old-model" }, thinkingLevel: "off" },
+				};
+			}
+			throw new Error("Provider authentication failed");
+		});
+		const { handler, registry } = makeHandler({ sendRpcChecked });
+		const sleep = vi.fn(async () => {});
+		handler.sleep = sleep;
+		const proc = { id: 25 };
+		const { actor } = attachActor(registry, "/tmp/model-auth-failure.jsonl", proc);
+		const { ws } = makeWs();
+
+		await expect(handler.applyRequestedControlState(proc, actor, ws, {
+			model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+			thinkingLevel: "xhigh",
+			controlRevision: 9,
+		})).rejects.toThrow("Provider authentication failed");
+
+		expect(sendRpcChecked.mock.calls.map((call: any[]) => call[1].type)).toEqual([
+			"get_state", "set_model",
+		]);
+		expect(sleep).not.toHaveBeenCalled();
+	});
+
 	it("routes a prompt arriving during a turn to steering", async () => {
 		const sendRpc = vi.fn(async () => ({ success: true }));
 		const { handler, registry } = makeHandler({ sendRpc });
