@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateBrowserDeviceIdentity } from "./device-identity.js";
-import { parsePairingUrl, RendezvousTrustApi } from "./rendezvous-trust-api.js";
+import { parseDeviceInviteUrl, parsePairingUrl, RendezvousTrustApi } from "./rendezvous-trust-api.js";
 
 describe("RendezvousTrustApi", () => {
 	it("proves device-key possession before requesting a pairing ticket", async () => {
@@ -60,10 +60,56 @@ describe("RendezvousTrustApi", () => {
 		});
 	});
 
+	it("creates and accepts an account device invite with the secret only in the fragment", async () => {
+		const inviter = await generateBrowserDeviceIdentity();
+		const recipient = await generateBrowserDeviceIdentity();
+		const expiresAt = Date.now() + 10 * 60_000;
+		const challenge = (purpose: "create_device_invite" | "accept_device_invite", identity = inviter) => ({
+			version: 1,
+			challengeId: `ch_${purpose}`,
+			nonce: "nonce",
+			purpose,
+			deviceId: identity.deviceId,
+			devicePublicKey: identity.publicKey,
+			...(purpose === "accept_device_invite" ? { pairId: "invite_one" } : {}),
+			expiresAt: Date.now() + 60_000,
+		});
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify(challenge("create_device_invite")), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ inviteId: "invite_one", secret: "invite-secret", expiresAt }), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify(challenge("accept_device_invite", recipient)), { status: 200 }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({ accountId: "a_owner", deviceId: recipient.deviceId }), { status: 200 }));
+		const api = new RendezvousTrustApi("https://signal.example", fetchMock);
+		const invite = await api.createDeviceInvite(inviter);
+		expect(invite).toEqual({
+			url: "https://signal.example/invite/invite_one#secret=invite-secret",
+			expiresAt,
+		});
+		expect(new URL(invite.url).search).toBe("");
+		const capability = parseDeviceInviteUrl(invite.url);
+		await expect(api.acceptDeviceInvite(recipient, capability)).resolves.toEqual({
+			accountId: "a_owner",
+			deviceId: recipient.deviceId,
+		});
+		expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({
+			purpose: "accept_device_invite",
+			deviceId: recipient.deviceId,
+			devicePublicKey: recipient.publicKey,
+			pairId: "invite_one",
+		});
+		const acceptanceBody = JSON.parse(fetchMock.mock.calls[3][1].body);
+		expect(acceptanceBody).toEqual({
+			challengeId: "ch_accept_device_invite",
+			signature: expect.any(String),
+			secret: "invite-secret",
+		});
+	});
+
 	it("keeps the 256-bit secret in the URL fragment", () => {
 		const value = "https://app.example/pair/pair_abc#backend=b_backend&secret=top-secret";
 		expect(parsePairingUrl(value)).toEqual({ pairId: "pair_abc", backendId: "b_backend", secret: "top-secret" });
 		expect(new URL(value).search).toBe("");
 		expect(() => parsePairingUrl("https://app.example/pair/pair_abc?secret=leaked")).toThrow("malformed");
+		expect(() => parseDeviceInviteUrl("https://app.example/invite/invite_abc?secret=leaked")).toThrow("malformed");
 	});
 });

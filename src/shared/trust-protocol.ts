@@ -3,7 +3,25 @@ export const CONNECTION_TICKET_VERSION = 1 as const;
 export const PIPANE_DATA_CHANNEL_LABEL = "pipane";
 export const PIPANE_DATA_CHANNEL_PROTOCOL = "pipane.v1";
 
-export type DeviceChallengePurpose = "pair" | "connect" | "discover" | "revoke_device" | "revoke_backend";
+export type DeviceChallengePurpose =
+	| "pair"
+	| "connect"
+	| "discover"
+	| "create_device_invite"
+	| "accept_device_invite"
+	| "revoke_device"
+	| "revoke_backend";
+
+export interface DeviceInviteCapability {
+	inviteId: string;
+	secret: string;
+	expiresAt: number;
+}
+
+export interface DeviceInviteAcceptance {
+	accountId: string;
+	deviceId: string;
+}
 
 export interface AuthorizedBackendDescriptor {
 	backendId: string;

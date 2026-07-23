@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add one-use ten-minute QR links for inviting another browser to the same pipane.dev backend workspace.
 - Keep preview deployments running in a detached systemd unit while they restart the local dev backend.
 - Add a source-based preview deployment for the public browser app and local dev backend without publishing npm.
 - Retry transient missing-model responses while a newly started Pi worker finishes refreshing its model catalog.

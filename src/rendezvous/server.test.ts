@@ -217,6 +217,67 @@ describe("pipane rendezvous trust and signaling", () => {
 			}],
 		});
 
+		const createInviteChallengeResponse = await fetch(`${baseUrl}/v1/auth/challenges`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ purpose: "create_device_invite", deviceId: device.deviceId }),
+		});
+		const createInviteChallenge = await createInviteChallengeResponse.json() as DeviceChallenge;
+		const inviteResponse = await fetch(`${baseUrl}/v1/device-invites`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				challengeId: createInviteChallenge.challengeId,
+				signature: device.sign(createInviteChallenge),
+			}),
+		});
+		expect(inviteResponse.status).toBe(200);
+		const invite = await inviteResponse.json() as { inviteId: string; secret: string; expiresAt: number };
+		expect(invite.expiresAt).toBeGreaterThan(Date.now() + 9 * 60_000);
+
+		const invitedDevice = createDevice();
+		const acceptChallengeResponse = await fetch(`${baseUrl}/v1/auth/challenges`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				purpose: "accept_device_invite",
+				deviceId: invitedDevice.deviceId,
+				devicePublicKey: invitedDevice.publicKey,
+				pairId: invite.inviteId,
+			}),
+		});
+		const acceptChallenge = await acceptChallengeResponse.json() as DeviceChallenge;
+		const acceptanceResponse = await fetch(`${baseUrl}/v1/device-invites/${encodeURIComponent(invite.inviteId)}/accept`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				challengeId: acceptChallenge.challengeId,
+				signature: invitedDevice.sign(acceptChallenge),
+				secret: invite.secret,
+			}),
+		});
+		expect(await acceptanceResponse.json()).toEqual({
+			accountId: confirmation.accountId,
+			deviceId: invitedDevice.deviceId,
+		});
+		const invitedDiscoveryChallengeResponse = await fetch(`${baseUrl}/v1/auth/challenges`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ purpose: "discover", deviceId: invitedDevice.deviceId }),
+		});
+		const invitedDiscoveryChallenge = await invitedDiscoveryChallengeResponse.json() as DeviceChallenge;
+		const invitedDiscoveryResponse = await fetch(`${baseUrl}/v1/accounts/backends`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({
+				challengeId: invitedDiscoveryChallenge.challengeId,
+				signature: invitedDevice.sign(invitedDiscoveryChallenge),
+			}),
+		});
+		expect((await invitedDiscoveryResponse.json() as { backends: Array<{ backendId: string }> }).backends.map(
+			(backend) => backend.backendId,
+		)).toEqual([identity.backendId]);
+
 		const replayBrowser = await openSocket(rendezvousWebSocketUrl(baseUrl, "browser"));
 		const replayError = nextBrowserMessage(replayBrowser);
 		replayBrowser.send(JSON.stringify({

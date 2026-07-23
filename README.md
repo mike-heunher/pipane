@@ -32,6 +32,8 @@ npm install -g @earendil-works/pi-coding-agent
 
 Run `pipane` to start the backend. It registers with `https://pipane.dev` by default and uses the machine's short hostname as its backend name, so no remote-access environment variables are required. Set `PIPANE_BACKEND_NAME` to customize the name, `PIPANE_RENDEZVOUS_URL` to use another rendezvous service, or set `PIPANE_RENDEZVOUS_URL` to an empty value to disable remote registration.
 
+Authorize the first browser by running `pipane pair` and opening its short-lived link or scanning its QR code. From an authorized pipane.dev workspace, open a host's `•••` menu and choose **Add another device** to create a one-use, ten-minute QR code and link. The new browser receives access to the same account backends without transferring the original browser's private key.
+
 ### Explicit local deployments
 
 Deploy the current working tree to the separate dev instance with:

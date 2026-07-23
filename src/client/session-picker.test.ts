@@ -133,9 +133,10 @@ describe("session-picker", () => {
 		]);
 		const switchSession = vi.spyOn(agent, "switchSession");
 		const onOpenSettings = vi.fn();
+		const onInviteDevice = vi.fn();
 
 		const el = await createPicker(agent);
-		(el as any).settingsMenu = { onOpenSettings, isDevMode: false };
+		(el as any).settingsMenu = { onOpenSettings, onInviteDevice, isDevMode: false };
 		await el.updateComplete;
 
 		const hosts = el.shadowRoot!.querySelectorAll(".host-row");
@@ -162,6 +163,13 @@ describe("session-picker", () => {
 		await el.updateComplete;
 		el.shadowRoot!.querySelector<HTMLButtonElement>(".host-menu button")!.click();
 		expect(onOpenSettings).toHaveBeenCalledWith("b_two");
+
+		hosts[1].querySelector<HTMLButtonElement>('[aria-label="Manage beta"]')!.click();
+		await el.updateComplete;
+		const invite = [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>(".host-menu button")]
+			.find((button) => button.textContent === "Add another device")!;
+		invite.click();
+		expect(onInviteDevice).toHaveBeenCalledOnce();
 	});
 
 	it("omits the backend prefix when a workspace has only one host", async () => {

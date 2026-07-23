@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -144,6 +144,72 @@ describe("RendezvousTrustStore", () => {
 		const conflict = store.issuePairingTicket(conflictChallenge.challengeId, stranger.signChallenge(conflictChallenge));
 		expect(strangerPair.confirmation.accountId).not.toBe(first.confirmation.accountId);
 		expect(() => store.confirmPairing(conflict.claims)).toThrow("another account");
+	});
+
+	it("creates a ten-minute one-use invite that adds a new device to the same backend account", () => {
+		const { dataDir, store } = createStore(35_000);
+		const first = pairDevice(store);
+		const addBackendChallenge = store.createChallenge({
+			purpose: "pair",
+			deviceId: first.device.deviceId,
+			backendId: "b_second",
+			connectionId: "c_second",
+			pairId: "pair_second_backend",
+		});
+		const addBackend = store.issuePairingTicket(
+			addBackendChallenge.challengeId,
+			first.device.signChallenge(addBackendChallenge),
+		);
+		store.confirmPairing(addBackend.claims);
+
+		const createChallenge = store.createChallenge({
+			purpose: "create_device_invite",
+			deviceId: first.device.deviceId,
+		});
+		const invite = store.createDeviceInvite(createChallenge.challengeId, first.device.signChallenge(createChallenge));
+		expect(invite.expiresAt).toBe(35_000 + 10 * 60_000);
+		expect(readFileSync(path.join(dataDir, "trust-store.json"), "utf8")).not.toContain(invite.secret);
+
+		const attacker = createDevice();
+		const attackerChallenge = store.createChallenge({
+			purpose: "accept_device_invite",
+			deviceId: attacker.deviceId,
+			devicePublicKey: attacker.publicKey,
+			pairId: invite.inviteId,
+		});
+		expect(() => store.acceptDeviceInvite(
+			attackerChallenge.challengeId,
+			attacker.signChallenge(attackerChallenge),
+			invite.inviteId,
+			"wrong-secret",
+		)).toThrow("Invalid device invite secret");
+
+		const second = createDevice();
+		const acceptChallenge = store.createChallenge({
+			purpose: "accept_device_invite",
+			deviceId: second.deviceId,
+			devicePublicKey: second.publicKey,
+			pairId: invite.inviteId,
+		});
+		expect(store.acceptDeviceInvite(
+			acceptChallenge.challengeId,
+			second.signChallenge(acceptChallenge),
+			invite.inviteId,
+			invite.secret,
+		)).toEqual({ accountId: first.confirmation.accountId, deviceId: second.deviceId });
+
+		const discovery = store.createChallenge({ purpose: "discover", deviceId: second.deviceId });
+		expect(store.listAuthorizedBackendIds(discovery.challengeId, second.signChallenge(discovery)).sort()).toEqual([
+			"b_backend",
+			"b_second",
+		]);
+		const replayDevice = createDevice();
+		expect(() => store.createChallenge({
+			purpose: "accept_device_invite",
+			deviceId: replayDevice.deviceId,
+			devicePublicKey: replayDevice.publicKey,
+			pairId: invite.inviteId,
+		})).toThrow("missing or expired");
 	});
 
 	it("revokes devices and backend grants using one-use signed challenges", () => {

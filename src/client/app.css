@@ -1603,6 +1603,125 @@ body.is-file-preview-resizing .file-preview-frame {
 	border-top: 1px solid var(--border, #e5e7eb);
 }
 
+/* ── Device invitations ─────────────────────────────────────────── */
+
+.device-invite-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 10000;
+	display: grid;
+	place-items: center;
+	padding: 1rem;
+	background: rgba(12, 13, 12, 0.7);
+	backdrop-filter: blur(2px);
+}
+
+.device-invite-panel {
+	width: min(31rem, 96vw);
+	overflow: hidden;
+	border: 1px solid var(--border, #454943);
+	border-radius: 0.75rem;
+	background: var(--background, #20221f);
+	color: var(--foreground, #e8e9e4);
+	box-shadow: 0 28px 80px rgba(0, 0, 0, 0.5);
+}
+
+.device-invite-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 1rem 1.1rem;
+	border-bottom: 1px solid var(--border, #3a3d38);
+}
+
+.device-invite-title {
+	margin: 0;
+	font-size: 1rem;
+	font-weight: 700;
+}
+
+.device-invite-subtitle,
+.device-invite-explanation {
+	margin: 0.25rem 0 0;
+	color: var(--muted-foreground, #9ca3af);
+	font-size: 0.76rem;
+	line-height: 1.45;
+}
+
+.device-invite-close {
+	border: 0;
+	background: transparent;
+	color: var(--muted-foreground, #9ca3af);
+	font-size: 1.4rem;
+	line-height: 1;
+	cursor: pointer;
+}
+
+.device-invite-body {
+	display: grid;
+	justify-items: center;
+	gap: 1rem;
+	padding: 1.25rem;
+}
+
+.device-invite-qr {
+	width: 240px;
+	height: 240px;
+	max-width: 100%;
+	border-radius: 0.5rem;
+	background: #fff;
+}
+
+.device-invite-explanation {
+	max-width: 26rem;
+	margin: 0;
+	text-align: center;
+}
+
+.device-invite-link-row {
+	width: 100%;
+	display: flex;
+	gap: 0.5rem;
+}
+
+.device-invite-link {
+	min-width: 0;
+	flex: 1;
+	border: 1px solid var(--border, #454943);
+	border-radius: 0.45rem;
+	padding: 0.55rem 0.65rem;
+	background: color-mix(in srgb, var(--background, #20221f) 88%, #000);
+	color: var(--foreground, #e8e9e4);
+	font: 0.72rem ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.device-invite-copy {
+	border: 0;
+	border-radius: 0.45rem;
+	padding: 0.55rem 0.8rem;
+	background: var(--primary, #2563eb);
+	color: var(--primary-foreground, #fff);
+	font-size: 0.75rem;
+	font-weight: 650;
+	cursor: pointer;
+}
+
+.device-invite-copy:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.device-invite-status {
+	margin: 0;
+	color: var(--muted-foreground, #9ca3af);
+	font-size: 0.75rem;
+}
+
+.device-invite-status.is-error {
+	color: #ef4444;
+}
+
 /* ── Compact settings command center ────────────────────────────── */
 
 .local-settings-overlay {

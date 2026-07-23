@@ -3,6 +3,8 @@ import type {
 	ConnectionTicketResponse,
 	DeviceChallenge,
 	DeviceChallengeRequest,
+	DeviceInviteAcceptance,
+	DeviceInviteCapability,
 } from "../shared/trust-protocol.js";
 import {
 	signDeviceChallenge,
@@ -13,6 +15,16 @@ export interface PairingCapabilityFromUrl {
 	pairId: string;
 	backendId: string;
 	secret: string;
+}
+
+export interface DeviceInviteCapabilityFromUrl {
+	inviteId: string;
+	secret: string;
+}
+
+export interface DeviceInviteLink {
+	url: string;
+	expiresAt: number;
 }
 
 export type TrustFetch = typeof fetch;
@@ -77,6 +89,41 @@ export class RendezvousTrustApi {
 		return response.backends;
 	}
 
+	async createDeviceInvite(identity: BrowserDeviceIdentity): Promise<DeviceInviteLink> {
+		const challenge = await this.createChallenge({ purpose: "create_device_invite", deviceId: identity.deviceId });
+		const capability = await this.completeSignedRequest<DeviceInviteCapability>(
+			"v1/device-invites",
+			identity,
+			challenge,
+		);
+		if (!isDeviceInviteCapability(capability)) throw new Error("Rendezvous returned an invalid device invite");
+		const url = new URL(`invite/${encodeURIComponent(capability.inviteId)}`, this.baseUrl);
+		url.hash = new URLSearchParams({ secret: capability.secret }).toString();
+		return { url: url.toString(), expiresAt: capability.expiresAt };
+	}
+
+	async acceptDeviceInvite(
+		identity: BrowserDeviceIdentity,
+		capability: DeviceInviteCapabilityFromUrl,
+	): Promise<DeviceInviteAcceptance> {
+		const challenge = await this.createChallenge({
+			purpose: "accept_device_invite",
+			deviceId: identity.deviceId,
+			devicePublicKey: identity.publicKey,
+			pairId: capability.inviteId,
+		});
+		const acceptance = await this.completeSignedRequest<DeviceInviteAcceptance>(
+			`v1/device-invites/${encodeURIComponent(capability.inviteId)}/accept`,
+			identity,
+			challenge,
+			{ secret: capability.secret },
+		);
+		if (!isDeviceInviteAcceptance(acceptance, identity.deviceId)) {
+			throw new Error("Rendezvous returned an invalid device invite acceptance");
+		}
+		return acceptance;
+	}
+
 	async revokeDevice(identity: BrowserDeviceIdentity, backendId: string, targetDeviceId: string): Promise<void> {
 		const challenge = await this.createChallenge({
 			purpose: "revoke_device",
@@ -125,12 +172,13 @@ export class RendezvousTrustApi {
 		path: string,
 		identity: BrowserDeviceIdentity,
 		challenge: DeviceChallenge,
+		extraBody: Record<string, unknown> = {},
 	): Promise<T> {
 		const signature = await signDeviceChallenge(identity, challenge);
 		return this.requestJson<T>(path, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ challengeId: challenge.challengeId, signature }),
+			body: JSON.stringify({ challengeId: challenge.challengeId, signature, ...extraBody }),
 		});
 	}
 
@@ -140,6 +188,25 @@ export class RendezvousTrustApi {
 		if (!response.ok) throw new Error(typeof value?.error === "string" ? value.error : `Rendezvous request failed (${response.status})`);
 		return value as T;
 	}
+}
+
+function isDeviceInviteCapability(value: unknown): value is DeviceInviteCapability {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const capability = value as Record<string, unknown>;
+	return typeof capability.inviteId === "string"
+		&& capability.inviteId.length > 0
+		&& typeof capability.secret === "string"
+		&& capability.secret.length > 0
+		&& Number.isSafeInteger(capability.expiresAt)
+		&& (capability.expiresAt as number) > 0;
+}
+
+function isDeviceInviteAcceptance(value: unknown, deviceId: string): value is DeviceInviteAcceptance {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const acceptance = value as Record<string, unknown>;
+	return typeof acceptance.accountId === "string"
+		&& acceptance.accountId.length > 0
+		&& acceptance.deviceId === deviceId;
 }
 
 function isAuthorizedBackendDescriptor(value: unknown): value is AuthorizedBackendDescriptor {
@@ -162,4 +229,12 @@ export function parsePairingUrl(value: string): PairingCapabilityFromUrl {
 	const secret = fragment.get("secret");
 	if (!match?.[1] || !backendId || !secret) throw new Error("Pairing URL is malformed");
 	return { pairId: decodeURIComponent(match[1]), backendId, secret };
+}
+
+export function parseDeviceInviteUrl(value: string): DeviceInviteCapabilityFromUrl {
+	const url = new URL(value);
+	const match = /^\/invite\/([^/]+)$/u.exec(url.pathname);
+	const secret = new URLSearchParams(url.hash.replace(/^#/u, "")).get("secret");
+	if (!match?.[1] || !secret) throw new Error("Device invite URL is malformed");
+	return { inviteId: decodeURIComponent(match[1]), secret };
 }

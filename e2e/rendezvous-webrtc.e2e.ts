@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type BrowserContext } from "@playwright/test";
 import nodeDataChannel from "node-datachannel";
 import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
@@ -114,7 +114,7 @@ interface BrowserPairResult {
 	forcedTurn: boolean;
 }
 
-test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", async ({ page }) => {
+test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", async ({ page, browser }) => {
 	const dir = mkdtempSync(path.join(tmpdir(), "pipane-webrtc-e2e-"));
 	const turn = new MockTurnServer();
 	await turn.listen();
@@ -136,6 +136,7 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 	let peers: BackendWebRtcManager | undefined;
 	let secondPeers: BackendWebRtcManager | undefined;
 	let secondSignaling: BackendRendezvousClient | undefined;
+	let invitedContext: BrowserContext | undefined;
 
 	try {
 		await signaling.start();
@@ -521,6 +522,26 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await expect(page.locator("[data-testid='backend-switcher']")).toHaveCount(0);
 
 		const firstHost = page.locator(`session-picker .host-row[data-backend-id='${identity.backendId}']`);
+		await firstHost.locator("[aria-label^='Manage']").click();
+		await page.getByRole("button", { name: "Add another device" }).click();
+		const inviteDialog = page.locator("[data-testid='device-invite-dialog']");
+		await expect(inviteDialog.locator("[data-testid='device-invite-create-status']")).toContainText("expires in 10:");
+		await expect(inviteDialog.locator("[data-testid='device-invite-qr']")).toBeVisible();
+		const inviteUrl = await inviteDialog.locator("[data-testid='device-invite-link']").inputValue();
+		expect(new URL(inviteUrl).hash).toContain("secret=");
+
+		invitedContext = await browser.newContext();
+		const invitedPage = await invitedContext.newPage();
+		await invitedPage.goto(inviteUrl);
+		await expect(invitedPage.locator("[data-testid='device-invite-status']")).toContainText("Device added");
+		expect(new URL(invitedPage.url()).hash).toBe("");
+		await invitedPage.goto(baseUrl);
+		await expect(invitedPage.locator("session-picker .host-row[data-backend-id]")).toHaveCount(2, { timeout: 30_000 });
+		await expect(invitedPage.locator("session-picker .host-name")).toHaveText(["First backend", "Second backend"]);
+		await invitedContext.close();
+		invitedContext = undefined;
+		await inviteDialog.locator("[aria-label='Close device invite']").click();
+
 		await firstHost.locator(".host-status").click();
 		const diagnosticsDialog = page.locator("[data-testid='connection-diagnostics']");
 		await expect(diagnosticsDialog).toContainText(/TURN relay|Direct via STUN/u, { timeout: 10_000 });
@@ -535,6 +556,7 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await expect(page).toHaveURL(baseUrl + "/");
 		expect(secondTrust.ownerAccountId).toBe(result.accountId);
 	} finally {
+		await invitedContext?.close();
 		secondPeers?.close();
 		secondSignaling?.stop();
 		peers?.close();

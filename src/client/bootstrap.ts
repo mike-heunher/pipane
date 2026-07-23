@@ -10,6 +10,11 @@ if ("serviceWorker" in navigator) {
 void bootstrap();
 
 async function bootstrap(): Promise<void> {
+	if (isDeviceInvitePath(window.location.pathname)) {
+		const { initializeDeviceInvitePage } = await import("./device-invite-page.js");
+		await initializeDeviceInvitePage();
+		return;
+	}
 	if (isPairingPath(window.location.pathname)) {
 		const { initializePairingPage } = await import("./pairing-page.js");
 		await initializePairingPage();
@@ -82,6 +87,10 @@ function renderBootstrapError(error: unknown): void {
 	card.append(title, message, recovery);
 	main.append(card);
 	app.append(main);
+}
+
+export function isDeviceInvitePath(pathname: string): boolean {
+	return /^\/invite\/[^/]+$/u.test(pathname);
 }
 
 export function isPairingPath(pathname: string): boolean {

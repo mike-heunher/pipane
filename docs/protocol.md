@@ -62,10 +62,14 @@ The browser creates a non-exportable P-256 private key and stores the `CryptoKey
 - `POST /v1/pairings/:pairId/tickets`
 - `POST /v1/connections/tickets`
 - `POST /v1/accounts/backends`
+- `POST /v1/device-invites`
+- `POST /v1/device-invites/:inviteId/accept`
 - `POST /v1/revocations/devices`
 - `POST /v1/revocations/backends`
 
 The first backend-confirmed pairing creates an anonymous account. Later terminal pairings can add another browser device to the backend's owner account, or an authenticated device can add an unowned backend to its account. A signed `discover` challenge returns only that account's backend grants, with registration metadata and current reachability. A backend has one owning account in this protocol version.
+
+An authenticated browser can also sign a `create_device_invite` challenge to create a ten-minute, one-use invitation for its anonymous account. The returned secret is placed only in the fragment of `/invite/:inviteId#secret=...`; rendezvous persists only its hash. A new browser creates its own non-exportable key, signs an `accept_device_invite` challenge bound to that invite id, and submits the secret. Successful redemption adds the device to the same account, so signed discovery returns the account's complete backend grant set without copying any backend credentials or browser private keys. Existing devices, devices from another account, expired capabilities, incorrect secrets, and replay are rejected.
 
 ### Pairing capabilities
 
@@ -114,7 +118,7 @@ The currently implemented semantic methods are:
 
 Every method has runtime-validated parameters, correlated responses, stable error codes, bounded concurrency, and a bounded device-scoped completed-request cache. File uploads use bounded, offset-addressed base64 chunks so arbitrary non-image attachments can cross either local HTTP or the authenticated DataChannel, land in a private temporary backend path, and be referenced in the agent prompt. Pending browser requests retain their id across a carrier reconnect, so an in-flight mutation is resumed or answered from the cache instead of being executed twice. The backend uses one `LocalBackendApi` implementation for both the legacy local HTTP facade and semantic DataChannel requests. Remote session results are scoped to a structured `{ backendId, path }` identity; paths remain backend-local identifiers rather than authorization.
 
-The browser's `RemoteBackendManager` maintains one client/store per authorized backend id, requests a fresh ticket whenever a WebRTC carrier reconnects, and never treats an arbitrary URL backend id as authorized until signed account discovery includes it. The account workspace opens a direct connection to each reachable authorized host so it can merge backend-scoped session metadata and live status in one sidebar; only the selected host/session drives the conversation renderer and receives a session subscription. Session metadata remains end-to-end between browser and backend and is not indexed by rendezvous. Terminal `pipane pair` remains the no-email recovery path when browser storage is lost.
+The browser's `RemoteBackendManager` maintains one client/store per authorized backend id, requests a fresh ticket whenever a WebRTC carrier reconnects, and never treats an arbitrary URL backend id as authorized until signed account discovery includes it. The account workspace opens a direct connection to each reachable authorized host so it can merge backend-scoped session metadata and live status in one sidebar; only the selected host/session drives the conversation renderer and receives a session subscription. Session metadata remains end-to-end between browser and backend and is not indexed by rendezvous. An authorized browser can invite another device from the host menu; terminal `pipane pair` remains the no-email fallback when every browser key is unavailable.
 
 Application streaming, turn control, and session snapshots remain on validated v1 frames during parity migration. Semantic v2 is deployed beside v1 rather than changing v1's renderer-state contract in place.
 

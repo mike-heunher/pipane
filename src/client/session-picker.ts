@@ -17,7 +17,7 @@ export interface SettingsMenuCallbacks {
 	onOpenSettings: (backendId?: string) => void;
 	onOpenDiagnostics?: (backendId: string) => void;
 	onRemoveBackend?: (backendId: string) => void;
-	onPairRecover?: () => void;
+	onInviteDevice?: () => void;
 	isDevMode: boolean;
 }
 
@@ -1503,7 +1503,7 @@ export class SessionPicker extends LitElement {
 					<div class="host-menu">
 						<button ?disabled=${!host.online || !host.compatible} @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenSettings(host.backendId); }}>Host settings</button>
 						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenDiagnostics?.(host.backendId); }}>Connection details</button>
-						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onPairRecover?.(); }}>Pair / recover</button>
+						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onInviteDevice?.(); }}>Add another device</button>
 						<button class="danger" @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onRemoveBackend?.(host.backendId); }}>Remove host</button>
 					</div>
 				` : nothing}

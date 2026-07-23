@@ -1,4 +1,5 @@
 import {
+	createHash,
 	createHmac,
 	createPrivateKey,
 	createPublicKey,
@@ -6,6 +7,7 @@ import {
 	randomBytes,
 	randomUUID,
 	sign,
+	timingSafeEqual,
 	type KeyObject,
 } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -18,6 +20,8 @@ import {
 	TRUST_PROTOCOL_VERSION,
 	type ConnectionTicketClaims,
 	type DeviceChallenge,
+	type DeviceInviteAcceptance,
+	type DeviceInviteCapability,
 	type DeviceChallengeRequest,
 	type IceServerConfiguration,
 } from "../shared/trust-protocol.js";
@@ -35,8 +39,10 @@ const SIGNING_IDENTITY_VERSION = 1 as const;
 const ACCOUNT_ID_PREFIX = "a_";
 const TICKET_ID_PREFIX = "t_";
 const CHALLENGE_ID_PREFIX = "ch_";
+const DEVICE_INVITE_ID_PREFIX = "invite_";
 const DEFAULT_CHALLENGE_TTL_MS = 2 * 60_000;
 const DEFAULT_TICKET_TTL_MS = 60_000;
+const DEVICE_INVITE_TTL_MS = 10 * 60_000;
 
 interface StoredSigningIdentity {
 	version: typeof SIGNING_IDENTITY_VERSION;
@@ -68,6 +74,15 @@ interface PairingCompletion {
 	completedAt: number;
 }
 
+interface StoredDeviceInvite {
+	inviteId: string;
+	secretHash: string;
+	accountId: string;
+	createdByDeviceId: string;
+	createdAt: number;
+	expiresAt: number;
+}
+
 interface StoredTrustState {
 	version: typeof STORE_VERSION;
 	accounts: Record<string, StoredAccount>;
@@ -75,6 +90,7 @@ interface StoredTrustState {
 	backendOwners: Record<string, string>;
 	backendRevocations: Record<string, { accountId: string; revokedAt: number }>;
 	pairingCompletions: Record<string, PairingCompletion>;
+	deviceInvites: Record<string, StoredDeviceInvite>;
 	usedTickets: Record<string, number>;
 }
 
@@ -281,6 +297,54 @@ export class RendezvousTrustStore {
 		return [...this.state.accounts[device.accountId].backendIds];
 	}
 
+	createDeviceInvite(challengeId: string, signature: string): DeviceInviteCapability {
+		const challenge = this.consumeChallenge(challengeId, signature, "create_device_invite");
+		const actor = this.requireActiveDevice(challenge.deviceId);
+		const secret = randomBytes(32).toString("base64url");
+		const invite: StoredDeviceInvite = {
+			inviteId: `${DEVICE_INVITE_ID_PREFIX}${randomUUID()}`,
+			secretHash: hashDeviceInviteSecret(secret),
+			accountId: actor.accountId,
+			createdByDeviceId: actor.deviceId,
+			createdAt: this.now(),
+			expiresAt: this.now() + DEVICE_INVITE_TTL_MS,
+		};
+		this.state.deviceInvites[invite.inviteId] = invite;
+		this.persist();
+		return { inviteId: invite.inviteId, secret, expiresAt: invite.expiresAt };
+	}
+
+	acceptDeviceInvite(
+		challengeId: string,
+		signature: string,
+		inviteId: string,
+		secret: string,
+	): DeviceInviteAcceptance {
+		const challenge = this.consumeChallenge(challengeId, signature, "accept_device_invite");
+		if (challenge.pairId !== inviteId) throw new Error("Device challenge does not match this invite");
+		const invite = this.state.deviceInvites[inviteId];
+		if (!invite || invite.expiresAt <= this.now()) throw new Error("Device invite is missing or expired");
+		if (!secretsEqual(hashDeviceInviteSecret(secret), invite.secretHash)) throw new Error("Invalid device invite secret");
+
+		const existingDevice = this.state.devices[challenge.deviceId];
+		if (existingDevice) {
+			if (existingDevice.accountId === invite.accountId) throw new Error("This browser already has access to this account");
+			throw new Error("This browser already belongs to another account");
+		}
+		const account = this.state.accounts[invite.accountId];
+		if (!account) throw new Error("Device invite account is missing");
+		account.deviceIds.push(challenge.deviceId);
+		this.state.devices[challenge.deviceId] = {
+			deviceId: challenge.deviceId,
+			publicKey: challenge.devicePublicKey,
+			accountId: account.accountId,
+			createdAt: this.now(),
+		};
+		delete this.state.deviceInvites[inviteId];
+		this.persist();
+		return { accountId: account.accountId, deviceId: challenge.deviceId };
+	}
+
 	revokeDevice(challengeId: string, signature: string): RevocationResult {
 		const challenge = this.consumeChallenge(challengeId, signature, "revoke_device");
 		const actor = this.requireActiveDevice(challenge.deviceId);
@@ -342,12 +406,14 @@ export class RendezvousTrustStore {
 				if (request.devicePublicKey && request.devicePublicKey !== device.publicKey) throw new Error("Device public key mismatch");
 				return { deviceId: device.deviceId, publicKey: device.publicKey };
 			}
-			if (request.purpose === "pair" && request.devicePublicKey && deriveDeviceId(request.devicePublicKey) === request.deviceId) {
+			if ((request.purpose === "pair" || request.purpose === "accept_device_invite")
+				&& request.devicePublicKey
+				&& deriveDeviceId(request.devicePublicKey) === request.deviceId) {
 				return { deviceId: request.deviceId, publicKey: request.devicePublicKey };
 			}
 			throw new Error("Device is unknown or revoked");
 		}
-		if (request.purpose !== "pair" || !request.devicePublicKey) {
+		if ((request.purpose !== "pair" && request.purpose !== "accept_device_invite") || !request.devicePublicKey) {
 			throw new Error("An existing device is required for this challenge");
 		}
 		return { deviceId: deriveDeviceId(request.devicePublicKey), publicKey: request.devicePublicKey };
@@ -357,15 +423,25 @@ export class RendezvousTrustStore {
 		if (request.purpose !== "pair"
 			&& request.purpose !== "connect"
 			&& request.purpose !== "discover"
+			&& request.purpose !== "create_device_invite"
+			&& request.purpose !== "accept_device_invite"
 			&& request.purpose !== "revoke_device"
 			&& request.purpose !== "revoke_backend") {
 			throw new Error("Unsupported device challenge purpose");
 		}
-		if (request.purpose !== "discover" && !request.backendId) throw new Error("backendId is required");
+		if (request.purpose !== "discover"
+			&& request.purpose !== "create_device_invite"
+			&& request.purpose !== "accept_device_invite"
+			&& !request.backendId) {
+			throw new Error("backendId is required");
+		}
 		if (request.purpose === "pair" || request.purpose === "connect") {
 			if (!request.connectionId) throw new Error("connectionId is required");
 		}
 		if (request.purpose === "pair" && !request.pairId) throw new Error("pairId is required");
+		if (request.purpose === "accept_device_invite") {
+			if (!request.pairId || !this.state.deviceInvites[request.pairId]) throw new Error("Device invite is missing or expired");
+		}
 		if (request.purpose === "revoke_device" && !request.targetDeviceId) throw new Error("targetDeviceId is required");
 	}
 
@@ -390,6 +466,11 @@ export class RendezvousTrustStore {
 			if (challenge.expiresAt <= now) this.challenges.delete(challengeId);
 		}
 		let changed = false;
+		for (const [inviteId, invite] of Object.entries(this.state.deviceInvites)) {
+			if (invite.expiresAt > now) continue;
+			delete this.state.deviceInvites[inviteId];
+			changed = true;
+		}
 		for (const [ticketId, expiresAt] of Object.entries(this.state.usedTickets)) {
 			if (expiresAt > now) continue;
 			delete this.state.usedTickets[ticketId];
@@ -441,6 +522,7 @@ function loadTrustState(filePath: string): StoredTrustState {
 		const value: unknown = JSON.parse(readFileSync(filePath, "utf8"));
 		if (!isTrustState(value)) throw new Error("unsupported or malformed state");
 		value.backendRevocations ??= {};
+		value.deviceInvites ??= {};
 		if (!hasConsistentReferences(value)) throw new Error("unsupported or malformed state");
 		return value;
 	} catch (error: any) {
@@ -452,6 +534,7 @@ function loadTrustState(filePath: string): StoredTrustState {
 			backendOwners: {},
 			backendRevocations: {},
 			pairingCompletions: {},
+			deviceInvites: {},
 			usedTickets: {},
 		};
 	}
@@ -481,6 +564,14 @@ function isTrustState(value: unknown): value is StoredTrustState {
 			&& isNonEmptyString(completion.deviceId)
 			&& isNonEmptyString(completion.backendId)
 			&& isNonNegativeInteger(completion.completedAt))
+		&& (value.deviceInvites === undefined || isRecordOf(value.deviceInvites, (invite, key) => isRecord(invite)
+			&& invite.inviteId === key
+			&& isNonEmptyString(invite.secretHash)
+			&& isNonEmptyString(invite.accountId)
+			&& isNonEmptyString(invite.createdByDeviceId)
+			&& isNonNegativeInteger(invite.createdAt)
+			&& isNonNegativeInteger(invite.expiresAt)
+			&& invite.expiresAt > invite.createdAt))
 		&& isRecordOf(value.usedTickets, (expiresAt) => isNonNegativeInteger(expiresAt));
 }
 
@@ -498,10 +589,24 @@ function hasConsistentReferences(state: StoredTrustState): boolean {
 		for (const [backendId, accountId] of Object.entries(state.backendOwners)) {
 			if (!state.accounts[accountId]?.backendIds.includes(backendId)) return false;
 		}
+		for (const invite of Object.values(state.deviceInvites)) {
+			if (!state.accounts[invite.accountId]) return false;
+			if (state.devices[invite.createdByDeviceId]?.accountId !== invite.accountId) return false;
+		}
 		return true;
 	} catch {
 		return false;
 	}
+}
+
+function hashDeviceInviteSecret(secret: string): string {
+	return createHash("sha256").update(`pipane-device-invite-v1\n${secret}`).digest("base64url");
+}
+
+function secretsEqual(actual: string, expected: string): boolean {
+	const actualBytes = Buffer.from(actual);
+	const expectedBytes = Buffer.from(expected);
+	return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

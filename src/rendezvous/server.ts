@@ -161,6 +161,20 @@ export function createRendezvousServer(
 			});
 		response.json({ backends });
 	}));
+	app.post("/v1/device-invites", route((request, response) => {
+		const { challengeId, signature } = requireSignatureBody(request.body);
+		response.json(trustStore.createDeviceInvite(challengeId, signature));
+	}));
+	app.post("/v1/device-invites/:inviteId/accept", route((request, response) => {
+		const { challengeId, signature } = requireSignatureBody(request.body);
+		const secret = requireBodyString(request.body, "secret");
+		response.json(trustStore.acceptDeviceInvite(
+			challengeId,
+			signature,
+			param(request, "inviteId"),
+			secret,
+		));
+	}));
 	app.post("/v1/revocations/devices", route((request, response) => {
 		const { challengeId, signature } = requireSignatureBody(request.body);
 		const result = trustStore.revokeDevice(challengeId, signature);
@@ -181,7 +195,7 @@ export function createRendezvousServer(
 	if (clientDist && existsSync(path.join(clientDist, "index.html"))) {
 		app.use(express.static(clientDist));
 		app.use((request, response, next) => {
-			if (request.method === "GET" && (/^\/pair\/[^/]+$/u.test(request.path) || /^\/backend\/[^/]+$/u.test(request.path))) {
+			if (request.method === "GET" && (/^\/(?:pair|invite)\/[^/]+$/u.test(request.path) || /^\/backend\/[^/]+$/u.test(request.path))) {
 				response.sendFile(path.join(clientDist, "index.html"));
 				return;
 			}
@@ -261,6 +275,13 @@ function requireSignatureBody(value: unknown): { challengeId: string; signature:
 		throw new Error("challengeId and signature are required");
 	}
 	return { challengeId: body.challengeId, signature: body.signature };
+}
+
+function requireBodyString(value: unknown, name: string): string {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Request body must be an object");
+	const result = (value as Record<string, unknown>)[name];
+	if (typeof result !== "string" || !result) throw new Error(`${name} is required`);
+	return result;
 }
 
 function envUrls(name: string): string[] {

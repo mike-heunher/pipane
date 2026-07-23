@@ -31,6 +31,7 @@ import {
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { openConnectionDiagnosticsDialog } from "./connection-diagnostics-dialog.js";
+import { openDeviceInviteDialog } from "./device-invite-dialog.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
 import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
@@ -70,6 +71,7 @@ window.addEventListener("resize", () => {
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let connectionDiagnosticsOpen = false;
+let deviceInviteOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
 let prefetchedSessions: SessionInfoDTO[] | undefined;
@@ -694,8 +696,14 @@ function backendDisplayName(backendId: string): string {
 	return descriptor?.name || `${backendId.slice(0, 12)}…`;
 }
 
-function showPairRecoveryInstructions(): void {
-	window.alert("Run `pipane pair` in an owned backend terminal, then scan its QR code. This also restores access after browser storage loss.");
+async function openDeviceInviteModal(): Promise<void> {
+	if (deviceInviteOpen) return;
+	deviceInviteOpen = true;
+	try {
+		await openDeviceInviteDialog();
+	} finally {
+		deviceInviteOpen = false;
+	}
 }
 
 async function removeBackend(backendId: string): Promise<void> {
@@ -730,7 +738,7 @@ const renderApp = () => {
 		onOpenSettings: (backendId?: string) => { void openLocalSettingsModal(backendId); },
 		onOpenDiagnostics: (backendId: string) => { void openConnectionDiagnosticsModal(backendId); },
 		onRemoveBackend: (backendId: string) => { void removeBackend(backendId); },
-		onPairRecover: showPairRecoveryInstructions,
+		onInviteDevice: () => { void openDeviceInviteModal(); },
 		isDevMode,
 	};
 
