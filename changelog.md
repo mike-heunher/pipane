@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.11 - 2026-07-23
+
 - Give the local dev deployment its own `piweb-dev` rendezvous identity instead of displacing production `piweb`.
 - Show the unified workspace after its first reachable host connects instead of waiting for every host's ICE attempt.
 
