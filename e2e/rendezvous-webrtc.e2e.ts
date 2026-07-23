@@ -511,23 +511,27 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await expect(page.locator("[data-testid='pairing-status']")).toContainText("Paired successfully", { timeout: 10_000 });
 
 		await page.goto(baseUrl);
-		await expect(page.locator("session-picker [data-backend-id]")).toHaveCount(2, { timeout: 15_000 });
+		await expect(page.locator("session-picker .host-row[data-backend-id]")).toHaveCount(2, { timeout: 15_000 });
 		await expect(page.locator("session-picker .host-name")).toHaveText(["First backend", "Second backend"]);
-		await expect(page.locator("session-picker .group-label")).toHaveText(["first-project", "second-project"]);
+		await expect(page.locator("session-picker .group-label")).toHaveText([
+			"First backend / first-project",
+			"Second backend / second-project",
+		]);
 		await expect(page.locator("message-editor")).toBeVisible();
 		await expect(page.locator("[data-testid='backend-switcher']")).toHaveCount(0);
 
-		const firstHost = page.locator(`session-picker [data-backend-id='${identity.backendId}']`);
+		const firstHost = page.locator(`session-picker .host-row[data-backend-id='${identity.backendId}']`);
 		await firstHost.locator(".host-status").click();
 		const diagnosticsDialog = page.locator("[data-testid='connection-diagnostics']");
 		await expect(diagnosticsDialog).toContainText(/TURN relay|Direct via STUN/u, { timeout: 10_000 });
 		await expect(diagnosticsDialog).toContainText(turn.url);
 		await diagnosticsDialog.locator("[aria-label='Close connection diagnostics']").click();
 
-		const secondHost = page.locator(`session-picker [data-backend-id='${secondIdentity.backendId}']`);
-		await secondHost.locator(".session-item").click();
-		await expect(secondHost.locator(".host-header")).toHaveClass(/active/u);
-		await expect(secondHost.locator(".session-item")).toHaveClass(/active/u);
+		const secondHost = page.locator(`session-picker .host-row[data-backend-id='${secondIdentity.backendId}']`);
+		const secondProject = page.locator(`session-picker .project-group[data-backend-id='${secondIdentity.backendId}']`);
+		await secondProject.locator(".session-item").click();
+		await expect(secondHost).toHaveClass(/active/u);
+		await expect(secondProject.locator(".session-item")).toHaveClass(/active/u);
 		await expect(page).toHaveURL(baseUrl + "/");
 		expect(secondTrust.ownerAccountId).toBe(result.accountId);
 	} finally {

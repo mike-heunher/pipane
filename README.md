@@ -69,7 +69,7 @@ journalctl -u pipane -f
 
 - Session list and clean UI for `pi`
 - Real-time tool calls and streaming output, nicely crafted
-- One merged host/project session picker on pipane.dev
+- One recency-sorted cross-host project picker on pipane.dev
 - ChatGPT/Codex and Claude subscription usage in the input toolbar
 - A large amount high quality "vibe-code".
 

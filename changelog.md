@@ -2,6 +2,7 @@
 
 - Add a source-based preview deployment for the public browser app and local dev backend without publishing npm.
 - Retry transient missing-model responses while a newly started Pi worker finishes refreshing its model catalog.
+- Flatten multi-server projects into one recency-sorted sidebar list while keeping per-server controls below the Pipane title.
 
 # 0.1.11 - 2026-07-23
 

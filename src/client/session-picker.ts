@@ -38,7 +38,6 @@ interface SessionHost {
 	online: boolean;
 	compatible: boolean;
 	error?: string;
-	groups: SessionGroup[];
 }
 
 interface DirEntry {
@@ -185,27 +184,25 @@ export class SessionPicker extends LitElement {
 			padding: 0.25rem 0;
 		}
 
-		.host-section {
+		.host-list {
 			position: relative;
-			border-bottom: 1px solid color-mix(in srgb, var(--picker-border) 65%, transparent);
-			padding-bottom: 0.25rem;
+			padding: 0.2rem 0;
+			border-bottom: 1px solid var(--picker-border);
+			flex-shrink: 0;
 		}
 
-		.host-section:last-child {
-			border-bottom: 0;
-		}
-
-		.host-header {
+		.host-row {
+			position: relative;
 			display: flex;
 			align-items: center;
 			gap: 0.42rem;
 			min-height: 1.9rem;
-			padding: 0.35rem 0.5rem 0.25rem 0.7rem;
+			padding: 0.3rem 0.5rem 0.3rem 0.7rem;
 			color: var(--picker-text);
 		}
 
-		.host-header.active {
-			background: color-mix(in srgb, var(--picker-active) 5%, transparent);
+		.host-row.active {
+			background: color-mix(in srgb, var(--picker-active) 7%, transparent);
 		}
 
 		.host-status {
@@ -277,19 +274,6 @@ export class SessionPicker extends LitElement {
 		.host-menu button:hover:not(:disabled) { background: var(--picker-hover); }
 		.host-menu button:disabled { cursor: default; opacity: 0.45; }
 		.host-menu button.danger { color: #dc2626; }
-		.host-empty { padding: 0.25rem 0.75rem 0.45rem 1.6rem; color: var(--picker-muted); font-size: 0.68rem; }
-
-		.host-section .group-header {
-			padding-left: 1.6rem;
-		}
-
-		.host-section .session-item {
-			padding-left: 1.7rem;
-		}
-
-		.host-section .session-item.active {
-			padding-left: calc(1.7rem - 2px);
-		}
 
 		.group-header {
 			display: flex;
@@ -301,7 +285,7 @@ export class SessionPicker extends LitElement {
 			border: none;
 		}
 
-		.group-header:first-child {
+		.project-group:first-child .group-header {
 			margin-top: 0;
 		}
 
@@ -316,6 +300,14 @@ export class SessionPicker extends LitElement {
 			text-overflow: ellipsis;
 			flex: 1;
 			min-width: 0;
+		}
+
+		.group-host-label {
+			color: var(--picker-active);
+		}
+
+		.group-label-separator {
+			color: color-mix(in srgb, var(--picker-muted) 65%, transparent);
 		}
 
 		.group-new-btn {
@@ -1184,12 +1176,8 @@ export class SessionPicker extends LitElement {
 		return groups;
 	}
 
-	private get filteredHosts(): SessionHost[] {
-		const groups = this.filteredGroups;
-		const workspaceBackends = this.agent.workspaceBackends;
-		if (!workspaceBackends) return [];
-		const query = this.searchQuery.toLowerCase().trim();
-		const hosts = workspaceBackends.map((backend) => ({
+	private get workspaceHosts(): SessionHost[] {
+		return (this.agent.workspaceBackends ?? []).map((backend) => ({
 			backendId: backend.backendId,
 			name: backend.name || `${backend.backendId.slice(0, 12)}…`,
 			connected: backend.connected,
@@ -1197,22 +1185,13 @@ export class SessionPicker extends LitElement {
 			online: backend.online,
 			compatible: backend.protocolVersions.includes(BACKEND_PROTOCOL_VERSION),
 			error: backend.error,
-			groups: groups.filter((group) => group.backendId === backend.backendId),
 		}));
-		return hosts
-			.filter((host) => !query || host.groups.length > 0 || host.name.toLowerCase().includes(query))
-			.sort((a, b) => {
-				const aActive = a.backendId === this.agent.activeBackendId;
-				const bActive = b.backendId === this.agent.activeBackendId;
-				if (aActive !== bActive) return aActive ? -1 : 1;
-				const recency = (host: SessionHost) => Math.max(0, ...host.groups.flatMap((group) => group.sessions.map((session) =>
-					this.agent.getSessionStatus(session.path, session.backendId) === "running"
-						? Infinity
-						: new Date(session.lastUserPromptTime || session.modified).getTime(),
-				)));
-				const difference = recency(b) - recency(a);
-				return difference || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
-			});
+	}
+
+	private backendDisplayName(backendId: string | undefined): string | undefined {
+		if (!backendId) return undefined;
+		const backend = this.agent.workspaceBackends?.find((candidate) => candidate.backendId === backendId);
+		return backend?.name || `${backendId.slice(0, 12)}…`;
 	}
 
 	private getSessionDisplayName(s: SessionInfoDTO): string {
@@ -1450,9 +1429,10 @@ export class SessionPicker extends LitElement {
 
 	render() {
 		const groups = this.filteredGroups;
-		const hosts = this.filteredHosts;
+		const hosts = this.workspaceHosts;
 		const activeId = this.agent?.sessionId;
 		const isWorkspace = this.agent.workspaceBackends !== undefined;
+		const showBackendPrefix = hosts.length > 1;
 
 		return html`
 			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
@@ -1462,19 +1442,26 @@ export class SessionPicker extends LitElement {
 					</div>
 					<div class="header-right">
 						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>
-						<button
-							class="settings-btn"
-							@click=${() => this.settingsMenu?.onOpenSettings(this.agent.activeBackendId)}
-							title="Settings"
-							aria-label="Settings"
-						>
-							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-								<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
-								<circle cx="12" cy="12" r="3"></circle>
-							</svg>
-						</button>
+						${!isWorkspace ? html`
+							<button
+								class="settings-btn"
+								@click=${() => this.settingsMenu?.onOpenSettings()}
+								title="Settings"
+								aria-label="Settings"
+							>
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
+									<circle cx="12" cy="12" r="3"></circle>
+								</svg>
+							</button>
+						` : nothing}
 					</div>
 				</div>
+				${isWorkspace ? html`
+					<div class="host-list">
+						${repeat(hosts, (host) => host.backendId, (host) => this.renderHostControl(host))}
+					</div>
+				` : nothing}
 				<div class="search">
 					<input
 						type="text"
@@ -1488,13 +1475,9 @@ export class SessionPicker extends LitElement {
 						? this.renderSkeletonSessions()
 						: this.loading
 							? nothing
-							: isWorkspace
-								? hosts.length === 0
-									? html`<div class="empty">No hosts or sessions found</div>`
-									: repeat(hosts, (host) => host.backendId, (host) => this.renderHost(host, activeId))
-								: groups.length === 0
-									? html`<div class="empty">No sessions found</div>`
-									: repeat(groups, (group) => group.key, (group) => this.renderGroup(group, activeId))}
+							: groups.length === 0
+								? html`<div class="empty">No sessions found</div>`
+								: repeat(groups, (group) => group.key, (group) => this.renderGroup(group, activeId, showBackendPrefix))}
 				</div>
 
 				${this.showFolderPicker ? this.renderFolderPicker() : nothing}
@@ -1502,22 +1485,20 @@ export class SessionPicker extends LitElement {
 		`;
 	}
 
-	private renderHost(host: SessionHost, activeId: string): TemplateResult {
+	private renderHostControl(host: SessionHost): TemplateResult {
 		const state = host.connected ? "connected" : host.reconnecting ? "reconnecting" : "offline";
 		const statusTitle = host.connected ? "Connected" : host.reconnecting ? "Reconnecting" : host.error || (host.online ? "Unavailable" : "Offline");
 		return html`
-			<section class="host-section" data-backend-id=${host.backendId}>
-				<div class="host-header ${host.backendId === this.agent.activeBackendId ? "active" : ""}">
-					<button
-						class="host-status ${state}"
-						title=${statusTitle}
-						aria-label=${`${host.name}: ${statusTitle}`}
-						@click=${() => this.settingsMenu?.onOpenDiagnostics?.(host.backendId)}
-					></button>
-					<span class="host-name" title=${host.name}>${host.name}</span>
-					<button class="host-action" title=${`New project on ${host.name}`} ?disabled=${!host.online || !host.compatible} @click=${() => this.openFolderPicker(host.backendId)}>+ PROJECT</button>
-					<button class="host-action" title=${`Manage ${host.name}`} aria-label=${`Manage ${host.name}`} @click=${() => { this.openHostMenu = this.openHostMenu === host.backendId ? undefined : host.backendId; }}>•••</button>
-				</div>
+			<div class="host-row host-header ${host.backendId === this.agent.activeBackendId ? "active" : ""}" data-backend-id=${host.backendId}>
+				<button
+					class="host-status ${state}"
+					title=${statusTitle}
+					aria-label=${`${host.name}: ${statusTitle}`}
+					@click=${() => this.settingsMenu?.onOpenDiagnostics?.(host.backendId)}
+				></button>
+				<span class="host-name" title=${host.name}>${host.name}</span>
+				<button class="host-action" title=${`New project on ${host.name}`} ?disabled=${!host.online || !host.compatible} @click=${() => this.openFolderPicker(host.backendId)}>+ PROJECT</button>
+				<button class="host-action" title=${`Manage ${host.name}`} aria-label=${`Manage ${host.name}`} @click=${() => { this.openHostMenu = this.openHostMenu === host.backendId ? undefined : host.backendId; }}>•••</button>
 				${this.openHostMenu === host.backendId ? html`
 					<div class="host-menu">
 						<button ?disabled=${!host.online || !host.compatible} @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenSettings(host.backendId); }}>Host settings</button>
@@ -1526,10 +1507,7 @@ export class SessionPicker extends LitElement {
 						<button class="danger" @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onRemoveBackend?.(host.backendId); }}>Remove host</button>
 					</div>
 				` : nothing}
-				${host.groups.length > 0
-					? repeat(host.groups, (group) => group.key, (group) => this.renderGroup(group, activeId))
-					: html`<div class="host-empty">${host.error || (host.online ? "No sessions" : "Host offline")}</div>`}
-			</section>
+			</div>
 		`;
 	}
 
@@ -1558,8 +1536,9 @@ export class SessionPicker extends LitElement {
 		`;
 	}
 
-	private renderGroup(group: SessionGroup, activeId: string): TemplateResult {
+	private renderGroup(group: SessionGroup, activeId: string, showBackendPrefix = false): TemplateResult {
 		const isExpanded = this.expandedGroups.has(group.key);
+		const backendName = showBackendPrefix ? this.backendDisplayName(group.backendId) : undefined;
 
 		// Count running sessions in this group
 		const runningCount = group.sessions.filter(
@@ -1576,15 +1555,16 @@ export class SessionPicker extends LitElement {
 		const hiddenCount = totalCount - visibleSessions.length;
 
 		return html`
-			<div class="group-header" title=${group.displayCwd}>
-				<span class="group-label">${group.label}</span>
-				<button
-					class="group-new-btn"
-					@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd, group.backendId); }}
-					title="New session in ${group.cwd}"
-				>+ NEW</button>
-			</div>
-			${repeat(
+			<section class="project-group" data-backend-id=${group.backendId ?? nothing}>
+				<div class="group-header" title=${backendName ? `${backendName} / ${group.displayCwd}` : group.displayCwd}>
+					<span class="group-label">${backendName ? html`<span class="group-host-label">${backendName}</span><span class="group-label-separator"> / </span>` : nothing}<span>${group.label}</span></span>
+					<button
+						class="group-new-btn"
+						@click=${(e: Event) => { e.stopPropagation(); this.handleNewSessionInGroup(group.cwd, group.backendId); }}
+						title="New session in ${group.cwd}"
+					>+ NEW</button>
+				</div>
+				${repeat(
 				visibleSessions,
 				(s) => this.sessionKey(s),
 				(s) => {
@@ -1640,11 +1620,12 @@ export class SessionPicker extends LitElement {
 				`;
 				},
 			)}
-			${needsTruncation
-				? isExpanded
-					? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▴ Show less</button>`
-					: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▾ Show ${hiddenCount} more…</button>`
-				: nothing}
+				${needsTruncation
+					? isExpanded
+						? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▴ Show less</button>`
+						: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▾ Show ${hiddenCount} more…</button>`
+					: nothing}
+			</section>
 		`;
 	}
 
