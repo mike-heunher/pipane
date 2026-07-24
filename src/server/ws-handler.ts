@@ -39,6 +39,7 @@ import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
 import { computeSyncOp } from "../shared/jsonl-sync.js";
+import { SessionSyncJournal } from "./session-sync-journal.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import {
 	assertNever,
@@ -77,6 +78,7 @@ type ExtensionStatusPayload = Omit<ExtensionStatusMessage, "protocolVersion">;
 type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
+const LIVE_SYNC_COALESCE_MS = 50;
 const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
 const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
@@ -128,10 +130,12 @@ export class WsHandler {
 	 * Used for change detection when the file watcher fires.
 	 */
 	private subscribedFileSizes = new Map<string, number>();
-	/** Last revision/hash published for each authoritative session state. */
-	private sessionRevisions = new Map<string, { revision: number; hash: string }>();
+	/** Bounded hash-to-patch history used to resume cached browsers. */
+	private sessionSyncJournal = new SessionSyncJournal();
 	/** Per-session trailing-edge disk refreshes for detached JSONL bursts. */
 	private pendingDetachedSyncs = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Attached updates are capped to the browser's useful render cadence. */
+	private pendingLiveSyncs = new Map<string, ReturnType<typeof setTimeout>>();
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -576,42 +580,29 @@ export class WsHandler {
 		// snapshot stale. The carrier emits a cancellation for a partial frame.
 		ws.cancelTransfer?.(SESSION_SYNC_TRANSFER_KEY);
 		client.subscribedSession = sessionPath;
-		client.lastVersion = 0;
-		client.lastJson = "";
-		client.lastHash = "";
 
-		// If the session is attached, send from its actor-owned in-memory state
 		const attached = this.registry.find(sessionPath)?.session;
-		if (attached) {
-			// Send full sync
-			client.lastJson = attached.json;
-			client.lastHash = attached.hash;
-			client.lastVersion = attached.version;
-			this.sendMessage(ws, {
-				type: "session_sync",
-				sessionPath,
-				revision: this.revisionForState(sessionPath, attached.hash),
-				op: "full",
-				data: attached.json,
-				hash: attached.hash,
-			});
-		} else {
-			// Detached — read from disk
-			const { json, hash } = readSessionFromDisk(sessionPath);
-			client.lastJson = json;
-			client.lastHash = hash;
-			client.lastVersion = 0;
-			// Track file size for change detection
-			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
-			this.sendMessage(ws, {
-				type: "session_sync",
-				sessionPath,
-				revision: this.revisionForState(sessionPath, hash),
-				op: "full",
-				data: json,
-				hash,
-			});
-		}
+		const snapshot = attached
+			? { json: attached.json, hash: attached.hash, version: attached.version }
+			: { ...readSessionFromDisk(sessionPath), version: 0 };
+		if (!attached) this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
+
+		this.sessionSyncJournal.record(
+			sessionPath,
+			snapshot.json,
+			snapshot.hash,
+			this.subscribedSessionPaths(),
+		);
+		const plan = this.sessionSyncJournal.plan(sessionPath, command.baseHash);
+		client.lastJson = snapshot.json;
+		client.lastHash = snapshot.hash;
+		client.lastVersion = snapshot.version;
+		this.sendMessage(ws, {
+			type: "session_sync",
+			sessionPath,
+			revision: plan.revision,
+			...plan.op,
+		});
 
 		// Extension status is a separate, authoritative snapshot so reconnects
 		// and session switches replace rather than merge stale client state.
@@ -1251,6 +1242,9 @@ export class WsHandler {
 
 	private releaseActor(actor: SessionActor, preserveLiveControls = true): void {
 		const sessionPath = actor.sessionPath;
+		const pendingSync = this.pendingLiveSyncs.get(sessionPath);
+		if (pendingSync) clearTimeout(pendingSync);
+		this.pendingLiveSyncs.delete(sessionPath);
 		const proc = actor.process;
 		const liveState = actor.session?.toState();
 		if (proc) this.pendingExtensionStatuses.delete(proc);
@@ -1272,16 +1266,19 @@ export class WsHandler {
 		this.pushSnapshotToSubscribers(sessionPath, json, hash);
 	}
 
-	private revisionForState(sessionPath: string, hash: string): number {
-		const current = this.sessionRevisions.get(sessionPath);
-		if (current?.hash === hash) return current.revision;
-		const revision = (current?.revision ?? 0) + 1;
-		this.sessionRevisions.set(sessionPath, { revision, hash });
-		return revision;
+	private subscribedSessionPaths(): Set<string> {
+		return new Set([...this.clients.values()]
+			.map((client) => client.subscribedSession)
+			.filter((sessionPath): sessionPath is string => sessionPath !== null));
 	}
 
 	private pushSnapshotToSubscribers(sessionPath: string, json: string, hash: string) {
-		const revision = this.revisionForState(sessionPath, hash);
+		const revision = this.sessionSyncJournal.record(
+			sessionPath,
+			json,
+			hash,
+			this.subscribedSessionPaths(),
+		);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath || ws.readyState !== FRAME_CONNECTION_OPEN) continue;
 			if (client.lastHash === hash) continue;
@@ -1303,7 +1300,12 @@ export class WsHandler {
 	 * Uses the hash-verified diff protocol for efficient incremental sync.
 	 */
 	private pushUpdateToSubscribers(sessionPath: string, session: SessionJsonl) {
-		const revision = this.revisionForState(sessionPath, session.hash);
+		const revision = this.sessionSyncJournal.record(
+			sessionPath,
+			session.json,
+			session.hash,
+			this.subscribedSessionPaths(),
+		);
 		for (const [ws, client] of this.clients) {
 			if (client.subscribedSession !== sessionPath) continue;
 			if (ws.readyState !== FRAME_CONNECTION_OPEN) continue;
@@ -1322,6 +1324,24 @@ export class WsHandler {
 			client.lastHash = session.hash;
 			client.lastVersion = session.version;
 		}
+	}
+
+	private scheduleLiveSessionSync(sessionPath: string): void {
+		if (this.pendingLiveSyncs.has(sessionPath)) return;
+		const timer = setTimeout(() => {
+			this.pendingLiveSyncs.delete(sessionPath);
+			const session = this.registry.find(sessionPath)?.session;
+			if (session) this.pushUpdateToSubscribers(sessionPath, session);
+		}, LIVE_SYNC_COALESCE_MS);
+		timer.unref?.();
+		this.pendingLiveSyncs.set(sessionPath, timer);
+	}
+
+	private flushLiveSessionSync(sessionPath: string, session: SessionJsonl): void {
+		const pending = this.pendingLiveSyncs.get(sessionPath);
+		if (pending) clearTimeout(pending);
+		this.pendingLiveSyncs.delete(sessionPath);
+		this.pushUpdateToSubscribers(sessionPath, session);
 	}
 
 	private setupTurnEventForwarding(
@@ -1363,9 +1383,14 @@ export class WsHandler {
 				}
 
 				if (result.changed && actor.session) {
-					this.pushUpdateToSubscribers(sessionPath, actor.session);
+					if (data.type === "message_end" || data.type === "tool_execution_end") {
+						this.flushLiveSessionSync(sessionPath, actor.session);
+					} else {
+						this.scheduleLiveSessionSync(sessionPath);
+					}
 				}
 				if (data.type === "agent_end") {
+					if (actor.session) this.flushLiveSessionSync(sessionPath, actor.session);
 					debugTurn("agent_end_received", { turnId, procId: proc.id, sessionPath });
 				}
 			}).catch((error) => {

@@ -545,6 +545,7 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await firstHost.locator(".host-status").click();
 		const diagnosticsDialog = page.locator("[data-testid='connection-diagnostics']");
 		await expect(diagnosticsDialog).toContainText(/TURN relay|Direct via STUN/u, { timeout: 10_000 });
+		await expect(diagnosticsDialog).toContainText("Pipane traffic");
 		await expect(diagnosticsDialog).toContainText(turn.url);
 		await diagnosticsDialog.locator("[aria-label='Close connection diagnostics']").click();
 

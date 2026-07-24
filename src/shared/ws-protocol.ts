@@ -67,7 +67,7 @@ interface SessionCommand {
 
 export type ClientCommand = CommandEnvelope & (
 	| { type: "install_pi" }
-	| ({ type: "subscribe_session" } & SessionCommand)
+	| ({ type: "subscribe_session"; baseHash?: string } & SessionCommand)
 	| ({
 		type: "prompt";
 		message: string;
@@ -451,6 +451,12 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 				optionalString(command.cwd, "$command.cwd");
 				break;
 			case "subscribe_session":
+				sessionPath();
+				if (command.baseHash !== undefined) {
+					const baseHash = string(command.baseHash, "$command.baseHash", false);
+					if (!/^[a-f0-9]{64}$/u.test(baseHash)) fail("$command.baseHash", "expected a SHA-256 hex hash");
+				}
+				break;
 			case "abort":
 			case "hard_kill":
 			case "get_session_stats":

@@ -183,6 +183,48 @@ describe("WsAgentAdapter burst session sync", () => {
 		consoleError.mockRestore();
 	});
 
+	it("accepts a resumed cached hash as a new server revision scope", async () => {
+		vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+		const { adapter, sent } = createAdapter();
+		const a = adapter as any;
+		const first = sessionState("cached");
+		const second = sessionState("cached plus remote changes");
+		const firstHash = await computeHash(first);
+		const secondHash = await computeHash(second);
+
+		deliver(adapter, { revision: 17, op: "full", data: first, hash: firstHash });
+		await a.flushSessionSyncQueue();
+		a._syncRevision = 17;
+		const resuming = a.requestSessionSync(SESSION_PATH);
+		const subscription = sent.find((message) => message.type === "subscribe_session");
+		expect(subscription).toMatchObject({ baseHash: firstHash });
+		a.handleMessage(JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			type: "response",
+			id: subscription.id,
+			command: "subscribe_session",
+			success: true,
+			data: {},
+		}));
+		await resuming;
+
+		a.handleMessage(JSON.stringify({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			type: "session_sync",
+			sessionPath: SESSION_PATH,
+			revision: 2,
+			op: "delta",
+			patches: computePatches(first, second),
+			baseHash: firstHash,
+			hash: secondHash,
+		}));
+		await a.flushSessionSyncQueue();
+
+		expect(a._syncRevision).toBe(2);
+		expect(a._syncHash).toBe(secondHash);
+		expect((adapter.state.messages[0] as any).content[0].text).toBe("cached plus remote changes");
+	});
+
 	it("publishes only the final state from a queued burst", async () => {
 		vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
 		const { adapter } = createAdapter();

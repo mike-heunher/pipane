@@ -178,6 +178,87 @@ describe("WsHandler protocol boundary", () => {
 		]);
 	});
 
+	it("resumes a reconnecting client's cached hash without another full snapshot", () => {
+		const { handler, registry } = makeHandler();
+		const sessionPath = "/tmp/resume.jsonl";
+		const { actor } = attachActor(registry, sessionPath, { id: 99 });
+		actor.session!.applyEvent({
+			type: "message_start",
+			message: { role: "assistant", content: [{ type: "text", text: "history ".repeat(1_000) }] },
+		} as any);
+		const first = makeWs();
+		handler.clients.set(first.ws, {
+			subscribedSession: null,
+			lastVersion: 0,
+			lastJson: "",
+			lastHash: "",
+		});
+		handler.handleSubscribeSession(first.ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "first",
+			type: "subscribe_session",
+			sessionPath,
+		});
+		const baseline = first.sent.find((message) => message.type === "session_sync");
+		expect(baseline.op).toBe("full");
+
+		actor.session!.applyEvent({
+			type: "message_update",
+			message: { role: "assistant", content: [{ type: "text", text: `${"history ".repeat(1_000)}new` }] },
+		} as any);
+		const resumed = makeWs();
+		handler.clients.set(resumed.ws, {
+			subscribedSession: null,
+			lastVersion: 0,
+			lastJson: "",
+			lastHash: "",
+		});
+		handler.handleSubscribeSession(resumed.ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "resumed",
+			type: "subscribe_session",
+			sessionPath,
+			baseHash: baseline.hash,
+		});
+
+		expect(resumed.sent.find((message) => message.type === "session_sync")).toMatchObject({
+			op: "delta",
+			baseHash: baseline.hash,
+			hash: actor.session!.hash,
+		});
+	});
+
+	it("caps attached streaming publication to one update per coalescing window", async () => {
+		vi.useFakeTimers();
+		const { handler, registry } = makeHandler();
+		const sessionPath = "/tmp/live-coalesce.jsonl";
+		const { actor } = attachActor(registry, sessionPath, { id: 100 });
+		const { ws, sent } = makeWs();
+		handler.clients.set(ws, {
+			subscribedSession: sessionPath,
+			lastVersion: actor.session!.version,
+			lastJson: actor.session!.json,
+			lastHash: actor.session!.hash,
+		});
+
+		actor.session!.applyEvent({
+			type: "message_start",
+			message: { role: "assistant", content: [{ type: "text", text: "a" }] },
+		} as any);
+		handler.scheduleLiveSessionSync(sessionPath);
+		actor.session!.applyEvent({
+			type: "message_update",
+			message: { role: "assistant", content: [{ type: "text", text: "ab" }] },
+		} as any);
+		handler.scheduleLiveSessionSync(sessionPath);
+
+		await vi.advanceTimersByTimeAsync(49);
+		expect(sent).toHaveLength(0);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(sent.filter((message) => message.type === "session_sync")).toHaveLength(1);
+		expect(sent[0]).toMatchObject({ type: "session_sync", op: "delta" });
+	});
+
 	it("coalesces detached file bursts and sends only the resulting delta", async () => {
 		vi.useFakeTimers();
 		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-detached-sync-"));

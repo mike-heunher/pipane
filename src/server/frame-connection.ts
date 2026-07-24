@@ -1,4 +1,5 @@
 import type { DataChannel } from "node-datachannel";
+import { gzipSync } from "node:zlib";
 import type { RawData, WebSocket } from "ws";
 import {
 	DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES,
@@ -11,6 +12,8 @@ import {
 
 export const FRAME_CONNECTION_OPEN = 1;
 export const FRAME_CONNECTION_CLOSED = 3;
+
+const compressFrame = (bytes: Uint8Array): Uint8Array => gzipSync(bytes, { level: 3 });
 
 export interface FrameSendOptions {
 	priority?: "control" | "bulk";
@@ -61,7 +64,7 @@ class PrioritizedFrameQueue {
 
 	enqueue(frame: string, options: FrameSendOptions = {}): void {
 		const id = `${this.idPrefix}${(++this.nextFrameId).toString(36)}`;
-		const messages = encodeDataChannelFrame(frame, id).map((value) => ({
+		const messages = encodeDataChannelFrame(frame, id, compressFrame).map((value) => ({
 			value,
 			byteLength: Buffer.byteLength(value),
 		}));

@@ -203,7 +203,9 @@ describe("WebRtcFrameTransport", () => {
 		const largeClientFrame = JSON.stringify({ v: 2, kind: "request", content: "upload data ".repeat(20_000) });
 		transport.send(largeClientFrame);
 		const clientChunks = peer.channel.sent.slice(sentBeforeLargeFrame);
-		expect(clientChunks.length).toBeGreaterThan(1);
+		expect(clientChunks.length).toBeGreaterThanOrEqual(1);
+		expect(clientChunks.reduce((total, chunk) => total + new TextEncoder().encode(chunk).byteLength, 0))
+			.toBeLessThan(new TextEncoder().encode(largeClientFrame).byteLength);
 		expect(clientChunks.every((chunk) => new TextEncoder().encode(chunk).byteLength <= MAX_DATA_CHANNEL_MESSAGE_BYTES)).toBe(true);
 		const decoder = new DataChannelFrameDecoder();
 		let decoded: string | undefined;
@@ -222,6 +224,14 @@ describe("WebRtcFrameTransport", () => {
 				currentRoundTripTimeMs: 12,
 				local: expect.objectContaining({ candidateType: "srflx", address: "203.0.113.10" }),
 				remote: expect.objectContaining({ candidateType: "host", address: "198.51.100.8" }),
+			}),
+			applicationTraffic: expect.objectContaining({
+				reconnects: 0,
+				sent: expect.objectContaining({ logicalFrames: 3, logicalBytes: expect.any(Number) }),
+				received: expect.objectContaining({
+					logicalFrames: 3,
+					logicalBytesByType: expect.objectContaining({ "session_sync.unknown": expect.any(Number) }),
+				}),
 			}),
 			dataChannel: expect.objectContaining({ maxMessageSize: 262_144, messagesSent: 3, bytesReceived: 900 }),
 		}));

@@ -29,6 +29,22 @@ export interface SelectedIcePairDiagnostics {
 	remote?: IceCandidateDiagnostics;
 }
 
+export interface FrameTrafficDirectionDiagnostics {
+	physicalMessages: number;
+	physicalBytes: number;
+	logicalFrames: number;
+	logicalBytes: number;
+	logicalBytesByType: Record<string, number>;
+	logicalFramesByType: Record<string, number>;
+}
+
+export interface FrameTrafficDiagnostics {
+	startedAt: string;
+	reconnects: number;
+	sent: FrameTrafficDirectionDiagnostics;
+	received: FrameTrafficDirectionDiagnostics;
+}
+
 export interface ConnectionDiagnostics {
 	collectedAt: string;
 	carrier: "webrtc";
@@ -44,6 +60,8 @@ export interface ConnectionDiagnostics {
 	iceServerUrls: string[];
 	selectedPair?: SelectedIcePairDiagnostics;
 	candidates: IceCandidateDiagnostics[];
+	/** Pipane payload accounting retained across carrier reconnects. */
+	applicationTraffic: FrameTrafficDiagnostics;
 	dataChannel: {
 		state?: string;
 		label?: string;

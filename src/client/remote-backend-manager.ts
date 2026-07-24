@@ -84,6 +84,6 @@ export class RemoteBackendManager {
 			authorize: () => trustApi.createConnectionTicket(identity, backendId),
 		});
 		const api = new DataChannelBackendApi(transport, backendId);
-		return new WsAgentAdapter({ transport, api });
+		return new WsAgentAdapter({ transport, api, sessionSyncCacheScope: backendId });
 	}
 }

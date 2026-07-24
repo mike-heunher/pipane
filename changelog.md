@@ -1,5 +1,6 @@
 # Unreleased
 
+- Cut remote bandwidth with resumable IndexedDB session caches, bounded server patch journals, gzip carrier frames, capped streaming updates, and per-frame traffic diagnostics.
 - Flush prompts queued during manual compaction instead of dropping them when the compacted session snapshot arrives.
 
 # 0.1.12 - 2026-07-23
