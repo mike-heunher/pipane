@@ -1,5 +1,7 @@
 # Unreleased
 
+- Flush prompts queued during manual compaction instead of dropping them when the compacted session snapshot arrives.
+
 # 0.1.12 - 2026-07-23
 
 - Add one-use ten-minute QR links for inviting another browser to the same pipane.dev backend workspace.

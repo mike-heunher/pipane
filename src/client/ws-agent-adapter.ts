@@ -87,6 +87,14 @@ interface PendingRequest {
 	reject: (error: Error) => void;
 }
 
+interface CompactionQueuedPrompt {
+	text: string;
+	images?: ImageContent[];
+	model: NonNullable<ReturnType<typeof toCompactModelRef>>;
+	thinkingLevel: ThinkingLevelValue;
+	controlRevision: number;
+}
+
 export interface WsAgentAdapterOptions {
 	/** Carrier override for WebRTC and deterministic transport tests. */
 	transport?: FrameTransport;
@@ -127,6 +135,9 @@ export class WsAgentAdapter implements BackendClient {
 	// ── Steering queue (per-session) ───────────────────────────────────────
 	/** Per-session steering queues keyed by session path. */
 	private _steeringQueues = new Map<string, string[]>();
+	/** Prompts accepted locally while manual compaction owns the Pi process. */
+	private _compactionQueues = new Map<string, CompactionQueuedPrompt[]>();
+	private _compactingSessions = new Set<string>();
 	private _steeringQueueListeners = new Set<() => void>();
 	/** Complete extension status snapshot for the current session. */
 	private _extensionStatuses = new Map<string, string>();
@@ -254,7 +265,10 @@ export class WsAgentAdapter implements BackendClient {
 
 	get steeringQueue(): readonly string[] {
 		if (!this._sessionPath) return [];
-		return this._steeringQueues.get(this._sessionPath) ?? [];
+		const steering = this._steeringQueues.get(this._sessionPath) ?? [];
+		const afterCompaction = this._compactionQueues.get(this._sessionPath) ?? [];
+		if (afterCompaction.length === 0) return steering;
+		return [...steering, ...afterCompaction.map((prompt) => prompt.text)];
 	}
 
 	get extensionStatuses(): ReadonlyMap<string, string> {
@@ -352,6 +366,53 @@ export class WsAgentAdapter implements BackendClient {
 		const queue = this._steeringQueues.get(sessionPath) ?? [];
 		this._steeringQueues.set(sessionPath, [...queue, message]);
 		this.emitSteeringQueueChange();
+	}
+
+	private enqueueCompactionPrompt(
+		sessionPath: string,
+		text: string,
+		images: ImageContent[] | undefined,
+	): void {
+		const model = toCompactModelRef(this._state.model);
+		if (!model) throw new Error("BUG: active model has no provider/model ID");
+		const queue = this._compactionQueues.get(sessionPath) ?? [];
+		this._compactionQueues.set(sessionPath, [...queue, {
+			text,
+			images,
+			model,
+			thinkingLevel: this._state.thinkingLevel as ThinkingLevelValue,
+			controlRevision: this._pendingControl?.revision ?? this._controlRevision,
+		}]);
+		this.emitSteeringQueueChange();
+	}
+
+	private flushCompactionQueue(sessionPath: string): void {
+		const queue = this._compactionQueues.get(sessionPath);
+		if (!queue?.length) return;
+
+		this._compactionQueues.delete(sessionPath);
+		this.emitSteeringQueueChange();
+
+		// Send every queued item as a prompt in its original order. The server's
+		// serialized SessionActor starts the first turn and converts later prompt
+		// commands that arrive during startup into steering, matching normal rapid
+		// submissions without trying to steer a process that is still compacting.
+		const submissions = queue.map((prompt) => this.send({
+			type: "prompt",
+			sessionPath,
+			message: prompt.text,
+			model: prompt.model,
+			thinkingLevel: prompt.thinkingLevel,
+			controlRevision: prompt.controlRevision,
+			images: prompt.images,
+		}));
+		void Promise.allSettled(submissions).then((results) => {
+			const failed = queue.filter((_, index) => results[index]?.status === "rejected");
+			if (failed.length === 0) return;
+			const pending = this._compactionQueues.get(sessionPath) ?? [];
+			this._compactionQueues.set(sessionPath, [...failed, ...pending]);
+			this.emitSteeringQueueChange();
+		});
 	}
 
 	onSessionChange(fn: () => void): () => void {
@@ -1052,6 +1113,15 @@ export class WsAgentAdapter implements BackendClient {
 		const handled = await this.handleSlashCommand(text);
 		if (handled) return;
 
+		// Pi disconnects its agent loop while manual compaction runs, so steering
+		// sent now would be accepted by the browser queue but rejected after the
+		// compact command releases the process. Retain the prompt locally and flush
+		// it through the regular prompt path as soon as compaction finishes.
+		if (this._sessionPath && this._compactingSessions.has(this._sessionPath)) {
+			this.enqueueCompactionPrompt(this._sessionPath, text, images);
+			return;
+		}
+
 		const promptStartKey = this._sessionStatus === "virtual"
 			? `virtual:${this._sessionNonce}`
 			: this._sessionPath;
@@ -1318,6 +1388,7 @@ export class WsAgentAdapter implements BackendClient {
 
 		if (trimmed === "/compact" || trimmed.startsWith("/compact ")) {
 			if (!this._sessionPath) return true;
+			const sessionPath = this._sessionPath;
 			const customInstructions = trimmed.startsWith("/compact ") ? trimmed.slice(9).trim() : undefined;
 			// Show a loading indicator while compaction runs (LLM summarization can take a while)
 			const placeholder = {
@@ -1327,12 +1398,16 @@ export class WsAgentAdapter implements BackendClient {
 				timestamp: Date.now(),
 				_compacting: true,
 			} as any;
+			this._compactingSessions.add(sessionPath);
 			this._state.isStreaming = true;
 			this._state.messages = [...this._state.messages, placeholder];
 			this.emitStatusChange();
 			this.emitContentChange();
 			try {
-				await this.send({ type: "compact", sessionPath: this._sessionPath, customInstructions });
+				await this.send({ type: "compact", sessionPath, customInstructions });
+				// Re-subscribe to get fresh messages after compaction when the user is
+				// still viewing this conversation.
+				if (this._sessionPath === sessionPath) await this.subscribeToSession(sessionPath);
 			} catch (error) {
 				// Do not leave an optimistic "compacting…" row spinning forever when
 				// the command fails before an authoritative snapshot replaces it.
@@ -1340,11 +1415,15 @@ export class WsAgentAdapter implements BackendClient {
 				this.emitContentChange();
 				throw error;
 			} finally {
-				this._state.isStreaming = false;
-				this.emitStatusChange();
+				this._compactingSessions.delete(sessionPath);
+				if (this._sessionPath === sessionPath) {
+					this._state.isStreaming = false;
+					this.emitStatusChange();
+				}
+				// A failed compaction also leaves Pi idle, so queued work remains valid
+				// and must not disappear with the detached-session snapshot.
+				this.flushCompactionQueue(sessionPath);
 			}
-			// Re-subscribe to get fresh messages after compaction
-			await this.subscribeToSession(this._sessionPath);
 			return true;
 		}
 
@@ -1396,6 +1475,10 @@ export class WsAgentAdapter implements BackendClient {
 	steer(m: AgentMessage) {
 		const text = this.extractText(m);
 		if (!text || !this._sessionPath) return;
+		if (this._compactingSessions.has(this._sessionPath)) {
+			this.enqueueCompactionPrompt(this._sessionPath, text, undefined);
+			return;
+		}
 		// Only steer if the current session is actually running (not some other session)
 		const isRunning = this._globalSessionStatus.get(this._sessionPath) === "running";
 		if (!isRunning) return;
@@ -1405,7 +1488,19 @@ export class WsAgentAdapter implements BackendClient {
 
 	removeSteering(index: number) {
 		if (!this._sessionPath) return;
-		this.send({ type: "remove_steering", sessionPath: this._sessionPath, index }).catch(console.error);
+		const sessionPath = this._sessionPath;
+		const steeringCount = this._steeringQueues.get(sessionPath)?.length ?? 0;
+		if (index >= steeringCount) {
+			const queue = this._compactionQueues.get(sessionPath) ?? [];
+			const compactionIndex = index - steeringCount;
+			if (compactionIndex < 0 || compactionIndex >= queue.length) return;
+			const next = queue.filter((_, itemIndex) => itemIndex !== compactionIndex);
+			if (next.length > 0) this._compactionQueues.set(sessionPath, next);
+			else this._compactionQueues.delete(sessionPath);
+			this.emitSteeringQueueChange();
+			return;
+		}
+		this.send({ type: "remove_steering", sessionPath, index }).catch(console.error);
 	}
 
 	setModel(m: Model<any>) {

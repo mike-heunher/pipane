@@ -1345,6 +1345,78 @@ describe("WsAgentAdapter prompt routing", () => {
 			}
 		});
 
+		it("flushes prompts queued during compaction instead of losing them to session sync", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
+			const commands: any[] = [];
+			let compactRequest: any;
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				commands.push(command);
+				if (command.type === "compact") {
+					compactRequest = command;
+					return;
+				}
+				simulateServerMessage({
+					type: "response",
+					id: command.id,
+					command: command.type,
+					success: true,
+					data: command.type === "prompt" ? { newSessionPath: sessionPath } : {},
+				});
+			});
+
+			const compacting = adapter.prompt("/compact");
+			await vi.waitFor(() => expect(compactRequest?.type).toBe("compact"));
+
+			await adapter.prompt("first task after compaction");
+			await adapter.prompt("second task after compaction");
+			expect(commands.filter((command) => command.type === "prompt")).toHaveLength(0);
+			expect(adapter.steeringQueue).toEqual([
+				"first task after compaction",
+				"second task after compaction",
+			]);
+
+			// The detached-session snapshot used to erase these optimistic items.
+			await pushSessionState(adapter, { steeringQueue: [] }, sessionPath);
+			expect(adapter.steeringQueue).toEqual([
+				"first task after compaction",
+				"second task after compaction",
+			]);
+
+			// Local queue removal must work before anything has reached Pi.
+			adapter.removeSteering(0);
+			await adapter.prompt("third task after compaction");
+			expect(adapter.steeringQueue).toEqual([
+				"second task after compaction",
+				"third task after compaction",
+			]);
+			expect(commands.filter((command) => command.type === "remove_steering")).toHaveLength(0);
+
+			simulateServerMessage({ type: "session_status_change", sessionPath, status: "done" });
+			simulateServerMessage({
+				type: "response",
+				id: compactRequest.id,
+				command: "compact",
+				success: true,
+				data: {},
+			});
+			await compacting;
+
+			await vi.waitFor(() => expect(commands.filter((command) => command.type === "prompt"))
+				.toEqual([
+					expect.objectContaining({
+						sessionPath,
+						message: "second task after compaction",
+					}),
+					expect.objectContaining({
+						sessionPath,
+						message: "third task after compaction",
+					}),
+				]));
+			expect(adapter.steeringQueue).toEqual([]);
+		});
+
 		it("removes the optimistic compaction row when /compact fails", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
