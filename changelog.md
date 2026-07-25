@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.13 - 2026-07-25
+
 - Disable the remote bandwidth optimization stack after its session-sync serialization exhausted the backend heap and terminated active sessions.
 - Run production deployments in a detached systemd unit so restarting Pipane cannot terminate its own deployment.
 - Flush prompts queued during manual compaction instead of dropping them when the compacted session snapshot arrives.
