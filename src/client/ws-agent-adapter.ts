@@ -14,7 +14,7 @@
 
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { applySyncOps, computeHash, type SyncOp } from "../shared/jsonl-sync.js";
+import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
 import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
@@ -52,12 +52,6 @@ import {
 	WebSocketFrameTransport,
 	type WebSocketLike,
 } from "./websocket-frame-transport.js";
-import {
-	BrowserSessionSyncCache,
-	MemorySessionSyncCache,
-	type SessionSyncCache,
-	type SessionSyncCacheRecord,
-} from "./session-sync-cache.js";
 
 export type {
 	BackendClientState as AdapterState,
@@ -85,8 +79,6 @@ type SessionSyncChanges = {
 type ScopedSessionSync = SessionSyncMessage & {
 	__sessionPath: string;
 	__sessionNonce: number;
-	/** First delta accepted against a cached baseline; resets server revision scope. */
-	__resuming?: boolean;
 };
 
 interface PendingRequest {
@@ -113,17 +105,12 @@ export interface WsAgentAdapterOptions {
 	api?: BackendApi;
 	fetch?: typeof globalThis.fetch;
 	requestFrame?: (callback: FrameRequestCallback) => number;
-	/** Persistent baseline override; false keeps only this adapter's memory cache. */
-	sessionSyncCache?: SessionSyncCache | false;
-	/** Separates identical session paths belonging to different remote backends. */
-	sessionSyncCacheScope?: string;
 }
 
 export class WsAgentAdapter implements BackendClient {
 	private readonly transport: FrameTransport;
 	private readonly api: BackendApi;
 	private readonly requestFrame: (callback: FrameRequestCallback) => number;
-	private readonly sessionSyncCache: SessionSyncCache;
 	private sessionsChangedListeners = new Set<(file: string) => void>();
 	private piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
 	private pendingRequests = new Map<string, PendingRequest>();
@@ -247,9 +234,6 @@ export class WsAgentAdapter implements BackendClient {
 		});
 		this.api = options.api ?? new HttpBackendApi({ fetch: options.fetch });
 		this.requestFrame = options.requestFrame ?? ((callback) => requestAnimationFrame(callback));
-		this.sessionSyncCache = options.sessionSyncCache === false
-			? new MemorySessionSyncCache()
-			: options.sessionSyncCache ?? new BrowserSessionSyncCache(options.sessionSyncCacheScope ?? "local");
 		this.transport.onFrame((frame) => this.handleMessage(frame));
 		this.transport.onConnectionChange((event) => this.handleTransportConnectionChange(event.connected, event.reconnected));
 	}
@@ -498,8 +482,8 @@ export class WsAgentAdapter implements BackendClient {
 	async connect(endpoint: string): Promise<void> {
 		await this.transport.connect(endpoint);
 
-		// Reliable carriers keep state current while hidden; focus refreshes only
-		// compact runtime statuses and repairs stale streaming chrome if needed.
+		// When the tab regains focus, sync state in case events were missed
+		// or updates didn't render while backgrounded.
 		document.addEventListener("visibilitychange", () => {
 			if (document.visibilityState === "visible") {
 				this.syncStateOnFocus();
@@ -522,7 +506,7 @@ export class WsAgentAdapter implements BackendClient {
 			return;
 		}
 		if (this._sessionPath && this._sessionStatus !== "virtual") {
-			await this.requestSessionSync(this._sessionPath);
+			await this.requestFullSessionSync(this._sessionPath);
 		}
 	}
 
@@ -556,23 +540,32 @@ export class WsAgentAdapter implements BackendClient {
 		}
 	}
 
-	/** Resume the current cached hash after a successful carrier reconnect. */
+	/**
+	 * Called after a successful reconnect. Re-subscribes to the current
+	 * session and refreshes session statuses so the UI is up-to-date.
+	 */
 	private async onReconnected() {
+		// Re-subscribe to the current session to get fresh state
 		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
 			// A request associated with the old socket can never complete here.
 			this._awaitingFullSync = undefined;
-			void this.requestSessionSync(this._sessionPath);
+			void this.requestFullSessionSync(this._sessionPath);
 		}
 		this.refreshSessionStatuses();
 	}
 
 	/**
-	 * Reliable ordered carriers keep receiving while a tab is hidden. Focus only
-	 * refreshes compact status metadata; re-subscribing here used to retransmit a
-	 * complete multi-megabyte conversation on every app/tab switch.
+	 * Called when the tab regains visibility. Syncs session statuses and
+	 * re-subscribes to the current session to get authoritative state
+	 * from the server (in case WS messages were missed while backgrounded).
 	 */
 	private async syncStateOnFocus() {
 		this.refreshSessionStatuses();
+
+		// Re-subscribe to get fresh messages from the server
+		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
+			this.subscribeToSession(this._sessionPath);
+		}
 
 		if (this._sessionStatus === "detached" && this._state.isStreaming) {
 			// Session is detached (server says turn is done) but we still
@@ -596,34 +589,27 @@ export class WsAgentAdapter implements BackendClient {
 		}
 	}
 
-	/** Tell the server which session and verified cache baseline we want. */
-	private async subscribeToSession(sessionPath: string | undefined, baseHash?: string) {
+	/** Tell the server we want to receive messages for this session. */
+	private async subscribeToSession(sessionPath: string | undefined) {
 		try {
-			await this.send({
-				type: "subscribe_session",
-				sessionPath: sessionPath ?? "",
-				...(sessionPath && baseHash ? { baseHash } : {}),
-			});
+			await this.send({ type: "subscribe_session", sessionPath: sessionPath ?? "" });
 		} catch (err) {
 			console.error("Failed to subscribe to session:", err);
 		}
 	}
 
-	/** Request one authoritative sync, resuming from cache unless recovery forced a full. */
-	private async requestSessionSync(sessionPath: string, forceFull = false): Promise<void> {
+	/** Reset the sync base and request exactly one authoritative full snapshot. */
+	private async requestFullSessionSync(sessionPath: string): Promise<void> {
 		const scope = { sessionPath, sessionNonce: this._sessionNonce };
 		if (this._awaitingFullSync?.sessionPath === scope.sessionPath
 			&& this._awaitingFullSync.sessionNonce === scope.sessionNonce) return;
 
 		this._awaitingFullSync = scope;
-		if (forceFull) {
-			this._syncJson = "";
-			this._syncHash = "";
-			this._syncRevision = undefined;
-			this.sessionSyncCache.delete(sessionPath);
-		}
+		this._syncJson = "";
+		this._syncHash = "";
+		this._syncRevision = undefined;
 		this.clearSessionSyncQueue();
-		await this.subscribeToSession(sessionPath, this._syncHash || undefined);
+		await this.subscribeToSession(sessionPath);
 	}
 
 	private handleProtocolError(error: ProtocolDecodeError): void {
@@ -730,7 +716,7 @@ export class WsAgentAdapter implements BackendClient {
 					}
 					this._sessionStatus = "attached";
 					this._state.isStreaming = true;
-					void this.requestSessionSync(data.sessionPath);
+					void this.requestFullSessionSync(data.sessionPath);
 					this.emitStatusChange();
 				}
 				if (!this._optimisticSessions.has(data.sessionPath)) {
@@ -772,14 +758,10 @@ export class WsAgentAdapter implements BackendClient {
 		if (syncMsg.op === "full") {
 			if (awaitingThisScope) this._awaitingFullSync = undefined;
 			this._pendingSessionSyncs = [syncMsg];
-		} else if (awaitingThisScope) {
-			// A reconnect/session switch may establish a new server revision scope
-			// directly from our verified cached hash. Older in-flight deltas have a
-			// different base and remain unusable.
-			if (!this._syncHash || syncMsg.baseHash !== this._syncHash) return;
-			this._awaitingFullSync = undefined;
-			this._pendingSessionSyncs = [{ ...syncMsg, __resuming: true }];
 		} else {
+			// Deltas already in flight before the server processes our recovery
+			// subscription have no usable base. Drop them without requesting again.
+			if (awaitingThisScope) return;
 			this._pendingSessionSyncs.push(syncMsg);
 		}
 		if (this._sessionSyncFlushScheduled || this._sessionSyncFlushInProgress) return;
@@ -835,7 +817,7 @@ export class WsAgentAdapter implements BackendClient {
 
 		let nextRevision = this._syncRevision;
 		for (const message of syncMessages) {
-			if (message.op === "full" || message.__resuming) {
+			if (message.op === "full") {
 				nextRevision = message.revision;
 				continue;
 			}
@@ -844,7 +826,7 @@ export class WsAgentAdapter implements BackendClient {
 					expected: nextRevision === undefined ? "full snapshot" : nextRevision + 1,
 					actual: message.revision,
 				});
-				void this.requestSessionSync(syncSessionPath, true);
+				void this.requestFullSessionSync(syncSessionPath);
 				return;
 			}
 			nextRevision = message.revision;
@@ -872,7 +854,7 @@ export class WsAgentAdapter implements BackendClient {
 		if (!result) {
 			// Hash verification failed — request a full sync by re-subscribing.
 			console.error("[ws-adapter] Sync verification failed, re-subscribing");
-			void this.requestSessionSync(syncSessionPath, true);
+			void this.requestFullSessionSync(syncSessionPath);
 			return;
 		}
 
@@ -888,12 +870,6 @@ export class WsAgentAdapter implements BackendClient {
 		this._syncJson = result.data;
 		this._syncHash = result.hash;
 		this._syncRevision = nextRevision;
-		this.sessionSyncCache.set(syncSessionPath, {
-			json: result.data,
-			hash: result.hash,
-			revision: nextRevision ?? 0,
-			updatedAt: Date.now(),
-		});
 
 		const previousStreaming = this._state.isStreaming;
 		const previousSessionStatus = this._sessionStatus;
@@ -929,42 +905,6 @@ export class WsAgentAdapter implements BackendClient {
 		};
 	}
 
-
-	private async restoreCachedSession(
-		sessionPath: string,
-		sessionNonce: number,
-	): Promise<boolean> {
-		let cached: SessionSyncCacheRecord | undefined;
-		try {
-			cached = await this.sessionSyncCache.get(sessionPath);
-		} catch {
-			return false;
-		}
-		if (!cached || sessionPath !== this._sessionPath || sessionNonce !== this._sessionNonce) return false;
-		if (await computeHash(cached.json) !== cached.hash) {
-			this.sessionSyncCache.delete(sessionPath);
-			return false;
-		}
-		const decoded = decodeSessionStateJson(cached.json);
-		if (!decoded.ok) {
-			this.sessionSyncCache.delete(sessionPath);
-			return false;
-		}
-
-		const state = decoded.value;
-		this._syncJson = cached.json;
-		this._syncHash = cached.hash;
-		this._syncRevision = cached.revision;
-		this._state.messages = [...state.messages];
-		this._state.isStreaming = state.isStreaming;
-		this._pendingToolCallIds = new Set(state.pendingToolCalls);
-		this._toolCallTimings = state.toolCallTimings;
-		this.applyAuthoritativeControlState(state.model, state.thinkingLevel);
-		if (state.steeringQueue.length > 0) this._steeringQueues.set(sessionPath, [...state.steeringQueue]);
-		else this._steeringQueues.delete(sessionPath);
-		this._state.error = state.error || undefined;
-		return true;
-	}
 
 	private send<Payload extends ClientCommandPayload>(
 		command: Payload,
@@ -1257,7 +1197,7 @@ export class WsAgentAdapter implements BackendClient {
 					const parts = filename.split("_");
 					this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 					this._sessionStatus = "attached";
-					void this.requestSessionSync(newSessionPath);
+					void this.requestFullSessionSync(newSessionPath);
 					this.emitSessionChange();
 					this.emitStatusChange();
 				}
@@ -1467,7 +1407,7 @@ export class WsAgentAdapter implements BackendClient {
 				await this.send({ type: "compact", sessionPath, customInstructions });
 				// Re-subscribe to get fresh messages after compaction when the user is
 				// still viewing this conversation.
-				if (this._sessionPath === sessionPath) await this.requestSessionSync(sessionPath);
+				if (this._sessionPath === sessionPath) await this.subscribeToSession(sessionPath);
 			} catch (error) {
 				// Do not leave an optimistic "compacting…" row spinning forever when
 				// the command fails before an authoritative snapshot replaces it.
@@ -1759,7 +1699,6 @@ export class WsAgentAdapter implements BackendClient {
 
 	async deleteSession(sessionPath: string): Promise<void> {
 		await this.api.deleteSession(sessionPath);
-		this.sessionSyncCache.delete(sessionPath);
 	}
 
 	/** Switch to an existing session (load messages from server cache) */
@@ -1784,17 +1723,12 @@ export class WsAgentAdapter implements BackendClient {
 		this._state.isStreaming = false;
 		this._pendingToolCallIds.clear();
 		this._toolCallTimings = {};
-		this._syncJson = "";
-		this._syncHash = "";
-		this._syncRevision = undefined;
 		this._awaitingFullSync = undefined;
 		this._state.error = undefined;
 
-		await this.restoreCachedSession(sessionPath, nonce);
-		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
-		// Subscribe with any verified browser baseline; the server resumes it or
-		// safely falls back to a compressed full state.
-		await this.requestSessionSync(sessionPath);
+		// Subscribe to this session on the server — it will push session_sync
+		// with the full state.
+		await this.requestFullSessionSync(sessionPath);
 		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
 
 		// If the session is currently running on the server, restore streaming state

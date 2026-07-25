@@ -7,7 +7,6 @@ import type {
 	SelectedIcePairDiagnostics,
 } from "./frame-transport.js";
 import { BrowserRendezvousClient } from "./browser-rendezvous-client.js";
-import { FrameTrafficMeter } from "./frame-traffic.js";
 import {
 	signDeviceConnection,
 	verifyBrowserBackendBinding,
@@ -59,7 +58,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
 	private readonly decoder = new DataChannelFrameDecoder();
-	private readonly traffic = new FrameTrafficMeter();
 	private readonly outgoing: Array<{ message: string; byteLength: number }> = [];
 	private peer: RTCPeerConnection | undefined;
 	private channel: RTCDataChannel | undefined;
@@ -185,24 +183,19 @@ export class WebRtcFrameTransport implements FrameTransport {
 			channel.onopen = () => {
 				void signDeviceConnection(this.deviceIdentity, authorization.ticket, binding?.signature ?? "").then((deviceSignature) => {
 					if (!binding) throw new Error("Backend identity binding is missing");
-					const frame = JSON.stringify({
+					channel.send(JSON.stringify({
 						protocolVersion: TRUST_PROTOCOL_VERSION,
 						type: "authenticate",
 						ticket: authorization.ticket,
 						bindingSignature: binding.signature,
 						deviceSignature,
 						pairingSecret: authorization.pairingSecret,
-					});
-					channel.send(frame);
-					this.traffic.recordLogical("sent", frame);
-					this.traffic.recordPhysical("sent", frame);
+					}));
 				}).catch(fail);
 			};
 			channel.onmessage = (event) => {
-				this.traffic.recordPhysical("received", event.data);
 				const frame = String(event.data);
 				if (!this.connected) {
-					this.traffic.recordLogical("received", frame);
 					let result: any;
 					try {
 						result = JSON.parse(frame);
@@ -221,7 +214,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 					this.connected = true;
 					this.reconnectAttempt = 0;
 					settled = true;
-					if (this.everConnected) this.traffic.recordReconnect();
 					this.emitConnectionChange({ connected: true, reconnected: this.everConnected });
 					this.everConnected = true;
 					resolve();
@@ -230,7 +222,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 				try {
 					const decoded = this.decoder.accept(frame);
 					if (decoded === undefined) return;
-					this.traffic.recordLogical("received", decoded);
 					for (const listener of this.frameListeners) listener(decoded);
 				} catch {
 					this.handleDisconnected();
@@ -285,7 +276,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 		}
 		this.outgoing.push(...additions);
 		this.queuedBytes += addedBytes;
-		this.traffic.recordLogical("sent", frame);
 		this.flushOutgoing();
 	}
 
@@ -331,7 +321,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 			iceServerUrls: [...this.iceServerUrls],
 			...(selectedPair ? { selectedPair } : {}),
 			candidates,
-			applicationTraffic: this.traffic.snapshot(),
 			dataChannel: {
 				state: channel?.readyState,
 				label: channel?.label,
@@ -378,7 +367,6 @@ export class WebRtcFrameTransport implements FrameTransport {
 			while (this.outgoing.length > 0 && channel.bufferedAmount < DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES) {
 				const next = this.outgoing[0];
 				channel.send(next.message);
-				this.traffic.recordPhysical("sent", next.message);
 				this.outgoing.shift();
 				this.queuedBytes -= next.byteLength;
 			}

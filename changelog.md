@@ -1,7 +1,7 @@
 # Unreleased
 
+- Disable the remote bandwidth optimization stack after its session-sync serialization exhausted the backend heap and terminated active sessions.
 - Run production deployments in a detached systemd unit so restarting Pipane cannot terminate its own deployment.
-- Cut remote bandwidth with resumable IndexedDB session caches, bounded server patch journals, gzip carrier frames, capped streaming updates, and per-frame traffic diagnostics.
 - Flush prompts queued during manual compaction instead of dropping them when the compacted session snapshot arrives.
 
 # 0.1.12 - 2026-07-23

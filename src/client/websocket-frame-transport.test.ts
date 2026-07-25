@@ -38,18 +38,6 @@ class FakeSocket {
 	}
 }
 
-function noisyText(length: number, seed = 0x12345678): string {
-	let state = seed;
-	let value = "";
-	for (let index = 0; index < length; index++) {
-		state ^= state << 13;
-		state ^= state >>> 17;
-		state ^= state << 5;
-		value += String.fromCharCode(32 + ((state >>> 0) % 95));
-	}
-	return value;
-}
-
 function socketFactory() {
 	const sockets: FakeSocket[] = [];
 	const createWebSocket = vi.fn(() => {
@@ -96,11 +84,11 @@ describe("WebSocketFrameTransport", () => {
 		sockets[0].open();
 		await connecting;
 
-		const stale = encodeDataChannelFrame(noisyText(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES * 4, 1), "stale");
+		const stale = encodeDataChannelFrame("s".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "stale");
 		sockets[0].receive(stale[0]);
 		sockets[0].receive(encodeDataChannelFrameCancellation("stale"));
 		sockets[0].receive("control");
-		const replacementText = noisyText(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES * 4, 2);
+		const replacementText = "r".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1);
 		for (const chunk of encodeDataChannelFrame(replacementText, "replacement")) sockets[0].receive(chunk);
 
 		expect(frames).toEqual(["control", replacementText]);

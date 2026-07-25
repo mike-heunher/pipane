@@ -15,7 +15,6 @@ import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.j
 import type { FrameTransport } from "./frame-transport.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
-import { MemorySessionSyncCache } from "./session-sync-cache.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -23,7 +22,7 @@ import { MemorySessionSyncCache } from "./session-sync-cache.js";
  * Create an adapter with a mocked WebSocket. Returns the adapter and a
  * spy that captures all messages sent over the WS.
  */
-function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessionSyncCache"> = {}) {
+function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 	const sent: any[] = [];
 	let messageHandler: ((ev: { data: string }) => void) | null = null;
 
@@ -96,7 +95,6 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessi
 
 	const adapter = new WsAgentAdapter({
 		socket: mockWs as any,
-		sessionSyncCache: options.sessionSyncCache ?? false,
 		fetch: options.fetch ?? (async (input) => {
 			throw new Error(`Unexpected adapter HTTP request: ${String(input)}`);
 		}),
@@ -217,41 +215,6 @@ describe("WsAgentAdapter transport injection", () => {
 			result: [],
 		});
 		expect(adapter.state.error).toBeUndefined();
-	});
-});
-
-describe("WsAgentAdapter resumable session sync", () => {
-	it("restores a cached conversation and advertises its hash when switching sessions", async () => {
-		const sessionPath = "/tmp/sessions/cached.jsonl";
-		const json = JSON.stringify({
-			messages: [{ role: "user", content: "cached conversation" }],
-			isStreaming: false,
-			pendingToolCalls: [],
-			toolCallTimings: {},
-			model: { provider: "anthropic", modelId: "cached-model" },
-			thinkingLevel: "high",
-			steeringQueue: [],
-		});
-		const hash = await computeHash(json);
-		const cache = new MemorySessionSyncCache();
-		cache.set(sessionPath, { json, hash, revision: 17, updatedAt: Date.now() });
-		const { adapter, sent } = createTestAdapter({ sessionSyncCache: cache });
-
-		await adapter.switchSession(sessionPath, "/tmp");
-
-		expect((adapter.state.messages[0] as any).content).toBe("cached conversation");
-		expect(sent.find((message) => message.type === "subscribe_session")).toMatchObject({
-			sessionPath,
-			baseHash: hash,
-		});
-	});
-
-	it("does not retransmit a conversation when a hidden tab becomes visible", async () => {
-		const sessionPath = "/tmp/sessions/focus.jsonl";
-		const { adapter, sent } = setupWithSession(sessionPath);
-		await (adapter as any).syncStateOnFocus();
-		expect(sent.filter((message) => message.type === "get_session_statuses")).toHaveLength(1);
-		expect(sent.filter((message) => message.type === "subscribe_session")).toHaveLength(0);
 	});
 });
 

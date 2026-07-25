@@ -43,26 +43,6 @@ const diagnostics: ConnectionDiagnostics = {
 		},
 	},
 	candidates: [],
-	applicationTraffic: {
-		startedAt: "2026-07-22T17:59:00.000Z",
-		reconnects: 1,
-		sent: {
-			physicalMessages: 5,
-			physicalBytes: 2_048,
-			logicalFrames: 4,
-			logicalBytes: 1_500,
-			logicalBytesByType: { "subscribe_session": 200 },
-			logicalFramesByType: { "subscribe_session": 1 },
-		},
-		received: {
-			physicalMessages: 20,
-			physicalBytes: 16_384,
-			logicalFrames: 8,
-			logicalBytes: 65_536,
-			logicalBytesByType: { "session_sync.delta": 50_000 },
-			logicalFramesByType: { "session_sync.delta": 6 },
-		},
-	},
 	dataChannel: {
 		state: "open",
 		label: "pipane",
@@ -101,8 +81,6 @@ describe("connection diagnostics dialog", () => {
 		expect(text).toContain("203.0.113.4:51234");
 		expect(text).toContain("18 ms");
 		expect(text).toContain("256.0 KiB");
-		expect(text).toContain("Pipane traffic");
-		expect(text).toContain("session_sync.delta");
 
 		const copy = [...document.querySelectorAll("button")].find((item) => item.textContent === "Copy") as HTMLButtonElement;
 		copy.click();

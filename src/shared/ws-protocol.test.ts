@@ -27,7 +27,7 @@ const sessionStats = {
 
 const clientCommands = [
 	{ type: "install_pi" },
-	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl", baseHash: "a".repeat(64) },
+	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl" },
 	{ type: "prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2 },
 	{ type: "steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
 	{ type: "remove_steering", sessionPath: "/sessions/a.jsonl", index: 0 },
@@ -95,8 +95,6 @@ describe("WebSocket protocol contract", () => {
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("$command.model") } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "get_session_stats" })))
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("sessionPath") } });
-		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "subscribe_session", sessionPath: "x", baseHash: "bad" })))
-			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("baseHash") } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, protocolVersion: 999, type: "abort", sessionPath: "x" })))
 			.toMatchObject({ ok: false, error: { code: "unsupported_version", requestId: "req-1" } });
 	});

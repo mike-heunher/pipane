@@ -14,18 +14,6 @@ import {
 	WebSocketFrameConnection,
 } from "./frame-connection.js";
 
-function noisyText(length: number, seed = 0x12345678): string {
-	let state = seed;
-	let value = "";
-	for (let index = 0; index < length; index++) {
-		state ^= state << 13;
-		state ^= state >>> 17;
-		state ^= state << 5;
-		value += String.fromCharCode(32 + ((state >>> 0) % 95));
-	}
-	return value;
-}
-
 function fakeChannel() {
 	let messageListener: ((message: string | Buffer | ArrayBuffer) => void) | undefined;
 	let closedListener: (() => void) | undefined;
@@ -92,7 +80,7 @@ describe("DataChannelFrameConnection", () => {
 		const incoming = new DataChannelFrameConnection(receiver.channel);
 		const message = vi.fn();
 		incoming.on("message", message);
-		const largeFrame = JSON.stringify({ type: "session_sync", content: noisyText(80_000) });
+		const largeFrame = JSON.stringify({ type: "session_sync", content: "🙂 large history ".repeat(20_000) });
 
 		outgoing.send(largeFrame);
 		const chunks = sender.sendMessage.mock.calls.map(([chunk]) => chunk);
@@ -110,7 +98,7 @@ describe("DataChannelFrameConnection", () => {
 		const incoming = new DataChannelFrameConnection(receiver.channel);
 		const message = vi.fn();
 		incoming.on("message", message);
-		const largeFrame = JSON.stringify({ type: "session_sync", content: noisyText(80_000) });
+		const largeFrame = JSON.stringify({ type: "session_sync", content: "buffered history ".repeat(20_000) });
 
 		sender.bufferSend();
 		outgoing.send(largeFrame);
@@ -141,8 +129,8 @@ describe("DataChannelFrameConnection", () => {
 		const incoming = new DataChannelFrameConnection(receiver.channel);
 		const frames: string[] = [];
 		incoming.on("message", (frame) => frames.push(frame.toString()));
-		const stale = noisyText(80_000, 1);
-		const replacement = noisyText(80_000, 2);
+		const stale = "stale ".repeat(20_000);
+		const replacement = "replacement ".repeat(20_000);
 
 		sender.blockAfterSend();
 		outgoing.send(stale, { priority: "bulk", transferKey: "session" });
@@ -184,8 +172,8 @@ describe("DataChannelFrameConnection", () => {
 			},
 		};
 		const connection = new WebSocketFrameConnection(socket as any);
-		const stale = noisyText(80_000, 3);
-		const replacement = noisyText(80_000, 4);
+		const stale = "stale ".repeat(20_000);
+		const replacement = "replacement ".repeat(20_000);
 
 		connection.send(stale, { priority: "bulk", transferKey: "session" });
 		expect(sent).toHaveLength(1);

@@ -162,23 +162,6 @@ function renderDiagnostics(diagnostics: ConnectionDiagnostics): DocumentFragment
 	]));
 	fragment.append(channel);
 
-	const traffic = section("Pipane traffic");
-	const measuredForMs = Math.max(0, Date.now() - new Date(diagnostics.applicationTraffic.startedAt).getTime());
-	const sent = diagnostics.applicationTraffic.sent;
-	const received = diagnostics.applicationTraffic.received;
-	traffic.append(factGrid([
-		["Measured for", formatElapsed(measuredForMs)],
-		["Reconnects", formatNumber(diagnostics.applicationTraffic.reconnects)],
-		["Logical payload", `${formatBytes(sent.logicalBytes)} sent · ${formatBytes(received.logicalBytes)} received`],
-		["Carrier payload", `${formatBytes(sent.physicalBytes)} sent · ${formatBytes(received.physicalBytes)} received`],
-		["Received carrier / logical", formatTrafficRatio(received.physicalBytes, received.logicalBytes), "Below 100% means gzip saved payload bytes; this excludes IP, ICE, DTLS, and retransmission overhead."],
-		["Logical frames", `${formatNumber(sent.logicalFrames)} sent · ${formatNumber(received.logicalFrames)} received`],
-		["Physical messages", `${formatNumber(sent.physicalMessages)} sent · ${formatNumber(received.physicalMessages)} received`],
-	]));
-	const breakdown = renderTrafficBreakdown(diagnostics.applicationTraffic.received.logicalBytesByType);
-	if (breakdown) traffic.append(breakdown);
-	fragment.append(traffic);
-
 	const candidates = section(`ICE candidates (${diagnostics.candidates.length})`);
 	if (diagnostics.candidates.length > 0) {
 		const list = element("div", "connection-diagnostics-candidates");
@@ -195,22 +178,6 @@ function renderDiagnostics(diagnostics: ConnectionDiagnostics): DocumentFragment
 	raw.append(element("pre", "", JSON.stringify(diagnostics, null, 2)));
 	fragment.append(raw);
 	return fragment;
-}
-
-function renderTrafficBreakdown(bytesByType: Record<string, number>): HTMLElement | undefined {
-	const rows = Object.entries(bytesByType).sort((left, right) => right[1] - left[1]);
-	if (rows.length === 0) return undefined;
-	const details = document.createElement("details");
-	details.className = "connection-diagnostics-raw";
-	details.append(element("summary", "", "Received logical bytes by frame type"));
-	const list = element("dl", "connection-diagnostics-grid");
-	for (const [type, bytes] of rows) {
-		const item = element("div", "connection-diagnostics-fact");
-		item.append(element("dt", "", type), element("dd", "", formatBytes(bytes)));
-		list.append(item);
-	}
-	details.append(list);
-	return details;
 }
 
 function candidateCard(candidate: IceCandidateDiagnostics, diagnostics: ConnectionDiagnostics): HTMLElement {
@@ -306,20 +273,6 @@ function formatBitrate(value: number | undefined): string {
 	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} Mbps`;
 	if (value >= 1_000) return `${(value / 1_000).toFixed(0)} Kbps`;
 	return `${value.toFixed(0)} bps`;
-}
-
-function formatTrafficRatio(physicalBytes: number, logicalBytes: number): string {
-	if (logicalBytes === 0) return "not enough data";
-	return `${((physicalBytes / logicalBytes) * 100).toFixed(1)}%`;
-}
-
-function formatElapsed(valueMs: number): string {
-	const seconds = Math.round(valueMs / 1_000);
-	if (seconds < 60) return `${seconds}s`;
-	const minutes = Math.floor(seconds / 60);
-	if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-	const hours = Math.floor(minutes / 60);
-	return `${hours}h ${minutes % 60}m`;
 }
 
 function formatBytes(value: number | undefined): string {
