@@ -1,5 +1,5 @@
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
-import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "./components/MarkdownBlock.js";
 import { html } from "lit";
 import { Check, ChevronRight, Loader, Shrink } from "lucide";
 import { linkifyPreviewableInlineCode } from "../file-preview-panel.js";

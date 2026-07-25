@@ -16,7 +16,7 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
-import { COMPACT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
+import { COMPACT_CLIENT_TIMEOUT_MS, PROMPT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import type { UpdateTarget } from "../shared/updates.js";
 import {
@@ -62,6 +62,10 @@ export type {
 export type AdapterSocket = WebSocketLike;
 
 const PROVIDER_USAGE_STATUS_KEY = "provider-usage";
+
+function isMissingSessionError(error: unknown): boolean {
+	return (error instanceof Error ? error.message : String(error)).includes("Session file not found");
+}
 
 function usageProviderForModel(model: any): string | undefined {
 	const provider = typeof model?.provider === "string" ? model.provider.toLowerCase() : "";
@@ -591,9 +595,19 @@ export class WsAgentAdapter implements BackendClient {
 
 	/** Tell the server we want to receive messages for this session. */
 	private async subscribeToSession(sessionPath: string | undefined) {
+		const nonce = this._sessionNonce;
 		try {
 			await this.send({ type: "subscribe_session", sessionPath: sessionPath ?? "" });
 		} catch (err) {
+			// A delayed subscription can race with navigation or deletion. Its
+			// failure is irrelevant once another conversation owns the adapter.
+			if (nonce !== this._sessionNonce || (sessionPath && sessionPath !== this._sessionPath)) return;
+			if (sessionPath && isMissingSessionError(err)) {
+				this._optimisticSessions.delete(sessionPath);
+				await this.newSession(this._pendingCwd);
+				for (const listener of this.sessionsChangedListeners) listener(sessionPath);
+				return;
+			}
 			console.error("Failed to subscribe to session:", err);
 		}
 	}
@@ -650,8 +664,10 @@ export class WsAgentAdapter implements BackendClient {
 				if (data.success) {
 					pending.resolve(data.data);
 				} else {
-					this._state.error = data.error;
-					this.emitStatusChange();
+					if (pending.command !== "subscribe_session") {
+						this._state.error = data.error;
+						this.emitStatusChange();
+					}
 					pending.reject(new Error(data.error));
 				}
 				return;
@@ -918,7 +934,7 @@ export class WsAgentAdapter implements BackendClient {
 			const timeoutMs = command.type === "compact"
 				? COMPACT_CLIENT_TIMEOUT_MS
 				: command.type === "prompt" || command.type === "fork_prompt"
-					? 90000
+					? PROMPT_CLIENT_TIMEOUT_MS
 					: 30000;
 			const timeout = setTimeout(() => {
 				this.pendingRequests.delete(id);
@@ -1186,8 +1202,7 @@ export class WsAgentAdapter implements BackendClient {
 					images,
 				});
 				if (this._sessionNonce !== nonce) {
-					// User navigated away during the prompt — discard stale response
-					console.log("[ws-adapter] Discarding stale prompt response (session changed during await)");
+					// User navigated away during the prompt — discard the stale response.
 					return;
 				}
 				const newSessionPath = res?.newSessionPath;
@@ -1698,7 +1713,13 @@ export class WsAgentAdapter implements BackendClient {
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		await this.api.deleteSession(sessionPath);
+		try {
+			await this.api.deleteSession(sessionPath);
+		} catch (error) {
+			// Deletion is idempotent: another tab or a stale sidebar can win the race.
+			if (!isMissingSessionError(error)) throw error;
+		}
+		this._optimisticSessions.delete(sessionPath);
 	}
 
 	/** Switch to an existing session (load messages from server cache) */

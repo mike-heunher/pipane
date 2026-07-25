@@ -7,7 +7,7 @@ import type {
 	UserMessage as UserMessageType,
 } from "@earendil-works/pi-ai";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
-import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "./MarkdownBlock.js";
 import { html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { ToolCallTiming, ToolCallTimings } from "../../../shared/tool-runtime.js";

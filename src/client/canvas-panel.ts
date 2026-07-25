@@ -7,7 +7,7 @@
  * The user can close the panel with the ✕ button.
  */
 
-import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "./ui/components/MarkdownBlock.js";
 import { html, render } from "lit";
 
 let canvasTitle = "Canvas";

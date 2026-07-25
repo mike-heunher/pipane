@@ -342,6 +342,46 @@ describe("WsHandler actor orchestration", () => {
 		});
 	});
 
+	it("waits through a slow remote model-catalog refresh", async () => {
+		let stateCalls = 0;
+		let setModelCalls = 0;
+		const sendRpcChecked = vi.fn(async (_proc: any, command: any) => {
+			if (command.type === "get_state") {
+				stateCalls += 1;
+				return {
+					success: true,
+					data: {
+						model: stateCalls === 1
+							? { provider: "anthropic", id: "old-model" }
+							: { provider: "openai-codex", id: "gpt-5.6-sol" },
+						thinkingLevel: "max",
+					},
+				};
+			}
+			if (command.type === "set_model" && ++setModelCalls < 9) {
+				throw new Error("Model not found: openai-codex/gpt-5.6-sol");
+			}
+			return { success: true, data: {} };
+		});
+		const { handler, registry } = makeHandler({ sendRpcChecked });
+		const sleep = vi.fn(async () => {});
+		handler.sleep = sleep;
+		const proc = { id: 26 };
+		const { actor } = attachActor(registry, "/tmp/slow-catalog-refresh.jsonl", proc);
+		const { ws } = makeWs();
+
+		await handler.applyRequestedControlState(proc, actor, ws, {
+			model: { provider: "openai-codex", modelId: "gpt-5.6-sol" },
+			thinkingLevel: "max",
+			controlRevision: 10,
+		});
+
+		expect(setModelCalls).toBe(9);
+		expect(sleep.mock.calls).toEqual([
+			[100], [250], [500], [1_000], [2_000], [4_000], [8_000], [16_000],
+		]);
+	});
+
 	it("does not retry unrelated model-switch failures", async () => {
 		const sendRpcChecked = vi.fn(async (_proc: any, command: any) => {
 			if (command.type === "get_state") {

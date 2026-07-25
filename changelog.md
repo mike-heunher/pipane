@@ -1,5 +1,7 @@
 # Unreleased
 
+- Keep long-running prompts alive, tolerate slower model-catalog refreshes, recover cleanly from stale session races, and suppress harmless Unicode math warnings.
+
 # 0.1.13 - 2026-07-25
 
 - Disable the remote bandwidth optimization stack after its session-sync serialization exhausted the backend heap and terminated active sessions.

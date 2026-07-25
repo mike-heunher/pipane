@@ -248,6 +248,41 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(steerMsgs).toHaveLength(0);
 		});
 
+		it("keeps a healthy long-running prompt pending beyond 90 seconds", async () => {
+			vi.useFakeTimers();
+			try {
+				const sessionPath = "/tmp/sessions/session-a.jsonl";
+				const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
+				let promptRequest: any;
+				(mockWs.send as any).mockImplementation((raw: string) => {
+					const command = JSON.parse(raw);
+					if (command.type === "prompt") {
+						promptRequest = command;
+						return;
+					}
+					simulateServerMessage({ type: "response", id: command.id, command: command.type, success: true, data: {} });
+				});
+				const settled = vi.fn();
+				const prompting = adapter.prompt("long task").then(settled);
+
+				await vi.advanceTimersByTimeAsync(90_001);
+				expect(promptRequest?.type).toBe("prompt");
+				expect(settled).not.toHaveBeenCalled();
+
+				simulateServerMessage({
+					type: "response",
+					id: promptRequest.id,
+					command: "prompt",
+					success: true,
+					data: { newSessionPath: sessionPath },
+				});
+				await prompting;
+				expect(settled).toHaveBeenCalledOnce();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
 		it("sends the displayed model, thinking level, and control revision", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, sent } = setupWithSession(sessionPath);
@@ -730,6 +765,88 @@ describe("WsAgentAdapter prompt routing", () => {
 	});
 
 	describe("workspace session subscription", () => {
+		it("ignores a stale missing-session response after navigation", async () => {
+			const oldPath = "/tmp/sessions/deleted.jsonl";
+			const { adapter, mockWs, simulateServerMessage } = setupWithSession(oldPath);
+			let staleSubscription: any;
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				if (command.type === "subscribe_session" && command.sessionPath === oldPath) {
+					staleSubscription = command;
+					return;
+				}
+				simulateServerMessage({ type: "response", id: command.id, command: command.type, success: true, data: {} });
+			});
+			const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+			const switching = adapter.switchSession(oldPath, "/work/project");
+			await Promise.resolve();
+			expect(staleSubscription).toBeDefined();
+			await adapter.newSession("/work/project");
+			simulateServerMessage({
+				type: "response",
+				id: staleSubscription.id,
+				command: "subscribe_session",
+				success: false,
+				code: "command_failed",
+				error: "Session file not found",
+			});
+			await switching;
+
+			expect(adapter.sessionStatus).toBe("virtual");
+			expect(adapter.state.error).toBeUndefined();
+			expect(logged).not.toHaveBeenCalled();
+			logged.mockRestore();
+		});
+
+		it("recovers an actively selected session that was deleted elsewhere", async () => {
+			const sessionPath = "/tmp/sessions/deleted.jsonl";
+			const { adapter, mockWs, simulateServerMessage } = setupWithSession(sessionPath);
+			let subscription: any;
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				if (command.type === "subscribe_session" && command.sessionPath === sessionPath) {
+					subscription = command;
+					return;
+				}
+				simulateServerMessage({ type: "response", id: command.id, command: command.type, success: true, data: {} });
+			});
+			const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+			const changed = vi.fn();
+			adapter.onSessionsChanged(changed);
+
+			const switching = adapter.switchSession(sessionPath, "/work/project");
+			await Promise.resolve();
+			simulateServerMessage({
+				type: "response",
+				id: subscription.id,
+				command: "subscribe_session",
+				success: false,
+				code: "command_failed",
+				error: "Session file not found",
+			});
+			await switching;
+
+			expect(adapter.sessionStatus).toBe("virtual");
+			expect(adapter.cwd).toBe("/work/project");
+			expect(adapter.state.error).toBeUndefined();
+			expect(changed).toHaveBeenCalledWith(sessionPath);
+			expect(logged).not.toHaveBeenCalled();
+			logged.mockRestore();
+		});
+
+		it("treats deletion of an already missing session as successful", async () => {
+			const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+				error: "Session file not found",
+			}), { status: 404, headers: { "Content-Type": "application/json" } }));
+			const { adapter } = createTestAdapter({ fetch: fetchMock });
+			const sessionPath = "/tmp/sessions/deleted.jsonl";
+			(adapter as any)._optimisticSessions.set(sessionPath, { path: sessionPath });
+
+			await expect(adapter.deleteSession(sessionPath)).resolves.toBeUndefined();
+			expect(adapter.optimisticSessions).toHaveLength(0);
+		});
+
 		it("pauses full snapshots for an inactive host and restores the current session", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter, sent } = setupWithSession(sessionPath);

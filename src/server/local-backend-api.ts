@@ -122,10 +122,22 @@ export class LocalBackendApi implements BackendApi {
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		const resolved = this.resolveSession(sessionPath);
+		let resolved: string;
+		try {
+			resolved = this.resolveSession(sessionPath);
+		} catch (error) {
+			// DELETE is idempotent; a stale catalog or another browser may already
+			// have removed a valid, confined session path.
+			if (error instanceof LocalBackendApiError && error.code === "not_found") return;
+			throw error;
+		}
 		const remove = () => unlink(resolved);
-		if (this.runSessionMutation) await this.runSessionMutation(resolved, "delete session", remove);
-		else await remove();
+		try {
+			if (this.runSessionMutation) await this.runSessionMutation(resolved, "delete session", remove);
+			else await remove();
+		} catch (error: any) {
+			if (error?.code !== "ENOENT") throw error;
+		}
 	}
 
 	async listForkMessages(sessionPath: string): Promise<Array<{ entryId: string; text: string }>> {

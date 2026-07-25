@@ -1,5 +1,5 @@
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
-import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
+import "./MarkdownBlock.js";
 import { html, LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { ChevronRight } from "lucide";

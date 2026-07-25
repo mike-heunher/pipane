@@ -78,7 +78,7 @@ type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
 const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
-const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] as const;
 
 interface ClientState {
 	subscribedSession: string | null;

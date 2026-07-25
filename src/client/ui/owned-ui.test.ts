@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./index.js";
+import { MarkdownBlock } from "./components/MarkdownBlock.js";
 import { MessageEditor } from "./components/MessageEditor.js";
 import { PiMessageList } from "./components/MessageList.js";
 import { formatToolRuntime, ToolRuntime } from "./components/Messages.js";
@@ -26,6 +27,7 @@ function sourceFiles(root: string): string[] {
 
 afterEach(() => {
 	document.body.replaceChildren();
+	vi.restoreAllMocks();
 });
 
 describe("owned UI architecture", () => {
@@ -45,11 +47,25 @@ describe("owned UI architecture", () => {
 	});
 
 	it("registers only the local flat renderer component path", () => {
+		expect(customElements.get("markdown-block")).toBe(MarkdownBlock);
 		expect(customElements.get("pi-message-list")).toBe(PiMessageList);
 		expect(customElements.get("message-editor")).toBe(MessageEditor);
 		expect(customElements.get("thinking-block")).toBe(ThinkingBlock);
 		expect(customElements.get("streaming-message-container")).toBeUndefined();
 		expect(customElements.get("agent-interface")).toBeUndefined();
+	});
+});
+
+describe("owned markdown renderer", () => {
+	it("renders Unicode punctuation in math without KaTeX strict-mode warnings", async () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const block = new MarkdownBlock();
+		block.content = "Range: $1–2$";
+		document.body.appendChild(block);
+		await block.updateComplete;
+
+		expect(block.querySelector(".katex")).not.toBeNull();
+		expect(warning).not.toHaveBeenCalled();
 	});
 });
 
