@@ -146,6 +146,15 @@ describe("deployment scripts", () => {
 		expect(activationScript).not.toContain("systemctl restart pipane-rendezvous");
 	});
 
+	it("detaches production deployment before restarting the hosting service", () => {
+		const wrapper = readFileSync(path.join(repositoryRoot, "deploy-prod.sh"), "utf8");
+
+		expect(wrapper).toContain("systemd-run --quiet --no-block --collect");
+		expect(wrapper).toContain("PIPANE_PROD_DEPLOY_IN_SYSTEMD=1");
+		expect(wrapper).toContain("pipane-prod-deploy");
+		expect(wrapper).toContain('deploy-local-release.sh" prod');
+	});
+
 	it("keeps production on the global binary for self-updates", () => {
 		const service = readFileSync(path.join(repositoryRoot, "scripts/pipane.service"), "utf8");
 		const deployScript = readFileSync(
