@@ -49,7 +49,7 @@ interface SessionIndexCacheFile {
 }
 
 const CACHE_FORMAT_VERSION = 1 as const;
-const DEFAULT_EXTRACTOR_VERSION = "3";
+const DEFAULT_EXTRACTOR_VERSION = "4";
 const MAX_RECENT_TOOL_PATHS = 16;
 const PATH_ACTIVITY_TOOLS = new Set([
 	"edit",
@@ -248,14 +248,14 @@ export class SessionIndex {
 					}
 				}
 
+				// User-prompt recency is deliberately restricted to role=user.
+				// Tool results and every other message role must never be interpreted
+				// as user input, even when they carry newer timestamps.
 				if (msg.role !== "user" && msg.role !== "assistant") continue;
 
 				const messageTs = typeof msg.timestamp === "number" ? msg.timestamp : undefined;
 				const entryTs = typeof entry.timestamp === "string" ? new Date(entry.timestamp).getTime() : NaN;
 				const ts = Number.isFinite(messageTs) ? messageTs : (!Number.isNaN(entryTs) ? entryTs : undefined);
-				if (typeof ts === "number") {
-					lastActivityTime = Math.max(lastActivityTime ?? 0, ts);
-				}
 
 				if (msg.role === "user") {
 					if (typeof ts === "number") {
@@ -265,6 +265,10 @@ export class SessionIndex {
 						const text = this.extractTextContent(msg.content);
 						if (text) firstMessage = text;
 					}
+				}
+
+				if (typeof ts === "number") {
+					lastActivityTime = Math.max(lastActivityTime ?? 0, ts);
 				}
 			}
 

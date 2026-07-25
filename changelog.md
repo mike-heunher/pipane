@@ -1,5 +1,6 @@
 # Unreleased
 
+- Derive conversation user-prompt timestamps strictly from real user messages, never tool results or empty virtual sessions.
 - Keep long-running prompts alive, tolerate slower model-catalog refreshes, recover cleanly from stale session races, and suppress harmless Unicode math warnings.
 
 # 0.1.13 - 2026-07-25

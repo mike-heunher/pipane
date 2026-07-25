@@ -917,6 +917,18 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(adapter.state.isStreaming).toBe(true);
 		});
 
+		it("does not invent a user-prompt timestamp for an empty virtual session", async () => {
+			const { adapter } = createTestAdapter();
+			await adapter.newSession("/tmp");
+
+			expect(adapter.virtualSessionInfo).toMatchObject({
+				cwd: "/tmp",
+				messageCount: 0,
+				firstMessage: "(new session)",
+			});
+			expect(adapter.virtualSessionInfo).not.toHaveProperty("lastUserPromptTime");
+		});
+
 		it("notifies session listeners when a virtual session receives its real path", async () => {
 			const { adapter, simulateServerMessage } = createTestAdapter();
 			await adapter.newSession("/tmp");

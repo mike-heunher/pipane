@@ -1821,7 +1821,6 @@ export class WsAgentAdapter implements BackendClient {
 			cwd: this._pendingCwd,
 			created: now,
 			modified: now,
-			lastUserPromptTime: now,
 			messageCount: 0,
 			firstMessage: "(new session)",
 		};

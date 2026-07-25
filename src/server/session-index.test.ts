@@ -60,6 +60,73 @@ describe("SessionIndex", () => {
 		expect(statSync(cachePath).size).toBeGreaterThan(0);
 	});
 
+	it("derives lastUserPromptTime exclusively from role=user messages", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "strict-user-time.jsonl");
+		const userTime = Date.parse("2026-01-01T10:00:01.000Z");
+		const assistantTime = Date.parse("2026-01-01T10:00:02.000Z");
+		const toolResultTime = Date.parse("2026-01-01T12:00:00.000Z");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "strict-user-time", cwd: "/tmp/project", timestamp: "2026-01-01T10:00:00.000Z" },
+			{
+				type: "message",
+				id: "user-1",
+				parentId: null,
+				timestamp: "2026-01-01T10:00:01.500Z",
+				message: { role: "user", timestamp: userTime, content: "actual prompt" },
+			},
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: "user-1",
+				timestamp: "2026-01-01T10:00:02.500Z",
+				message: { role: "assistant", timestamp: assistantTime, content: [{ type: "text", text: "working" }] },
+			},
+			{
+				type: "message",
+				id: "tool-result-1",
+				parentId: "assistant-1",
+				timestamp: "2026-01-01T12:00:00.500Z",
+				message: {
+					role: "toolResult",
+					toolCallId: "tool-1",
+					timestamp: toolResultTime,
+					content: [{ type: "text", text: "newer but not user input" }],
+					isError: false,
+				},
+			},
+		]);
+
+		const session = (await new SessionIndex({ agentDir, extractorVersion: "strict-user-time-v1" }).listSessions())[0];
+
+		expect(session.lastUserPromptTime).toBe(new Date(userTime).toISOString());
+		expect(session.modified).toBe(new Date(assistantTime).toISOString());
+	});
+
+	it("leaves lastUserPromptTime absent when a session has no user messages", async () => {
+		const sessionPath = path.join(agentDir, "sessions", "--project--", "no-user-time.jsonl");
+		writeSessionJsonl(sessionPath, [
+			{ type: "session", id: "no-user-time", cwd: "/tmp/project", timestamp: "2026-01-01T10:00:00.000Z" },
+			{
+				type: "message",
+				id: "assistant-1",
+				parentId: null,
+				timestamp: "2026-01-01T10:00:01.000Z",
+				message: { role: "assistant", content: [{ type: "text", text: "assistant only" }] },
+			},
+			{
+				type: "message",
+				id: "tool-result-1",
+				parentId: "assistant-1",
+				timestamp: "2026-01-01T10:00:02.000Z",
+				message: { role: "toolResult", toolCallId: "tool-1", content: [], isError: false },
+			},
+		]);
+
+		const session = (await new SessionIndex({ agentDir, extractorVersion: "no-user-time-v1" }).listSessions())[0];
+
+		expect(session.lastUserPromptTime).toBeUndefined();
+	});
+
 	it("reuses cached metadata when files are unchanged", async () => {
 		const sessionPath = path.join(agentDir, "sessions", "--project--", "a.jsonl");
 		writeSessionJsonl(sessionPath, [
