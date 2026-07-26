@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.14 - 2026-07-26
+
 - Restore rejected prompt text and every attachment to its conversation composer so transport failures cannot discard user input.
 - Upload image attachments in bounded chunks on advertising backends while retaining legacy prompt compatibility with older hosts.
 - Derive conversation user-prompt timestamps strictly from real user messages, never tool results or empty virtual sessions.
