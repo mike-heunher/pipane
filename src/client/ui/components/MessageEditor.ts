@@ -154,9 +154,7 @@ export class MessageEditor extends LitElement {
 
 	private async loadFile(file: File): Promise<Attachment> {
 		const attachment = await loadAttachment(file);
-		if (attachment.type === "document" && this.onFileUpload) {
-			attachment.uploadedPath = await this.onFileUpload(attachment);
-		}
+		if (this.onFileUpload) attachment.uploadedPath = await this.onFileUpload(attachment);
 		return attachment;
 	}
 

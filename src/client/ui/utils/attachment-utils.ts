@@ -16,7 +16,7 @@ export interface Attachment {
 	size: number;
 	content: string; // base64 encoded original data (without data URL prefix)
 	extractedText?: string; // For documents: <pdf filename="..."><page number="1">text</page></pdf>
-	uploadedPath?: string; // Backend-local temporary path for non-image attachments
+	uploadedPath?: string; // Backend-local temporary path produced by bounded upload
 	preview?: string; // base64 image preview (first page for PDFs, or same as content for images)
 }
 

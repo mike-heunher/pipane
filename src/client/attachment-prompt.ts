@@ -16,7 +16,9 @@ export function buildAttachmentPromptPayload(
 
 	for (const attachment of attachments) {
 		if (attachment.type === "image") {
-			images.push({ type: "image", data: attachment.content, mimeType: attachment.mimeType });
+			images.push(attachment.uploadedPath
+				? { type: "image", uploadedPath: attachment.uploadedPath, mimeType: attachment.mimeType }
+				: { type: "image", data: attachment.content, mimeType: attachment.mimeType });
 		} else if (attachment.uploadedPath) {
 			uploadedPaths.push(attachment.uploadedPath);
 		} else if (attachment.extractedText) {

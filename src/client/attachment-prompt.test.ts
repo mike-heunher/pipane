@@ -15,7 +15,7 @@ function attachment(overrides: Partial<Attachment>): Attachment {
 }
 
 describe("buildAttachmentPromptPayload", () => {
-	it("hands backend-local paths to the agent while keeping images direct", () => {
+	it("hands backend-local paths and uploaded images to the agent without resending their bytes", () => {
 		const payload = buildAttachmentPromptPayload("Inspect these", [
 			attachment({ uploadedPath: "/tmp/pipane-upload-abc/archive.zip" }),
 			attachment({
@@ -24,12 +24,26 @@ describe("buildAttachmentPromptPayload", () => {
 				fileName: "photo.png",
 				mimeType: "image/png",
 				content: "aW1hZ2U=",
+				uploadedPath: "/tmp/pipane-upload-image/photo.png",
 			}),
 		]);
 
 		expect(payload.input).toContain("Inspect these");
 		expect(payload.input).toContain(JSON.stringify("/tmp/pipane-upload-abc/archive.zip"));
-		expect(payload.images).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+		expect(payload.images).toEqual([{
+			type: "image",
+			uploadedPath: "/tmp/pipane-upload-image/photo.png",
+			mimeType: "image/png",
+		}]);
+		expect(JSON.stringify(payload)).not.toContain("aW1hZ2U=");
+	});
+
+	it("keeps direct image data as a fallback for drafts created before upload support", () => {
+		expect(buildAttachmentPromptPayload("Inspect", [attachment({
+			type: "image",
+			mimeType: "image/png",
+			content: "aW1hZ2U=",
+		})]).images).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
 	});
 
 	it("keeps extracted text as a fallback for an older draft without an upload path", () => {

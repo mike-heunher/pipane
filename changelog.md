@@ -1,6 +1,7 @@
 # Unreleased
 
 - Restore rejected prompt text and every attachment to its conversation composer so transport failures cannot discard user input.
+- Upload image attachments in bounded chunks before prompting so large images cannot disconnect the backend transport.
 - Derive conversation user-prompt timestamps strictly from real user messages, never tool results or empty virtual sessions.
 - Keep long-running prompts alive, tolerate slower model-catalog refreshes, recover cleanly from stale session races, and suppress harmless Unicode math warnings.
 

@@ -12,7 +12,7 @@
  * with the next prompt) and UI concerns like the steering queue.
  */
 
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
@@ -31,6 +31,7 @@ import {
 	type SessionStats,
 	type SessionSyncMessage,
 	type SlashCommandInfo,
+	type WireImage,
 } from "../shared/ws-protocol.js";
 import {
 	clampThinkingLevel,
@@ -94,7 +95,7 @@ interface PendingRequest {
 
 interface CompactionQueuedPrompt {
 	text: string;
-	images?: ImageContent[];
+	images?: WireImage[];
 	model: NonNullable<ReturnType<typeof toCompactModelRef>>;
 	thinkingLevel: ThinkingLevelValue;
 	controlRevision: number;
@@ -379,7 +380,7 @@ export class WsAgentAdapter implements BackendClient {
 	private enqueueCompactionPrompt(
 		sessionPath: string,
 		text: string,
-		images: ImageContent[] | undefined,
+		images: WireImage[] | undefined,
 	): void {
 		const model = toCompactModelRef(this._state.model);
 		if (!model) throw new Error("BUG: active model has no provider/model ID");
@@ -1123,7 +1124,7 @@ export class WsAgentAdapter implements BackendClient {
 		if (this._startingPrompts.get(key) === entry) this._startingPrompts.delete(key);
 	}
 
-	async prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
+	async prompt(input: string | AgentMessage | AgentMessage[], images?: WireImage[]): Promise<void> {
 		let text: string;
 		if (typeof input === "string") {
 			text = input;
@@ -1650,7 +1651,7 @@ export class WsAgentAdapter implements BackendClient {
 	 * Fork the entire current session state into a new session and run a prompt there.
 	 * Used for Cmd+Enter: creates a branch of the conversation with the new input.
 	 */
-	async forkAndPrompt(text: string, images?: ImageContent[]): Promise<void> {
+	async forkAndPrompt(text: string, images?: WireImage[]): Promise<void> {
 		if (!this._sessionPath || this._sessionStatus === "virtual") {
 			// No session to fork — just do a regular prompt
 			await this.prompt(text, images);

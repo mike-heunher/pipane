@@ -28,7 +28,7 @@ const sessionStats = {
 const clientCommands = [
 	{ type: "install_pi" },
 	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl" },
-	{ type: "prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2 },
+	{ type: "prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2, images: [{ type: "image", uploadedPath: "/tmp/pipane-upload/photo.png", mimeType: "image/png" }] },
 	{ type: "steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
 	{ type: "remove_steering", sessionPath: "/sessions/a.jsonl", index: 0 },
 	{ type: "abort", sessionPath: "/sessions/a.jsonl" },
@@ -95,6 +95,17 @@ describe("WebSocket protocol contract", () => {
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("$command.model") } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "get_session_stats" })))
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("sessionPath") } });
+		expect(decodeClientCommand(JSON.stringify({
+			...envelope,
+			type: "prompt",
+			sessionPath: "/sessions/a.jsonl",
+			message: "bad image",
+			model,
+			images: [{ type: "image", data: "AA==", uploadedPath: "/tmp/image.png", mimeType: "image/png" }],
+		}))).toMatchObject({
+			ok: false,
+			error: { code: "invalid_message", message: expect.stringContaining("exactly one") },
+		});
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, protocolVersion: 999, type: "abort", sessionPath: "x" })))
 			.toMatchObject({ ok: false, error: { code: "unsupported_version", requestId: "req-1" } });
 	});

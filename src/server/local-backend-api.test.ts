@@ -25,6 +25,34 @@ afterEach(() => {
 	}
 });
 
+describe("LocalBackendApi uploaded images", () => {
+	it("materializes only exact completed image uploads for Pi RPC", async () => {
+		const { root } = fixture();
+		const api = new LocalBackendApi({
+			sessionPaths: new SessionPathGuard(root),
+			uploadDirectory: root,
+		});
+		const bytes = Buffer.from([0, 1, 2, 253, 254, 255]);
+		const { uploadId } = await api.createFileUpload({
+			fileName: "photo.png",
+			mimeType: "image/png",
+			size: bytes.length,
+		});
+		await api.appendFileUpload({ uploadId, offset: 0, data: bytes.toString("base64") });
+		const completed = await api.completeFileUpload(uploadId);
+
+		await expect(api.materializeUploadedImage(completed.path, "image/png")).resolves.toEqual({
+			type: "image",
+			data: bytes.toString("base64"),
+			mimeType: "image/png",
+		});
+		await expect(api.materializeUploadedImage(path.join(root, "other.png"), "image/png"))
+			.rejects.toThrow("not found");
+		await expect(api.materializeUploadedImage(completed.path, "image/jpeg"))
+			.rejects.toThrow("MIME type does not match");
+	});
+});
+
 describe("LocalBackendApi session deletion", () => {
 	it("is idempotent when a confined session is already absent", async () => {
 		const { root, api } = fixture();

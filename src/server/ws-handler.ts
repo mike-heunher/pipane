@@ -50,6 +50,8 @@ import {
 	type ExtensionStatusMessage,
 	type ProviderUsageMessage,
 	type ServerMessagePayload,
+	type InlineWireImage,
+	type WireImage,
 } from "../shared/ws-protocol.js";
 import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import {
@@ -69,6 +71,7 @@ export interface WsHandlerOptions {
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
 	isRequestAuthorized: (req: IncomingMessage) => boolean;
+	materializeUploadedImage?: (uploadedPath: string, mimeType: string) => Promise<InlineWireImage>;
 }
 
 type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: Type }>;
@@ -115,6 +118,7 @@ export class WsHandler {
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
 	private isRequestAuthorized: (req: IncomingMessage) => boolean;
+	private materializeUploadedImage: NonNullable<WsHandlerOptions["materializeUploadedImage"]>;
 
 	private clients = new Map<ServerFrameConnection, ClientState>();
 	/** Last known extension statuses, retained while a session is detached. */
@@ -144,6 +148,9 @@ export class WsHandler {
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
 		this.isRequestAuthorized = options.isRequestAuthorized;
+		this.materializeUploadedImage = options.materializeUploadedImage ?? (async () => {
+			throw new Error("Uploaded image references are unavailable");
+		});
 		this.piAvailable = checkCommandAvailable(this.piLaunch.command);
 
 		this.pool.subscribeEvents((proc, event) => this.handleProcessEvent(proc, event));
@@ -619,6 +626,13 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "subscribe_session", {});
 	}
 
+	private async materializePromptImages(images: WireImage[] | undefined): Promise<InlineWireImage[] | undefined> {
+		if (!images?.length) return undefined;
+		return Promise.all(images.map((image) => typeof image.data === "string"
+			? image as InlineWireImage
+			: this.materializeUploadedImage(image.uploadedPath, image.mimeType)));
+	}
+
 	private async handlePrompt(ws: ServerFrameConnection, command: CommandOf<"prompt">): Promise<void> {
 		const requestedPath = command.sessionPath;
 		if (!requestedPath) throw new Error("Missing sessionPath");
@@ -677,10 +691,11 @@ export class WsHandler {
 				const observer = this.setupTurnEventForwarding(actor!, proc!, generation, turnId);
 				await this.applyRequestedControlState(proc!, actor!, ws, command);
 
+				const images = await this.materializePromptImages(command.images);
 				const response = await this.pool.sendRpc(proc!, {
 					type: "prompt",
 					message: command.message,
-					...(command.images?.length ? { images: command.images } : {}),
+					...(images?.length ? { images } : {}),
 				});
 				if (!response.success) throw new Error(response.error);
 				await this.reconcileEffectiveControlState(proc!, actor!);
@@ -957,10 +972,11 @@ export class WsHandler {
 				const generation = actor.beginTurn();
 				const observer = this.setupTurnEventForwarding(actor, proc, generation, makeTurnId());
 				await this.applyRequestedControlState(proc, actor, ws, command);
+				const images = await this.materializePromptImages(command.images);
 				await this.pool.sendRpcChecked(proc, {
 					type: "prompt",
 					message,
-					...(command.images?.length ? { images: command.images } : {}),
+					...(images?.length ? { images } : {}),
 				});
 				await this.reconcileEffectiveControlState(proc, actor);
 				return { observer, generation };

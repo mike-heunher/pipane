@@ -1,6 +1,7 @@
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AuthorizedBackendDescriptor } from "../shared/trust-protocol.js";
+import type { WireImage } from "../shared/ws-protocol.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import type { SlashCommandInfo } from "../shared/ws-protocol.js";
 import type { ThinkingLevelValue } from "../shared/thinking-levels.js";
@@ -211,7 +212,7 @@ export class WorkspaceBackendClient implements BackendClient {
 		this.requireContext(this.activeId).initialized = true;
 	}
 	setCwd(cwd: string): void { this.requireActiveClient().setCwd(cwd); }
-	prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> { return this.requireActiveClient().prompt(input, images); }
+	prompt(input: string | AgentMessage | AgentMessage[], images?: WireImage[]): Promise<void> { return this.requireActiveClient().prompt(input, images); }
 	fetchCommands(): Promise<SlashCommandInfo[]> { return this.requireActiveClient().fetchCommands(); }
 	abort(): void { this.requireActiveClient().abort(); }
 	hardKill(): void { this.requireActiveClient().hardKill(); }
@@ -221,7 +222,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	setThinkingLevel(level: ThinkingLevelValue): void { this.requireActiveClient().setThinkingLevel(level); }
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>> { return this.requireActiveClient().getForkMessages(); }
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }> { return this.requireActiveClient().fork(entryId); }
-	forkAndPrompt(text: string, images?: ImageContent[]): Promise<void> { return this.requireActiveClient().forkAndPrompt(text, images); }
+	forkAndPrompt(text: string, images?: WireImage[]): Promise<void> { return this.requireActiveClient().forkAndPrompt(text, images); }
 
 	async switchSession(sessionPath: string, cwd?: string, backendId = this.activeId): Promise<void> {
 		const context = await this.activateContext(backendId, false);

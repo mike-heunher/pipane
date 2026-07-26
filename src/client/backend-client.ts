@@ -1,6 +1,7 @@
-import type { ImageContent, Model } from "@earendil-works/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
+import type { WireImage } from "../shared/ws-protocol.js";
 import type { SlashCommandInfo } from "../shared/ws-protocol.js";
 import type { ThinkingLevelValue } from "../shared/thinking-levels.js";
 import type { BackendApi, SessionInfoDTO } from "./backend-api.js";
@@ -81,7 +82,7 @@ export interface BackendClient extends BackendApi {
 	installPi(): Promise<void>;
 	loadDefaultModel(): Promise<void>;
 	setCwd(cwd: string): void;
-	prompt(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void>;
+	prompt(input: string | AgentMessage | AgentMessage[], images?: WireImage[]): Promise<void>;
 	fetchCommands(): Promise<SlashCommandInfo[]>;
 	abort(): void;
 	hardKill(): void;
@@ -91,7 +92,7 @@ export interface BackendClient extends BackendApi {
 	setThinkingLevel(level: ThinkingLevelValue): void;
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>>;
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }>;
-	forkAndPrompt(text: string, images?: ImageContent[]): Promise<void>;
+	forkAndPrompt(text: string, images?: WireImage[]): Promise<void>;
 	switchSession(sessionPath: string, cwd?: string, backendId?: string): Promise<void>;
 	newSession(cwd?: string, backendId?: string): Promise<void>;
 	/** Pause or restore full session snapshots while retaining host-level status/catalog events. */

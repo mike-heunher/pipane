@@ -1,12 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watchFile } from "node:fs";
-import { mkdir, mkdtemp, open, rm, unlink } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import { MAX_UPLOAD_FILE_BYTES } from "../shared/backend-api.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
-import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
+import { WS_PROTOCOL_VERSION, type InlineWireImage } from "../shared/ws-protocol.js";
 import type {
 	BackendApi,
 	BackendCapabilities,
@@ -32,6 +32,7 @@ import type { UpdateApiManager } from "./update-api.js";
 const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_UPLOAD_CHUNK_BYTES = 256 * 1024;
 const MAX_ACTIVE_UPLOADS = 32;
+const MAX_COMPLETED_UPLOADS = 256;
 const watchedSettingsPaths = new Set<string>();
 
 interface ActiveUploadChunk {
@@ -82,6 +83,8 @@ export class LocalBackendApi implements BackendApi {
 	private readonly runSessionMutation?: LocalBackendApiOptions["runSessionMutation"];
 	private readonly sessionIndex: SessionIndex;
 	private readonly uploads = new Map<string, ActiveFileUpload>();
+	/** Exact completed upload paths eligible for server-side image materialization. */
+	private readonly completedUploads = new Map<string, FileUploadResponse>();
 
 	constructor(options: LocalBackendApiOptions = {}) {
 		this.localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
@@ -325,12 +328,33 @@ export class LocalBackendApi implements BackendApi {
 			);
 		}
 		this.uploads.delete(uploadId);
-		return {
+		const completed = {
 			path: upload.path,
 			fileName: upload.fileName,
 			mimeType: upload.mimeType,
 			size: upload.size,
 		};
+		this.completedUploads.set(completed.path, completed);
+		while (this.completedUploads.size > MAX_COMPLETED_UPLOADS) {
+			const oldestPath = this.completedUploads.keys().next().value;
+			if (typeof oldestPath !== "string") break;
+			this.completedUploads.delete(oldestPath);
+		}
+		return completed;
+	}
+
+	/** Read only an exact file path produced by this server's completed upload flow. */
+	async materializeUploadedImage(uploadedPath: string, mimeType: string): Promise<InlineWireImage> {
+		const upload = this.completedUploads.get(uploadedPath);
+		if (!upload) throw new LocalBackendApiError("Uploaded image was not found", 404, "not_found");
+		if (!mimeType.startsWith("image/") || upload.mimeType !== mimeType) {
+			throw new LocalBackendApiError("Uploaded image MIME type does not match", 400, "invalid_request");
+		}
+		const bytes = await readFile(upload.path);
+		if (bytes.length !== upload.size) {
+			throw new LocalBackendApiError("Uploaded image size changed", 409, "conflict");
+		}
+		return { type: "image", data: bytes.toString("base64"), mimeType: upload.mimeType };
 	}
 
 	getLocalSettings(): Promise<LocalSettingsReadResponse> {

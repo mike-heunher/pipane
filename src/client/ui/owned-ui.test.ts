@@ -145,6 +145,31 @@ describe("owned message editor", () => {
 		expect(editor.querySelector<HTMLInputElement>("input[type=file]")?.accept).toBe("");
 	});
 
+	it("uploads images before retaining them in the composer", async () => {
+		const editor = new MessageEditor();
+		const onFileUpload = vi.fn(async () => "/tmp/pipane-upload-test/photo.png");
+		editor.onFileUpload = onFileUpload;
+		document.body.appendChild(editor);
+		await editor.updateComplete;
+
+		await (editor as any).handleDrop({
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+			dataTransfer: {
+				files: [new File([new Uint8Array([1, 2, 3])], "photo.png", { type: "image/png" })],
+			},
+		});
+
+		expect(onFileUpload).toHaveBeenCalledWith(expect.objectContaining({
+			type: "image",
+			fileName: "photo.png",
+			content: "AQID",
+		}));
+		expect(editor.attachments).toEqual([
+			expect.objectContaining({ uploadedPath: "/tmp/pipane-upload-test/photo.png" }),
+		]);
+	});
+
 	it("does not submit Enter while an IME composition is active", async () => {
 		const editor = new MessageEditor();
 		editor.value = "変換中";

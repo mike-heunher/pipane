@@ -283,6 +283,7 @@ const wsHandler = new WsHandler({
 		}
 	},
 	isRequestAuthorized: (req) => authGuard.isAuthorizedRequest(req),
+	materializeUploadedImage: (uploadedPath, mimeType) => backendApi.materializeUploadedImage(uploadedPath, mimeType),
 });
 
 // Register WS handler

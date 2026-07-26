@@ -17,11 +17,21 @@ export interface WireModel extends Record<string, unknown> {
 	modelId?: string;
 }
 
-export interface WireImage {
+export interface InlineWireImage {
 	type: "image";
 	data: string;
 	mimeType: string;
+	uploadedPath?: never;
 }
+
+export interface UploadedWireImage {
+	type: "image";
+	uploadedPath: string;
+	mimeType: string;
+	data?: never;
+}
+
+export type WireImage = InlineWireImage | UploadedWireImage;
 
 export interface SlashCommandInfo extends Record<string, unknown> {
 	name: string;
@@ -369,10 +379,15 @@ function wireModel(value: unknown, path: string): WireModel {
 
 function images(value: unknown, path: string): WireImage[] {
 	return array(value, path).map((item, index) => {
-		const image = record(item, `${path}[${index}]`);
-		if (image.type !== "image") fail(`${path}[${index}].type`, "expected 'image'");
-		string(image.data, `${path}[${index}].data`);
-		string(image.mimeType, `${path}[${index}].mimeType`, false);
+		const imagePath = `${path}[${index}]`;
+		const image = record(item, imagePath);
+		if (image.type !== "image") fail(`${imagePath}.type`, "expected 'image'");
+		string(image.mimeType, `${imagePath}.mimeType`, false);
+		const hasData = image.data !== undefined;
+		const hasUploadedPath = image.uploadedPath !== undefined;
+		if (hasData === hasUploadedPath) fail(imagePath, "expected exactly one of data or uploadedPath");
+		if (hasData) string(image.data, `${imagePath}.data`);
+		else string(image.uploadedPath, `${imagePath}.uploadedPath`, false);
 		return image as unknown as WireImage;
 	});
 }

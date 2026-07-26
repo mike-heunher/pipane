@@ -19,6 +19,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 			resolvePending: (value: unknown) => value,
 			createPath: (filename: string) => path.join("/tmp", filename),
 		},
+		materializeUploadedImage,
 		...poolOverrides
 	} = overrides;
 	const poolEventListeners = new Set<(proc: any, event: any) => void>();
@@ -50,6 +51,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		piLaunch: { command: "pi", baseArgs: [] },
 		ensurePool,
 		isRequestAuthorized: () => true,
+		materializeUploadedImage,
 	}) as any;
 	handler.piAvailable = true;
 	return {
@@ -409,6 +411,28 @@ describe("WsHandler actor orchestration", () => {
 			"get_state", "set_model",
 		]);
 		expect(sleep).not.toHaveBeenCalled();
+	});
+
+	it("materializes uploaded image references while preserving legacy inline images", async () => {
+		const materializeUploadedImage = vi.fn(async (uploadedPath: string, mimeType: string) => ({
+			type: "image" as const,
+			data: Buffer.from(`bytes:${uploadedPath}`).toString("base64"),
+			mimeType,
+		}));
+		const { handler } = makeHandler({ materializeUploadedImage });
+
+		await expect(handler.materializePromptImages([
+			{ type: "image", uploadedPath: "/tmp/upload/photo.png", mimeType: "image/png" },
+			{ type: "image", data: "aW5saW5l", mimeType: "image/jpeg" },
+		])).resolves.toEqual([
+			{
+				type: "image",
+				data: Buffer.from("bytes:/tmp/upload/photo.png").toString("base64"),
+				mimeType: "image/png",
+			},
+			{ type: "image", data: "aW5saW5l", mimeType: "image/jpeg" },
+		]);
+		expect(materializeUploadedImage).toHaveBeenCalledWith("/tmp/upload/photo.png", "image/png");
 	});
 
 	it("routes a prompt arriving during a turn to steering", async () => {
