@@ -483,7 +483,7 @@ describe("session-picker", () => {
 			expect(getGroupLabel(headers[2])).toBe("/home/user/old-project");
 		});
 
-		it("groups with running sessions sort to the top", async () => {
+		it("does not promote a project when one of its sessions starts running", async () => {
 			const agent = new MockAgent();
 			const sessions = [
 				createSession({
@@ -498,16 +498,38 @@ describe("session-picker", () => {
 				}),
 			];
 			agent.setSessions(sessions);
-			// Mark the old-project session as running
 			agent.setSessionStatus(sessions[0].path, "running");
 
 			const el = await createPicker(agent);
 			const headers = getGroupHeaders(el);
 
 			expect(headers).toHaveLength(2);
-			// Group with running session should be first
-			expect(getGroupLabel(headers[0])).toBe("/home/user/old-project");
-			expect(getGroupLabel(headers[1])).toBe("/home/user/recent-project");
+			expect(getGroupLabel(headers[0])).toBe("/home/user/recent-project");
+			expect(getGroupLabel(headers[1])).toBe("/home/user/old-project");
+		});
+
+		it("ignores modified time for projects without a user prompt", async () => {
+			const agent = new MockAgent();
+			agent.setSessions([
+				createSession({
+					name: "Assistant-only session",
+					cwd: "/home/user/z-no-prompt-project",
+					modified: "2026-02-28T12:00:00.000Z",
+				}),
+				createSession({
+					name: "Prompted session",
+					cwd: "/home/user/a-prompted-project",
+					modified: "2026-02-28T09:00:00.000Z",
+					lastUserPromptTime: "2026-02-28T08:00:00.000Z",
+				}),
+			]);
+
+			const el = await createPicker(agent);
+			const headers = getGroupHeaders(el);
+
+			expect(headers).toHaveLength(2);
+			expect(getGroupLabel(headers[0])).toBe("/home/user/a-prompted-project");
+			expect(getGroupLabel(headers[1])).toBe("/home/user/z-no-prompt-project");
 		});
 	});
 

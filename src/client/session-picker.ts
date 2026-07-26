@@ -1157,22 +1157,24 @@ export class SessionPicker extends LitElement {
 			});
 		}
 
-		// Sort groups by the most recent user prompt across their sessions.
-		// Running sessions count as "now" (most recent possible).
+		// Sort projects exclusively by their most recent user prompt. Running
+		// state and modified timestamps reflect assistant/tool activity and must
+		// not move a project that the user has not prompted in.
 		groups.sort((a, b) => {
 			const groupRecency = (g: SessionGroup): number => {
 				let best = 0;
 				for (const s of g.sessions) {
-					if (this.agent.getSessionStatus(s.path, s.backendId) === "running") return Infinity;
-					const t = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
-					best = Math.max(best, t);
+					if (!s.lastUserPromptTime) continue;
+					const promptTime = new Date(s.lastUserPromptTime).getTime();
+					if (Number.isFinite(promptTime)) best = Math.max(best, promptTime);
 				}
 				return best;
 			};
 			const diff = groupRecency(b) - groupRecency(a);
-			// If equal recency (e.g. both have running sessions), sort by label for stability
-			if (diff === 0) return a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
-			return diff;
+			if (diff !== 0) return diff;
+
+			const labelDiff = a.label.localeCompare(b.label, undefined, { sensitivity: "base" });
+			return labelDiff || a.key.localeCompare(b.key);
 		});
 
 		return groups;
