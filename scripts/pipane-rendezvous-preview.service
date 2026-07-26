@@ -1,0 +1,28 @@
+[Unit]
+Description=Pipane isolated preview rendezvous and web client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_GROUP@
+WorkingDirectory=@STATE_DIR@
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=8788
+Environment=PIPANE_RENDEZVOUS_DATA_DIR=@STATE_DIR@
+Environment=PIPANE_STUN_URLS=stun:stun.cloudflare.com:3478,stun:stun.l.google.com:19302
+ExecStart=/usr/bin/node @DEPLOY_ROOT@/current/bin/pipane-rendezvous.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@STATE_DIR@
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

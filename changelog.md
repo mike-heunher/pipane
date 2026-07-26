@@ -1,5 +1,6 @@
 # Unreleased
 
+- Deploy isolated source-built preview rendezvous, browser, and development backend stacks without publishing npm releases.
 - Guide failed WebRTC connections through browser-local hosted or self-hosted TURN relay setup with short-lived credential forwarding and relay testing.
 - Acknowledge prompts as soon as Pi accepts and persists them so later transient failures do not restore duplicate composer text.
 

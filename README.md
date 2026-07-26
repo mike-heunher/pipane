@@ -52,7 +52,7 @@ To try the same working-tree change through the public site without publishing n
 npm run deploy:preview
 ```
 
-This starts a detached `pipane-preview-deploy` systemd unit, which first deploys the local `pipane-dev` backend and then atomically uploads its matching browser bundle to `pipane.dev`. Detaching lets the workflow survive the local backend restart; follow it with `journalctl -u pipane-preview-deploy -f`. It leaves the central rendezvous process, the npm registry, and the local production backend untouched. The public browser bundle is health-checked and rolled back automatically if activation fails. Override the deployment target with `PIPANE_PREVIEW_WEB_HOST`, `PIPANE_PREVIEW_WEB_ROOT`, or `PIPANE_PREVIEW_PUBLIC_URL` when needed.
+This starts a detached `pipane-preview-deploy` systemd unit and deploys a matching, isolated stack: the local `pipane-dev` backend plus the rendezvous server and browser at `https://preview.pipane.dev`. Detaching lets the workflow survive the local backend restart; follow it with `journalctl -u pipane-preview-deploy -f`. The remote runtime is installed from the working-tree build without publishing or globally installing npm, uses separate rendezvous trust state, and rolls back atomically if its service, health endpoint, or browser checksum fails. Production `pipane.dev` and the local production backend remain untouched. Override the deployment target with `PIPANE_PREVIEW_RENDEZVOUS_HOST`, `PIPANE_PREVIEW_RENDEZVOUS_ROOT`, or `PIPANE_PREVIEW_PUBLIC_URL` when needed.
 
 Deploy the current committed working tree to local production with:
 
