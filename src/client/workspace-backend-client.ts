@@ -108,6 +108,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	get extensionStatuses(): ReadonlyMap<string, string> { return this.activeClient?.extensionStatuses ?? new Map(); }
 	get cwd(): string | undefined { return this.activeClient?.cwd; }
 	get activeBackendId(): string { return this.activeId; }
+	get supportsUploadedImagePrompt(): boolean { return this.activeClient?.supportsUploadedImagePrompt === true; }
 
 	get workspaceBackends(): readonly WorkspaceBackendState[] {
 		return [...this.contexts.values()].map((context) => ({

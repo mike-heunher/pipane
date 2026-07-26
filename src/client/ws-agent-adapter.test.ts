@@ -16,6 +16,7 @@ import type { FrameTransport } from "./frame-transport.js";
 import { getPromptFailureSession } from "./prompt-failure.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
+import { UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -168,6 +169,30 @@ describe("WsAgentAdapter transport injection", () => {
 
 		await expect(adapter.listSessions()).resolves.toEqual([]);
 		expect(fetchMock).toHaveBeenCalledWith("/api/sessions");
+	});
+
+	it("uses an uploaded image wire reference only after backend capability negotiation", async () => {
+		const transport: FrameTransport = {
+			isConnected: true,
+			isReconnecting: false,
+			connect: vi.fn(async () => {}),
+			send: vi.fn(),
+			close: vi.fn(),
+			onFrame: () => () => {},
+			onConnectionChange: () => () => {},
+		};
+		const getCapabilities = vi.fn(async () => ({
+			backendId: "b_one",
+			semanticProtocolVersion: 2,
+			applicationProtocolVersions: [WS_PROTOCOL_VERSION],
+			features: [UPLOADED_IMAGE_PROMPT_FEATURE],
+		}));
+		const adapter = new WsAgentAdapter({ transport, api: { getCapabilities } as any });
+
+		expect(adapter.supportsUploadedImagePrompt).toBe(false);
+		await adapter.connect("rtc://backend-one");
+		expect(adapter.supportsUploadedImagePrompt).toBe(true);
+		expect(getCapabilities).toHaveBeenCalledOnce();
 	});
 
 	it("uses a carrier-neutral frame transport for protocol commands", async () => {

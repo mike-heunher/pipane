@@ -57,6 +57,8 @@ export interface BackendClient extends BackendApi {
 	/** Present for the account-wide remote workspace; absent for a local backend. */
 	readonly activeBackendId?: string;
 	readonly workspaceBackends?: readonly WorkspaceBackendState[];
+	/** True only after the active backend advertises uploaded image prompt references. */
+	readonly supportsUploadedImagePrompt?: boolean;
 
 	connect(endpoint: string): Promise<void>;
 	disconnect(): void;

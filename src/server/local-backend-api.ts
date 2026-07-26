@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, open, readFile, rm, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
-import { MAX_UPLOAD_FILE_BYTES } from "../shared/backend-api.js";
+import { MAX_UPLOAD_FILE_BYTES, UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import { WS_PROTOCOL_VERSION, type InlineWireImage } from "../shared/ws-protocol.js";
 import type {
@@ -114,6 +114,7 @@ export class LocalBackendApi implements BackendApi {
 				"host-mkdir",
 				"file-preview",
 				"file-upload",
+				UPLOADED_IMAGE_PROMPT_FEATURE,
 				"local-settings",
 				"updates",
 			],

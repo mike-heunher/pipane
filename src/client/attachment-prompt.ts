@@ -6,9 +6,15 @@ export interface AttachmentPromptPayload {
 	images: WireImage[] | undefined;
 }
 
+export interface AttachmentPromptOptions {
+	/** Emit the additive uploadedPath wire shape only for an advertising backend. */
+	useUploadedImageReferences?: boolean;
+}
+
 export function buildAttachmentPromptPayload(
 	input: string,
 	attachments: readonly Attachment[] = [],
+	options: AttachmentPromptOptions = {},
 ): AttachmentPromptPayload {
 	const images: WireImage[] = [];
 	const uploadedPaths: string[] = [];
@@ -16,7 +22,7 @@ export function buildAttachmentPromptPayload(
 
 	for (const attachment of attachments) {
 		if (attachment.type === "image") {
-			images.push(attachment.uploadedPath
+			images.push(options.useUploadedImageReferences && attachment.uploadedPath
 				? { type: "image", uploadedPath: attachment.uploadedPath, mimeType: attachment.mimeType }
 				: { type: "image", data: attachment.content, mimeType: attachment.mimeType });
 		} else if (attachment.uploadedPath) {

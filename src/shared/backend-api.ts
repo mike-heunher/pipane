@@ -5,6 +5,8 @@ export interface SessionRef {
 	path: string;
 }
 
+export const UPLOADED_IMAGE_PROMPT_FEATURE = "uploaded-image-prompt";
+
 export interface BackendCapabilities {
 	backendId: string;
 	semanticProtocolVersion: number;

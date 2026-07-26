@@ -26,7 +26,7 @@ describe("buildAttachmentPromptPayload", () => {
 				content: "aW1hZ2U=",
 				uploadedPath: "/tmp/pipane-upload-image/photo.png",
 			}),
-		]);
+		], { useUploadedImageReferences: true });
 
 		expect(payload.input).toContain("Inspect these");
 		expect(payload.input).toContain(JSON.stringify("/tmp/pipane-upload-abc/archive.zip"));
@@ -38,11 +38,12 @@ describe("buildAttachmentPromptPayload", () => {
 		expect(JSON.stringify(payload)).not.toContain("aW1hZ2U=");
 	});
 
-	it("keeps direct image data as a fallback for drafts created before upload support", () => {
+	it("keeps direct image data for older drafts and backends without the advertised feature", () => {
 		expect(buildAttachmentPromptPayload("Inspect", [attachment({
 			type: "image",
 			mimeType: "image/png",
 			content: "aW1hZ2U=",
+			uploadedPath: "/tmp/newer-upload/photo.png",
 		})]).images).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
 	});
 

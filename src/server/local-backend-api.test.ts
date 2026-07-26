@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalBackendApi } from "./local-backend-api.js";
+import { UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
 import { SessionPathGuard } from "./session-path.js";
 
 const temporaryDirectories: string[] = [];
@@ -31,7 +32,9 @@ describe("LocalBackendApi uploaded images", () => {
 		const api = new LocalBackendApi({
 			sessionPaths: new SessionPathGuard(root),
 			uploadDirectory: root,
+			backendId: "b_test",
 		});
+		expect((await api.getCapabilities()).features).toContain(UPLOADED_IMAGE_PROMPT_FEATURE);
 		const bytes = Buffer.from([0, 1, 2, 253, 254, 255]);
 		const { uploadId } = await api.createFileUpload({
 			fileName: "photo.png",

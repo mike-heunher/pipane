@@ -210,7 +210,9 @@ type PromptMode = "prompt" | "fork";
 
 function submitPrompt(input: string, attachments: readonly Attachment[] | undefined, mode: PromptMode): void {
 	const submittedAttachments = (attachments ?? []).map((attachment) => ({ ...attachment }));
-	const payload = buildAttachmentPromptPayload(input, submittedAttachments);
+	const payload = buildAttachmentPromptPayload(input, submittedAttachments, {
+		useUploadedImageReferences: agent.supportsUploadedImagePrompt === true,
+	});
 	const submittedDraftKey = currentConversationDraftKey();
 	const submittedBackendId = agent.activeBackendId;
 

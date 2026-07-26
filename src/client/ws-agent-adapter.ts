@@ -18,6 +18,7 @@ import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
 import { COMPACT_CLIENT_TIMEOUT_MS, PROMPT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
+import { UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
 import type { UpdateTarget } from "../shared/updates.js";
 import {
 	assertNever,
@@ -130,6 +131,7 @@ export class WsAgentAdapter implements BackendClient {
 	private pendingRequests = new Map<string, PendingRequest>();
 	private requestId = 0;
 	private _connectionListeners = new Set<(connected: boolean) => void>();
+	private _backendFeatures = new Set<string>();
 
 	private _state: BackendClientState = {
 		model: undefined as any,
@@ -254,6 +256,7 @@ export class WsAgentAdapter implements BackendClient {
 	get sessionStatus(): SessionStatus { return this._sessionStatus; }
 	get isConnected(): boolean { return this.transport.isConnected; }
 	get isReconnecting(): boolean { return this.transport.isReconnecting; }
+	get supportsUploadedImagePrompt(): boolean { return this._backendFeatures.has(UPLOADED_IMAGE_PROMPT_FEATURE); }
 
 	onConnectionChange(fn: (connected: boolean) => void): () => void {
 		this._connectionListeners.add(fn);
@@ -490,6 +493,7 @@ export class WsAgentAdapter implements BackendClient {
 
 	async connect(endpoint: string): Promise<void> {
 		await this.transport.connect(endpoint);
+		await this.refreshBackendCapabilities();
 
 		// When the tab regains focus, sync state in case events were missed
 		// or updates didn't render while backgrounded.
@@ -554,6 +558,7 @@ export class WsAgentAdapter implements BackendClient {
 	 * session and refreshes session statuses so the UI is up-to-date.
 	 */
 	private async onReconnected() {
+		void this.refreshBackendCapabilities();
 		// Re-subscribe to the current session to get fresh state
 		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
 			// A request associated with the old socket can never complete here.
@@ -561,6 +566,25 @@ export class WsAgentAdapter implements BackendClient {
 			void this.requestFullSessionSync(this._sessionPath);
 		}
 		this.refreshSessionStatuses();
+	}
+
+	private async refreshBackendCapabilities(): Promise<void> {
+		if (!this.api.getCapabilities) {
+			this._backendFeatures.clear();
+			return;
+		}
+		try {
+			const capabilities = await this.api.getCapabilities();
+			this._backendFeatures = new Set(capabilities.features);
+		} catch {
+			// Capability uncertainty must retain the legacy command shape.
+			this._backendFeatures.clear();
+		}
+	}
+
+	getCapabilities() {
+		if (!this.api.getCapabilities) return Promise.reject(new Error("Backend capabilities are unavailable"));
+		return this.api.getCapabilities();
 	}
 
 	/**
