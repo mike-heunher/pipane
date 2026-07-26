@@ -435,6 +435,46 @@ describe("WsHandler actor orchestration", () => {
 		expect(materializeUploadedImage).toHaveBeenCalledWith("/tmp/upload/photo.png", "image/png");
 	});
 
+	it("acknowledges an accepted prompt before settlement and does not reject it afterward", async () => {
+		let rejectSettlement!: (error: Error) => void;
+		const settlement = new Promise<void>((_resolve, reject) => { rejectSettlement = reject; });
+		const sendRpcChecked = vi.fn(async () => ({
+			success: true,
+			data: {
+				model: { provider: "anthropic", id: "old-model" },
+				thinkingLevel: "off",
+				isStreaming: false,
+			},
+		}));
+		const { handler, registry } = makeHandler({ sendRpcChecked });
+		const proc = { id: 27, process: { exitCode: null, kill: vi.fn() } };
+		attachActor(registry, "/tmp/accepted.jsonl", proc);
+		handler.waitForPromptSettlement = vi.fn(() => settlement);
+		const { ws, sent } = makeWs();
+		let finished = false;
+
+		const handling = handler.handlePrompt(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "accepted-prompt",
+			type: "prompt",
+			sessionPath: "/tmp/accepted.jsonl",
+			message: "persist me once",
+			model: { provider: "anthropic", modelId: "old-model" },
+			thinkingLevel: "off",
+		}).then(() => { finished = true; });
+
+		await vi.waitFor(() => expect(sent).toContainEqual(expect.objectContaining({
+			id: "accepted-prompt",
+			command: "prompt",
+			success: true,
+		})));
+		expect(finished).toBe(false);
+
+		rejectSettlement(new Error("transient settlement failure"));
+		await expect(handling).resolves.toBeUndefined();
+		expect(sent.filter((message) => message.id === "accepted-prompt")).toHaveLength(1);
+	});
+
 	it("routes a prompt arriving during a turn to steering", async () => {
 		const sendRpc = vi.fn(async () => ({ success: true }));
 		const { handler, registry } = makeHandler({ sendRpc });

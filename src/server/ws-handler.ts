@@ -647,6 +647,7 @@ export class WsHandler {
 		let proc: RpcProcess | undefined;
 		let unownedLease: RpcProcessLease | undefined;
 		let generation: number | undefined;
+		let promptAccepted = false;
 		try {
 			let newSessionCwd: string | undefined;
 			if (sessionPath === "__new__") {
@@ -698,6 +699,13 @@ export class WsHandler {
 					...(images?.length ? { images } : {}),
 				});
 				if (!response.success) throw new Error(response.error);
+
+				// Pi has accepted the prompt and persisted its user entry. Resolve the
+				// browser submission now, before settlement or control reconciliation can
+				// encounter a transient failure and offer the same text for retry.
+				promptAccepted = true;
+				this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
+
 				await this.reconcileEffectiveControlState(proc!, actor!);
 				return { observer, response, generation };
 			});
@@ -714,7 +722,6 @@ export class WsHandler {
 				this.releaseActor(actor!);
 			});
 
-			this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
 		} catch (error) {
 			if (proc) this.pendingExtensionStatuses.delete(proc);
 			unownedLease?.release();
@@ -731,10 +738,11 @@ export class WsHandler {
 				if (rawMessage.includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
 					proc.process.kill("SIGTERM");
 				}
-				throw new Error(detailed);
+				if (!promptAccepted) throw new Error(detailed);
+				return;
 			}
 			if (proc && proc.process.exitCode === null) proc.process.kill("SIGTERM");
-			throw error;
+			if (!promptAccepted) throw error;
 		}
 	}
 
@@ -952,6 +960,7 @@ export class WsHandler {
 		const actor = this.registry.get(newSessionPath);
 		let proc: RpcProcess | undefined;
 		let unownedLease: RpcProcessLease | undefined;
+		let promptAccepted = false;
 		try {
 			const start = await actor.enqueue("fork prompt start", async () => {
 				actor.assertAvailable("fork and prompt");
@@ -978,6 +987,10 @@ export class WsHandler {
 					message,
 					...(images?.length ? { images } : {}),
 				});
+
+				promptAccepted = true;
+				this.sendSuccess(ws, command.id, "fork_prompt", { newSessionPath });
+
 				await this.reconcileEffectiveControlState(proc, actor);
 				return { observer, generation };
 			});
@@ -988,7 +1001,6 @@ export class WsHandler {
 				await this.reconcileEffectiveControlState(proc!, actor);
 				this.releaseActor(actor);
 			});
-			this.sendSuccess(ws, command.id, "fork_prompt", { newSessionPath });
 		} catch (error) {
 			if (proc) this.pendingExtensionStatuses.delete(proc);
 			unownedLease?.release();
@@ -1005,10 +1017,11 @@ export class WsHandler {
 				if (rawMessage.includes("Timeout waiting for RPC response to prompt") && proc.process.exitCode === null) {
 					proc.process.kill("SIGTERM");
 				}
-				throw new Error(detailed);
+				if (!promptAccepted) throw new Error(detailed);
+				return;
 			}
 			if (proc && proc.process.exitCode === null) proc.process.kill("SIGTERM");
-			throw error;
+			if (!promptAccepted) throw error;
 		}
 	}
 

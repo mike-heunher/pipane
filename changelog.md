@@ -1,5 +1,7 @@
 # Unreleased
 
+- Acknowledge prompts as soon as Pi accepts and persists them so later transient failures do not restore duplicate composer text.
+
 # 0.1.14 - 2026-07-26
 
 - Restore rejected prompt text and every attachment to its conversation composer so transport failures cannot discard user input.
