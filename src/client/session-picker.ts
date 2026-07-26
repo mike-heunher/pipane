@@ -48,6 +48,10 @@ interface DirEntry {
 
 const PINNED_STORAGE_KEY = "pipane-pinned-sessions";
 
+export function isPreviewHostname(hostname: string): boolean {
+	return hostname.toLowerCase() === "preview.pipane.dev";
+}
+
 function loadPinnedSessions(): Set<string> {
 	try {
 		const raw = localStorage.getItem(PINNED_STORAGE_KEY);
@@ -64,6 +68,9 @@ function savePinnedSessions(pinned: Set<string>) {
 
 @customElement("session-picker")
 export class SessionPicker extends LitElement {
+	@property({ type: Boolean, attribute: "preview-mode" })
+	previewMode = isPreviewHostname(globalThis.location?.hostname ?? "");
+
 	static styles = css`
 		:host {
 			display: flex;
@@ -131,12 +138,42 @@ export class SessionPicker extends LitElement {
 			outline-offset: 2px;
 		}
 
-		.header-title {
-			font-size: 0.8rem;
-			font-weight: 600;
+		.header-brand {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.55rem;
 			color: var(--picker-text);
+		}
+
+		.header-logo {
+			font-size: 0.82rem;
+			font-weight: 760;
+			line-height: 1;
 			text-transform: uppercase;
-			letter-spacing: 0.05em;
+			letter-spacing: -0.045em;
+		}
+
+		.header-environment-badge {
+			padding: 0.25rem 0.38rem 0.21rem;
+			border: 1px solid currentColor;
+			border-radius: 999px;
+			font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+			font-size: 0.47rem;
+			font-weight: 750;
+			line-height: 1;
+			letter-spacing: 0.1em;
+			text-transform: uppercase;
+			white-space: nowrap;
+		}
+
+		.header-environment-badge.preview {
+			color: color-mix(in srgb, #34d399 78%, var(--picker-text));
+			background: color-mix(in srgb, #34d399 7%, transparent);
+		}
+
+		.header-environment-badge.dev {
+			color: color-mix(in srgb, #ef4444 75%, var(--picker-text));
+			background: color-mix(in srgb, #ef4444 7%, transparent);
 		}
 
 		.new-btn {
@@ -1442,7 +1479,11 @@ export class SessionPicker extends LitElement {
 			<div style="position: relative; height: 100%; display: flex; flex-direction: column;">
 				<div class="header ${this.settingsMenu?.isDevMode ? 'dev' : ''}">
 					<div class="header-left">
-						<span class="header-title">${this.settingsMenu?.isDevMode ? 'pipane · dev' : 'pipane'}</span>
+						<span class="header-brand" aria-label=${this.previewMode ? "Pipane preview" : "Pipane"}>
+							<span class="header-logo">PIPANE</span>
+							${this.previewMode ? html`<span class="header-environment-badge preview">preview</span>` : nothing}
+							${this.settingsMenu?.isDevMode ? html`<span class="header-environment-badge dev">dev</span>` : nothing}
+						</span>
 					</div>
 					<div class="header-right">
 						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>

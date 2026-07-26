@@ -268,6 +268,13 @@ test.describe("UI behavior and visual goldens", () => {
 		await captureAndCompare(page.locator("session-picker"), "session-list.png");
 	});
 
+	test("preview session list", async ({ page }) => {
+		await page.goto(`http://localhost:${mock.port}`);
+		await openMainSession(page);
+		await page.locator("session-picker").evaluate((picker: any) => { picker.previewMode = true; });
+		await captureAndCompare(page.locator("session-picker"), "session-list-preview.png");
+	});
+
 	test("settings command center", async ({ page }) => {
 		await page.goto(`http://localhost:${mock.port}`);
 		await openMainSession(page);

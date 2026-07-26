@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add a stronger PIPANE sidebar wordmark with an outlined badge shown only on preview.pipane.dev.
 - Resolve relative conversation file previews through successful write/edit calls and the conversation's verified Git worktree.
 - Keep project sorting tied exclusively to the latest user prompt instead of running or assistant activity.
 - Deploy isolated source-built preview rendezvous, browser, and development backend stacks without publishing npm releases.

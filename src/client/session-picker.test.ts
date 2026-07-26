@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { MockAgent, createSession, resetSessionCounter } from "../test/mock-agent.js";
 import "./session-picker.js";
-import type { SessionPicker } from "./session-picker.js";
+import { isPreviewHostname, type SessionPicker } from "./session-picker.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,33 @@ beforeEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("session-picker", () => {
+	it("renders the PIPANE logo without an environment badge on live deployments", async () => {
+		const el = await createPicker(new MockAgent());
+		el.previewMode = false;
+		await el.updateComplete;
+
+		expect(el.shadowRoot!.querySelector(".header-logo")?.textContent).toBe("PIPANE");
+		expect(el.shadowRoot!.querySelector(".header-brand")?.getAttribute("aria-label")).toBe("Pipane");
+		expect(el.shadowRoot!.querySelector(".header-environment-badge.preview")).toBeNull();
+	});
+
+	it("adds the outlined preview badge only in preview mode", async () => {
+		const el = await createPicker(new MockAgent());
+		el.previewMode = true;
+		await el.updateComplete;
+
+		expect(el.shadowRoot!.querySelector(".header-logo")?.textContent).toBe("PIPANE");
+		expect(el.shadowRoot!.querySelector(".header-brand")?.getAttribute("aria-label")).toBe("Pipane preview");
+		expect(el.shadowRoot!.querySelector(".header-environment-badge.preview")?.textContent).toBe("preview");
+	});
+
+	it("recognizes only the dedicated preview hostname", () => {
+		expect(isPreviewHostname("preview.pipane.dev")).toBe(true);
+		expect(isPreviewHostname("PREVIEW.PIPANE.DEV")).toBe(true);
+		expect(isPreviewHostname("pipane.dev")).toBe(false);
+		expect(isPreviewHostname("preview.pipane.dev.example.com")).toBe(false);
+	});
+
 	it("places a settings gear beside New project", async () => {
 		const agent = new MockAgent();
 		const onOpenSettings = vi.fn();
