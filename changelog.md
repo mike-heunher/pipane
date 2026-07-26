@@ -1,5 +1,6 @@
 # Unreleased
 
+- Replace full-width update banners with tiny per-backend upgrade indicators and selectable update menus.
 - Add a stronger PIPANE sidebar wordmark with an outlined badge shown only on preview.pipane.dev.
 - Resolve relative conversation file previews through successful write/edit calls and the conversation's verified Git worktree.
 - Keep project sorting tied exclusively to the latest user prompt instead of running or assistant activity.

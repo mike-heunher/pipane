@@ -7,7 +7,7 @@ import { conversationDraftKey, ConversationDraftStore } from "./conversation-dra
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { consumeAppRuntime } from "./app-runtime.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
-import "./session-picker.js";
+import { LOCAL_BACKEND_UPDATE_KEY } from "./session-picker.js";
 import "./ui/index.js";
 import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import type { Attachment } from "./ui/utils/attachment-utils.js";
@@ -40,7 +40,6 @@ import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
 import {
 	UpdateNoticeSnoozeStore,
 	updateConfirmationMessage,
-	updateNoticeDetail,
 	updateNoticeTitle,
 } from "./update-notifications.js";
 import {
@@ -86,9 +85,9 @@ let messagesInitialCount = 50;
 let hideOlderThinking = false;
 let keepThinkingParts = 3;
 let pendingHardKillOfferFor: string | null = null;
-let updateNotices: UpdateNotice[] = [];
-let updatingTarget: UpdateTarget | null = null;
-let updateFeedback: { kind: "success" | "error"; message: string } | null = null;
+let updateNoticesByBackend = new Map<string, UpdateNotice[]>();
+let updatingByBackend = new Map<string, Set<UpdateTarget>>();
+let updateFeedbackByBackend = new Map<string, { kind: "success" | "error"; message: string }>();
 const updateNoticeSnoozes = new UpdateNoticeSnoozeStore(window.localStorage);
 let updateSnoozeRefreshTimer: number | undefined;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
@@ -635,7 +634,11 @@ function scrollToBottomIfNeeded(): void {
 function scheduleUpdateSnoozeRefresh(): void {
 	if (updateSnoozeRefreshTimer !== undefined) window.clearTimeout(updateSnoozeRefreshTimer);
 	updateSnoozeRefreshTimer = undefined;
-	const expiresAt = updateNoticeSnoozes.nextExpiry(updateNotices);
+	let expiresAt: number | undefined;
+	for (const [backendId, notices] of updateNoticesByBackend) {
+		const candidate = updateNoticeSnoozes.nextExpiry(notices, backendId);
+		if (candidate !== undefined && (expiresAt === undefined || candidate < expiresAt)) expiresAt = candidate;
+	}
 	if (expiresAt === undefined) return;
 
 	const delay = Math.min(Math.max(0, expiresAt - Date.now()), 2_147_483_647);
@@ -646,95 +649,93 @@ function scheduleUpdateSnoozeRefresh(): void {
 	}, delay);
 }
 
-async function refreshUpdateNotices(): Promise<void> {
-	const requestedBackendId = agent.activeBackendId;
-	try {
-		const snapshot = await agent.getUpdates();
-		if (requestedBackendId !== agent.activeBackendId) return;
-		updateNotices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
-		scheduleUpdateSnoozeRefresh();
-		renderApp();
-	} catch {
-		// Update checks are optional and must never interfere with the chat UI.
-	}
+function updateBackendIds(): string[] {
+	if (!agent.workspaceBackends) return [LOCAL_BACKEND_UPDATE_KEY];
+	return agent.workspaceBackends
+		.filter((backend) => backend.connected)
+		.map((backend) => backend.backendId);
 }
 
-function handleUpdateSnooze(notice: UpdateNotice): void {
-	if (updatingTarget) return;
-	updateNoticeSnoozes.snooze(notice);
+async function getBackendUpdates(backendId: string) {
+	if (backendId === LOCAL_BACKEND_UPDATE_KEY) return agent.getUpdates();
+	if (agent.getBackendUpdates) return agent.getBackendUpdates(backendId);
+	if (backendId === agent.activeBackendId) return agent.getUpdates();
+	throw new Error("Backend updates are unavailable");
+}
+
+async function runBackendUpdate(backendId: string, target: UpdateTarget) {
+	if (backendId === LOCAL_BACKEND_UPDATE_KEY) return agent.runUpdate(target);
+	if (agent.runBackendUpdate) return agent.runBackendUpdate(backendId, target);
+	if (backendId === agent.activeBackendId) return agent.runUpdate(target);
+	throw new Error("Backend updates are unavailable");
+}
+
+async function refreshUpdateNotices(): Promise<void> {
+	const backendIds = updateBackendIds();
+	await Promise.all(backendIds.map(async (backendId) => {
+		try {
+			const snapshot = await getBackendUpdates(backendId);
+			updateNoticesByBackend = new Map(updateNoticesByBackend).set(
+				backendId,
+				Array.isArray(snapshot.notices) ? snapshot.notices : [],
+			);
+		} catch {
+			// Update checks are optional and must never interfere with the chat UI.
+		}
+	}));
+	const currentIds = new Set(updateBackendIds());
+	updateNoticesByBackend = new Map([...updateNoticesByBackend].filter(([backendId]) => currentIds.has(backendId)));
 	scheduleUpdateSnoozeRefresh();
 	renderApp();
 }
 
-async function handleUpdateClick(notice: UpdateNotice): Promise<void> {
-	if (updatingTarget) return;
-	if (!window.confirm(updateConfirmationMessage(notice))) return;
-
-	updatingTarget = notice.target;
-	updateFeedback = null;
+function handleUpdateSnooze(backendId: string, notice: UpdateNotice): void {
+	if ((updatingByBackend.get(backendId)?.size ?? 0) > 0) return;
+	updateNoticeSnoozes.snooze(notice, backendId);
+	scheduleUpdateSnoozeRefresh();
 	renderApp();
+}
+
+async function handleUpdatesClick(backendId: string, notices: readonly UpdateNotice[]): Promise<void> {
+	if (notices.length === 0 || (updatingByBackend.get(backendId)?.size ?? 0) > 0) return;
+	const backendName = backendId === LOCAL_BACKEND_UPDATE_KEY ? "this backend" : backendDisplayName(backendId);
+	const confirmation = notices.length === 1
+		? updateConfirmationMessage(notices[0])
+		: `Install these updates on ${backendName}?\n\n${notices.map((notice) => `• ${updateNoticeTitle(notice)}`).join("\n")}`;
+	if (!window.confirm(confirmation)) return;
+
+	updatingByBackend = new Map(updatingByBackend).set(backendId, new Set(notices.map((notice) => notice.target)));
+	updateFeedbackByBackend = new Map(updateFeedbackByBackend);
+	updateFeedbackByBackend.delete(backendId);
+	renderApp();
+	const completed: string[] = [];
+	const errors: string[] = [];
 	try {
-		const payload = await agent.runUpdate(notice.target);
-		updateNotices = payload.snapshot.notices;
-		updateFeedback = { kind: "success", message: payload.result.message };
-	} catch (error) {
-		updateFeedback = {
-			kind: "error",
-			message: error instanceof Error ? error.message : String(error),
-		};
+		for (const notice of notices) {
+			try {
+				const payload = await runBackendUpdate(backendId, notice.target);
+				updateNoticesByBackend = new Map(updateNoticesByBackend).set(backendId, payload.snapshot.notices);
+				completed.push(payload.result.message);
+			} catch (error) {
+				errors.push(`${updateNoticeTitle(notice)}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		updateFeedbackByBackend = new Map(updateFeedbackByBackend).set(backendId, errors.length > 0
+			? { kind: "error", message: [completed.length > 0 ? `${completed.length} completed.` : "", ...errors].filter(Boolean).join(" ") }
+			: { kind: "success", message: completed.join(" ") });
 	} finally {
-		updatingTarget = null;
+		updatingByBackend = new Map(updatingByBackend);
+		updatingByBackend.delete(backendId);
 		scheduleUpdateSnoozeRefresh();
 		renderApp();
 	}
 }
 
-function renderUpdateNotifications() {
-	const visibleNotices = updateNotices.filter((notice) => !updateNoticeSnoozes.isSnoozed(notice));
-	if (visibleNotices.length === 0 && !updateFeedback) return "";
-	return html`
-		<div class="update-notifications" aria-live="polite">
-			${visibleNotices.map((notice) => html`
-				<div class="update-notice" data-update-target=${notice.target}>
-					<button
-						type="button"
-						class="update-notice-update"
-						?disabled=${updatingTarget !== null}
-						@click=${() => { void handleUpdateClick(notice); }}
-					>
-						<span class="update-notice-icon" aria-hidden="true">
-							<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-								<path d="M12 3v12"></path>
-								<path d="m7 10 5 5 5-5"></path>
-								<path d="M5 21h14"></path>
-							</svg>
-						</span>
-						<span class="update-notice-copy">
-							<strong>${updateNoticeTitle(notice)}</strong>
-							<small title=${updateNoticeDetail(notice)}>${updateNoticeDetail(notice)}</small>
-						</span>
-						<span class="update-notice-action">
-							${updatingTarget === notice.target ? "Updating…" : "Update"}
-						</span>
-					</button>
-					<button
-						type="button"
-						class="update-notice-dismiss"
-						?disabled=${updatingTarget !== null}
-						@click=${() => handleUpdateSnooze(notice)}
-						aria-label=${`Remind me about ${updateNoticeTitle(notice)} tomorrow`}
-						title="Hide this update for 24 hours"
-					>Remind me tomorrow</button>
-				</div>
-			`)}
-			${updateFeedback ? html`
-				<div class="update-feedback is-${updateFeedback.kind}" role=${updateFeedback.kind === "error" ? "alert" : "status"}>
-					<span>${updateFeedback.message}</span>
-					<button type="button" @click=${() => { updateFeedback = null; renderApp(); }} aria-label="Dismiss update message">×</button>
-				</div>
-			` : ""}
-		</div>
-	`;
+function visibleUpdateNoticesByBackend(): ReadonlyMap<string, readonly UpdateNotice[]> {
+	return new Map([...updateNoticesByBackend].map(([backendId, notices]) => [
+		backendId,
+		notices.filter((notice) => !updateNoticeSnoozes.isSnoozed(notice, backendId)),
+	]));
 }
 
 function backendDisplayName(backendId: string): string {
@@ -786,6 +787,16 @@ const renderApp = () => {
 		onOpenRelaySettings: () => { void openTurnRelaySettings(false); },
 		onRemoveBackend: (backendId: string) => { void removeBackend(backendId); },
 		onInviteDevice: () => { void openDeviceInviteModal(); },
+		onRunUpdates: (backendId: string, notices: readonly UpdateNotice[]) => { void handleUpdatesClick(backendId, notices); },
+		onSnoozeUpdate: handleUpdateSnooze,
+		onDismissUpdateFeedback: (backendId: string) => {
+			updateFeedbackByBackend = new Map(updateFeedbackByBackend);
+			updateFeedbackByBackend.delete(backendId);
+			renderApp();
+		},
+		updatesByBackend: visibleUpdateNoticesByBackend(),
+		updatingByBackend,
+		updateFeedbackByBackend,
 		isDevMode,
 	};
 
@@ -826,7 +837,6 @@ const renderApp = () => {
 							</div>
 						`
 						: ""}
-					${renderUpdateNotifications()}
 					${state?.error
 						? html`
 							<div class="flex items-center gap-2 px-4 py-1.5 bg-red-500/15 border-b border-red-500/30 text-sm text-red-700 dark:text-red-400" title=${state.error}>
@@ -1058,9 +1068,6 @@ async function initApp() {
 	agent.onSessionChange(async () => {
 		if (observedBackendId !== agent.activeBackendId) {
 			observedBackendId = agent.activeBackendId;
-			updateNotices = [];
-			updateFeedback = null;
-			void refreshUpdateNotices();
 		}
 		clearPendingHardKillOffer();
 		setFilePreviewSession(agent.sessionFile, currentSessionScopeKey());
@@ -1103,6 +1110,13 @@ async function initApp() {
 	// Connection change — show/hide reconnection banner
 	agent.onConnectionChange(() => {
 		renderApp();
+	});
+
+	agent.onWorkspaceChange?.(() => {
+		const connectedIds = updateBackendIds();
+		if (connectedIds.length !== updateNoticesByBackend.size || connectedIds.some((backendId) => !updateNoticesByBackend.has(backendId))) {
+			void refreshUpdateNotices();
+		}
 	});
 
 	// Steering queue change

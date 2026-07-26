@@ -12,6 +12,10 @@ import { customElement, property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionInfoDTO, SessionPickerBackendClient } from "./backend-client.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
+import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
+import { updateNoticeDetail, updateNoticeTitle } from "./update-notifications.js";
+
+export const LOCAL_BACKEND_UPDATE_KEY = "__local__";
 
 export interface SettingsMenuCallbacks {
 	onOpenSettings: (backendId?: string) => void;
@@ -19,6 +23,12 @@ export interface SettingsMenuCallbacks {
 	onOpenRelaySettings?: () => void;
 	onRemoveBackend?: (backendId: string) => void;
 	onInviteDevice?: () => void;
+	onRunUpdates?: (backendId: string, notices: readonly UpdateNotice[]) => void;
+	onSnoozeUpdate?: (backendId: string, notice: UpdateNotice) => void;
+	onDismissUpdateFeedback?: (backendId: string) => void;
+	updatesByBackend?: ReadonlyMap<string, readonly UpdateNotice[]>;
+	updatingByBackend?: ReadonlyMap<string, ReadonlySet<UpdateTarget>>;
+	updateFeedbackByBackend?: ReadonlyMap<string, { kind: "success" | "error"; message: string }>;
 	isDevMode: boolean;
 }
 
@@ -88,6 +98,7 @@ export class SessionPicker extends LitElement {
 		}
 
 		.header {
+			position: relative;
 			display: flex;
 			align-items: center;
 			justify-content: space-between;
@@ -270,6 +281,61 @@ export class SessionPicker extends LitElement {
 			letter-spacing: 0.055em;
 			text-transform: uppercase;
 		}
+
+		.update-indicator {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 1rem;
+			height: 1rem;
+			padding: 0;
+			border: 0;
+			border-radius: 999px;
+			background: color-mix(in srgb, #f59e0b 16%, transparent);
+			color: #d97706;
+			cursor: pointer;
+			font-size: 0.72rem;
+			font-weight: 900;
+			line-height: 1;
+			flex-shrink: 0;
+		}
+
+		.update-indicator:hover,
+		.update-indicator[aria-expanded="true"] { background: color-mix(in srgb, #f59e0b 28%, transparent); }
+		.update-indicator.status-success { background: color-mix(in srgb, #22c55e 16%, transparent); color: #16a34a; }
+		.update-indicator.status-error { background: color-mix(in srgb, #ef4444 16%, transparent); color: #dc2626; }
+		.update-indicator:focus-visible { outline: 2px solid var(--picker-active); outline-offset: 1px; }
+
+		.update-menu {
+			position: absolute;
+			z-index: 10;
+			top: calc(100% - 0.1rem);
+			left: 0.65rem;
+			right: 0.65rem;
+			padding: 0.55rem;
+			border: 1px solid var(--picker-border);
+			border-radius: 0.5rem;
+			background: var(--picker-bg);
+			box-shadow: 0 10px 28px color-mix(in srgb, #000 22%, transparent);
+		}
+
+		.update-menu-title { margin: 0 0 0.4rem; font-size: 0.7rem; font-weight: 750; }
+		.update-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 0.4rem; padding: 0.35rem 0; }
+		.update-option + .update-option { border-top: 1px solid var(--picker-border); }
+		.update-option input { margin: 0.15rem 0 0; accent-color: var(--picker-active); }
+		.update-copy { min-width: 0; }
+		.update-copy strong, .update-copy small { display: block; }
+		.update-copy strong { font-size: 0.68rem; font-weight: 650; }
+		.update-copy small { margin-top: 0.08rem; color: var(--picker-muted); font-size: 0.59rem; line-height: 1.3; overflow-wrap: anywhere; }
+		.update-later { border: 0; background: none; color: var(--picker-muted); padding: 0.1rem; font: inherit; font-size: 0.56rem; cursor: pointer; }
+		.update-later:hover { color: var(--picker-text); }
+		.update-menu-actions { display: flex; justify-content: flex-end; margin-top: 0.45rem; }
+		.update-run { border: 0; border-radius: 0.35rem; background: var(--picker-active); color: white; padding: 0.32rem 0.55rem; font: inherit; font-size: 0.64rem; font-weight: 700; cursor: pointer; }
+		.update-run:disabled { cursor: progress; opacity: 0.5; }
+		.update-menu-feedback { display: flex; align-items: start; justify-content: space-between; gap: 0.35rem; margin-top: 0.4rem; padding: 0.35rem 0.4rem; border-radius: 0.3rem; font-size: 0.61rem; line-height: 1.35; }
+		.update-menu-feedback button { border: 0; background: none; color: currentColor; padding: 0; font: inherit; font-size: 0.8rem; line-height: 1; cursor: pointer; }
+		.update-menu-feedback.success { background: color-mix(in srgb, #22c55e 12%, transparent); color: color-mix(in srgb, #16a34a 80%, var(--picker-text)); }
+		.update-menu-feedback.error { background: color-mix(in srgb, #ef4444 12%, transparent); color: color-mix(in srgb, #dc2626 80%, var(--picker-text)); }
 
 		.host-action {
 			border: 0;
@@ -925,6 +991,8 @@ export class SessionPicker extends LitElement {
 	@state() private expandedGroups = new Set<string>();
 	@state() private pinnedSessions = loadPinnedSessions();
 	@state() private openHostMenu: string | undefined;
+	@state() private openUpdateMenu: string | undefined;
+	@state() private selectedUpdates = new Map<string, Set<UpdateTarget>>();
 
 	// Folder picker state
 	@state() private showFolderPicker = false;
@@ -1466,6 +1534,75 @@ export class SessionPicker extends LitElement {
 		this.browseTo(parent);
 	}
 
+	private selectedTargets(backendId: string, notices: readonly UpdateNotice[]): Set<UpdateTarget> {
+		const available = new Set(notices.map((notice) => notice.target));
+		return new Set([...(this.selectedUpdates.get(backendId) ?? available)].filter((target) => available.has(target)));
+	}
+
+	private toggleUpdateMenu(backendId: string, notices: readonly UpdateNotice[]): void {
+		this.openHostMenu = undefined;
+		this.openUpdateMenu = this.openUpdateMenu === backendId ? undefined : backendId;
+		if (this.openUpdateMenu && !this.selectedUpdates.has(backendId)) {
+			this.selectedUpdates = new Map(this.selectedUpdates).set(backendId, new Set(notices.map((notice) => notice.target)));
+		}
+	}
+
+	private toggleUpdateSelection(backendId: string, target: UpdateTarget, checked: boolean, notices: readonly UpdateNotice[]): void {
+		const selected = this.selectedTargets(backendId, notices);
+		if (checked) selected.add(target);
+		else selected.delete(target);
+		this.selectedUpdates = new Map(this.selectedUpdates).set(backendId, selected);
+	}
+
+	private renderUpdateControl(backendId: string, backendName: string): TemplateResult | typeof nothing {
+		const notices = this.settingsMenu?.updatesByBackend?.get(backendId) ?? [];
+		const feedback = this.settingsMenu?.updateFeedbackByBackend?.get(backendId);
+		if (notices.length === 0 && !feedback) return nothing;
+		const selected = this.selectedTargets(backendId, notices);
+		const updating = this.settingsMenu?.updatingByBackend?.get(backendId) ?? new Set<UpdateTarget>();
+		const isUpdating = updating.size > 0;
+		const statusOnly = notices.length === 0 ? feedback : undefined;
+		const buttonLabel = statusOnly
+			? `${statusOnly.kind === "success" ? "Update completed" : "Update failed"} for ${backendName}`
+			: `${notices.length} update${notices.length === 1 ? "" : "s"} available for ${backendName}`;
+		return html`
+			<button
+				class="update-indicator ${statusOnly ? `status-${statusOnly.kind}` : ""}"
+				type="button"
+				aria-label=${buttonLabel}
+				title=${buttonLabel}
+				aria-expanded=${this.openUpdateMenu === backendId}
+				@click=${() => this.toggleUpdateMenu(backendId, notices)}
+			>${statusOnly ? (statusOnly.kind === "success" ? "✓" : "!") : "↑"}</button>
+			${this.openUpdateMenu === backendId ? html`
+				<div class="update-menu" data-update-backend=${backendId}>
+					<p class="update-menu-title">Updates for ${backendName}</p>
+					${notices.map((notice) => html`
+						<div class="update-option" data-update-target=${notice.target}>
+							<input
+								id=${`update-${backendId}-${notice.target}`}
+								type="checkbox"
+								.checked=${selected.has(notice.target)}
+								?disabled=${isUpdating}
+								@change=${(event: Event) => this.toggleUpdateSelection(backendId, notice.target, (event.currentTarget as HTMLInputElement).checked, notices)}
+							/>
+							<label class="update-copy" for=${`update-${backendId}-${notice.target}`}><strong>${updateNoticeTitle(notice)}</strong><small>${updateNoticeDetail(notice)}</small></label>
+							<button class="update-later" type="button" ?disabled=${isUpdating} @click=${() => this.settingsMenu?.onSnoozeUpdate?.(backendId, notice)}>Tomorrow</button>
+						</div>
+					`)}
+					${notices.length > 0 ? html`
+						<div class="update-menu-actions">
+							<button class="update-run" type="button" ?disabled=${selected.size === 0 || isUpdating} @click=${() => this.settingsMenu?.onRunUpdates?.(backendId, notices.filter((notice) => selected.has(notice.target)))}>
+								${isUpdating ? "Updating…" : `Update selected (${selected.size})`}
+							</button>
+						</div>
+					` : nothing}
+					${feedback ? html`<div class="update-menu-feedback ${feedback.kind}"><span>${feedback.message}</span><button type="button" aria-label="Dismiss update result" @click=${() => { this.openUpdateMenu = undefined; this.settingsMenu?.onDismissUpdateFeedback?.(backendId); }}>×</button></div>` : nothing}
+				</div>
+			` : nothing}
+		`;
+	}
+
 	// ── Render ──────────────────────────────────────────────────────────────
 
 	render() {
@@ -1484,6 +1621,7 @@ export class SessionPicker extends LitElement {
 							${this.previewMode ? html`<span class="header-environment-badge preview">preview</span>` : nothing}
 							${this.settingsMenu?.isDevMode ? html`<span class="header-environment-badge dev">dev</span>` : nothing}
 						</span>
+						${!isWorkspace ? this.renderUpdateControl(LOCAL_BACKEND_UPDATE_KEY, "this backend") : nothing}
 					</div>
 					<div class="header-right">
 						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>
@@ -1546,6 +1684,7 @@ export class SessionPicker extends LitElement {
 					@click=${() => this.settingsMenu?.onOpenDiagnostics?.(host.backendId)}
 				></button>
 				<span class="host-name" title=${host.name}>${host.name}</span>
+				${this.renderUpdateControl(host.backendId, host.name)}
 				<button class="host-action" title=${`New project on ${host.name}`} ?disabled=${!host.online || !host.compatible} @click=${() => this.openFolderPicker(host.backendId)}>+ PROJECT</button>
 				<button class="host-action" title=${`Manage ${host.name}`} aria-label=${`Manage ${host.name}`} @click=${() => { this.openHostMenu = this.openHostMenu === host.backendId ? undefined : host.backendId; }}>•••</button>
 				${this.openHostMenu === host.backendId ? html`

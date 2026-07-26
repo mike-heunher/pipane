@@ -6,8 +6,9 @@ const UPDATE_SNOOZE_STORAGE_KEY = "pipane-update-snoozes-v1";
 type UpdateSnoozeStorage = Pick<Storage, "getItem" | "setItem">;
 type UpdateSnoozeState = Record<string, number>;
 
-function updateNoticeIdentity(notice: UpdateNotice): string {
+function updateNoticeIdentity(notice: UpdateNotice, scope = "local"): string {
 	return JSON.stringify([
+		scope,
 		notice.target,
 		notice.currentVersion ?? null,
 		notice.latestVersion ?? null,
@@ -39,12 +40,12 @@ export class UpdateNoticeSnoozeStore {
 		this.state = loadUpdateSnoozes(storage, now());
 	}
 
-	isSnoozed(notice: UpdateNotice): boolean {
-		return (this.state[updateNoticeIdentity(notice)] ?? 0) > this.now();
+	isSnoozed(notice: UpdateNotice, scope?: string): boolean {
+		return (this.state[updateNoticeIdentity(notice, scope)] ?? 0) > this.now();
 	}
 
-	snooze(notice: UpdateNotice): void {
-		this.state[updateNoticeIdentity(notice)] = this.now() + UPDATE_SNOOZE_DURATION_MS;
+	snooze(notice: UpdateNotice, scope?: string): void {
+		this.state[updateNoticeIdentity(notice, scope)] = this.now() + UPDATE_SNOOZE_DURATION_MS;
 		try {
 			this.storage.setItem(UPDATE_SNOOZE_STORAGE_KEY, JSON.stringify(this.state));
 		} catch {
@@ -52,11 +53,11 @@ export class UpdateNoticeSnoozeStore {
 		}
 	}
 
-	nextExpiry(notices: readonly UpdateNotice[]): number | undefined {
+	nextExpiry(notices: readonly UpdateNotice[], scope?: string): number | undefined {
 		const now = this.now();
 		let next: number | undefined;
 		for (const notice of notices) {
-			const expiresAt = this.state[updateNoticeIdentity(notice)];
+			const expiresAt = this.state[updateNoticeIdentity(notice, scope)];
 			if (expiresAt !== undefined && expiresAt > now && (next === undefined || expiresAt < next)) {
 				next = expiresAt;
 			}

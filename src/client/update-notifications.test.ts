@@ -59,12 +59,13 @@ describe("update notice snoozes", () => {
 		const storage = memoryStorage();
 		const now = () => 2_000;
 		const notice = { target: "pi" as const, currentVersion: "0.80.6", latestVersion: "0.80.10" };
-		new UpdateNoticeSnoozeStore(storage, now).snooze(notice);
+		new UpdateNoticeSnoozeStore(storage, now).snooze(notice, "backend-one");
 
 		const restored = new UpdateNoticeSnoozeStore(storage, now);
-		expect(restored.isSnoozed(notice)).toBe(true);
-		expect(restored.isSnoozed({ ...notice, latestVersion: "0.80.11" })).toBe(false);
-		expect(restored.isSnoozed({ target: "pipane", currentVersion: "0.80.6", latestVersion: "0.80.10" })).toBe(false);
+		expect(restored.isSnoozed(notice, "backend-one")).toBe(true);
+		expect(restored.isSnoozed(notice, "backend-two")).toBe(false);
+		expect(restored.isSnoozed({ ...notice, latestVersion: "0.80.11" }, "backend-one")).toBe(false);
+		expect(restored.isSnoozed({ target: "pipane", currentVersion: "0.80.6", latestVersion: "0.80.10" }, "backend-one")).toBe(false);
 	});
 
 	it("falls back to in-memory snoozes when browser storage is unavailable", () => {

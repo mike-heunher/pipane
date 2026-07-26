@@ -310,6 +310,12 @@ export class WorkspaceBackendClient implements BackendClient {
 	saveLocalSettings(content: string): Promise<LocalSettingsValidationResponse> { return this.requireActiveClient().saveLocalSettings(content); }
 	getUpdates(): Promise<UpdateSnapshot> { return this.requireActiveClient().getUpdates(); }
 	runUpdate(target: UpdateTarget): Promise<UpdateRunResponse> { return this.requireActiveClient().runUpdate(target); }
+	getBackendUpdates(backendId: string): Promise<UpdateSnapshot> {
+		return this.requireContextClient(this.requireContext(backendId)).getUpdates();
+	}
+	runBackendUpdate(backendId: string, target: UpdateTarget): Promise<UpdateRunResponse> {
+		return this.requireContextClient(this.requireContext(backendId)).runUpdate(target);
+	}
 	getCapabilities() { return this.requireActiveClient().getCapabilities?.() ?? Promise.reject(new Error("Backend capabilities are unavailable")); }
 
 	private get activeClient(): BackendClient | undefined {

@@ -103,6 +103,9 @@ export interface BackendClient extends BackendApi {
 	activateBackend?(backendId: string): Promise<void>;
 	getBackendConnectionDiagnostics?(backendId: string): Promise<ConnectionDiagnostics | undefined>;
 	removeBackend?(backendId: string): Promise<void>;
+	/** Read or run updates on a specific workspace backend without activating it. */
+	getBackendUpdates?(backendId: string): ReturnType<BackendApi["getUpdates"]>;
+	runBackendUpdate?(backendId: string, target: Parameters<BackendApi["runUpdate"]>[0]): ReturnType<BackendApi["runUpdate"]>;
 }
 
 export type SessionPickerBackendClient = Pick<

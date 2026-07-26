@@ -136,6 +136,46 @@ describe("session-picker", () => {
 		expect(onOpenSettings).toHaveBeenCalledOnce();
 	});
 
+	it("shows selectable updates beside the matching backend name", async () => {
+		const agent = new MockAgent();
+		agent.setWorkspace([
+			{ backendId: "b_one", name: "alpha", protocolVersions: [1, 2], online: true, connected: true, reconnecting: false },
+			{ backendId: "b_two", name: "beta", protocolVersions: [1, 2], online: true, connected: true, reconnecting: false },
+		], "b_one");
+		const onRunUpdates = vi.fn();
+		const onSnoozeUpdate = vi.fn();
+		const el = await createPicker(agent);
+		(el as any).settingsMenu = {
+			onOpenSettings: vi.fn(),
+			onRunUpdates,
+			onSnoozeUpdate,
+			updatesByBackend: new Map([
+				["b_one", [{ target: "pipane", currentVersion: "1", latestVersion: "2" }, { target: "pi", currentVersion: "3", latestVersion: "4" }]],
+				["b_two", []],
+			]),
+			updatingByBackend: new Map(),
+			updateFeedbackByBackend: new Map(),
+			isDevMode: false,
+		};
+		await el.updateComplete;
+
+		const alpha = el.shadowRoot!.querySelector('[data-backend-id="b_one"]')!;
+		const beta = el.shadowRoot!.querySelector('[data-backend-id="b_two"]')!;
+		expect(alpha.querySelector(".update-indicator")?.textContent).toBe("↑");
+		expect(beta.querySelector(".update-indicator")).toBeNull();
+		(alpha.querySelector(".update-indicator") as HTMLButtonElement).click();
+		await el.updateComplete;
+		expect(alpha.querySelectorAll(".update-option")).toHaveLength(2);
+
+		(alpha.querySelector('[data-update-target="pi"] input') as HTMLInputElement).click();
+		await el.updateComplete;
+		(alpha.querySelector(".update-run") as HTMLButtonElement).click();
+		expect(onRunUpdates).toHaveBeenCalledWith("b_one", [{ target: "pipane", currentVersion: "1", latestVersion: "2" }]);
+
+		(alpha.querySelector('[data-update-target="pi"] .update-later') as HTMLButtonElement).click();
+		expect(onSnoozeUpdate).toHaveBeenCalledWith("b_one", { target: "pi", currentVersion: "3", latestVersion: "4" });
+	});
+
 	it("lists host controls above one backend-prefixed project stream sorted by recency", async () => {
 		const agent = new MockAgent();
 		agent.setWorkspace([

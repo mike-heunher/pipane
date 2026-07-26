@@ -74,6 +74,11 @@ function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 		}),
 		newSession: vi.fn(async () => undefined),
 		deleteSession: vi.fn(async () => undefined),
+		getUpdates: vi.fn(async () => ({ checkedAt: "2026-01-01T00:00:00.000Z", notices: [] })),
+		runUpdate: vi.fn(async (target) => ({
+			result: { target, message: `${target} complete`, restartRequired: false },
+			snapshot: { checkedAt: "2026-01-01T00:00:00.000Z", notices: [] },
+		})),
 		reportError: vi.fn(),
 	} as unknown as BackendClient;
 	return { client, events };
@@ -159,6 +164,24 @@ describe("WorkspaceBackendClient", () => {
 		expect(workspace.workspaceBackends.find((backend) => backend.backendId === "b_failed")?.error).toBe("host failed");
 		expect(workspace.workspaceBackends.find((backend) => backend.backendId === "b_old")?.error).toContain("Update required");
 		expect(getClient).not.toHaveBeenCalledWith("b_old");
+	});
+
+	it("checks and runs updates on an inactive backend without activating it", async () => {
+		const one = fakeClient([session("one", "/sessions/one.jsonl", "/work/one")]);
+		const two = fakeClient([session("two", "/sessions/two.jsonl", "/work/two")]);
+		const clients = new Map([["b_one", one.client], ["b_two", two.client]]);
+		const workspace = new WorkspaceBackendClient([
+			{ backendId: "b_one", name: "One", online: true, protocolVersions: [1, 2] },
+			{ backendId: "b_two", name: "Two", online: true, protocolVersions: [1, 2] },
+		], { getClient: (id) => clients.get(id)!, revokeBackend: vi.fn() }, "b_one");
+		await workspace.connect("webrtc");
+
+		await workspace.getBackendUpdates("b_two");
+		await workspace.runBackendUpdate("b_two", "pi");
+
+		expect(two.client.getUpdates).toHaveBeenCalledOnce();
+		expect(two.client.runUpdate).toHaveBeenCalledWith("pi");
+		expect(workspace.activeBackendId).toBe("b_one");
 	});
 
 	it("revokes one host and activates a remaining connected host", async () => {
