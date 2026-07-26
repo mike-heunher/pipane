@@ -28,6 +28,8 @@ export interface MockPipaneServerOptions {
 	browse?: { path: string; dirs: Array<{ name: string; path: string }> };
 	files?: Record<string, string>;
 	updates?: UpdateNotice[];
+	/** One-shot command failures used by transport recovery tests. */
+	disconnectOnCommands?: string[];
 }
 
 function hashState(data: string): string {
@@ -65,6 +67,7 @@ export class MockPipaneServer {
 	private updateNotices: UpdateNotice[];
 	private readonly updateRequests: UpdateTarget[] = [];
 	private readonly sessionRevisions = new Map<string, number>();
+	private readonly disconnectOnCommands: Set<string>;
 	private client: WebSocket | null = null;
 
 	private constructor(
@@ -83,6 +86,7 @@ export class MockPipaneServer {
 			...notice,
 			...(notice.packages ? { packages: [...notice.packages] } : {}),
 		}));
+		this.disconnectOnCommands = new Set(options.disconnectOnCommands ?? []);
 		this.states = new Map(
 			Object.entries(options.states).map(([sessionPath, state]) => [
 				sessionPath,
@@ -198,6 +202,10 @@ export class MockPipaneServer {
 	private handleCommand(ws: WebSocket, raw: string): void {
 		const command = JSON.parse(raw);
 		if (!command.id) return;
+		if (this.disconnectOnCommands.delete(command.type)) {
+			ws.close(1011, `Mock disconnect during ${command.type}`);
+			return;
+		}
 		const respond = (data: Record<string, unknown> = {}) => this.sendTo(ws, {
 			type: "response",
 			id: command.id,

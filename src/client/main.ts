@@ -13,6 +13,7 @@ import type { MessageEditor } from "./ui/components/MessageEditor.js";
 import type { Attachment } from "./ui/utils/attachment-utils.js";
 import { buildAttachmentPromptPayload } from "./attachment-prompt.js";
 import { uploadAttachmentFile } from "./file-upload.js";
+import { getPromptFailureSession } from "./prompt-failure.js";
 import { mergeSlashCommands, type SlashCommandSuggestion } from "./slash-commands.js";
 import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
@@ -130,8 +131,9 @@ function currentConversationDraftKey(): string {
 	return conversationDraftKey(agent.sessionFile, agent.sessionId, agent.activeBackendId);
 }
 
-function clearCurrentConversationDraft(): void {
-	conversationDrafts.clear(currentConversationDraftKey());
+function clearConversationDraft(draftKey: string): void {
+	conversationDrafts.clear(draftKey);
+	if (draftKey !== currentConversationDraftKey()) return;
 	const editor = getMessageEditor();
 	if (!editor) return;
 	editor.value = "";
@@ -165,8 +167,7 @@ function handleEditorKeyDown(event: KeyboardEvent): boolean {
 
 	const value = editor.value;
 	const attachments = editor.attachments;
-	clearCurrentConversationDraft();
-	void handleForkAndPrompt(value, attachments);
+	handleForkAndPrompt(value, attachments);
 	return true;
 }
 
@@ -205,17 +206,42 @@ async function uploadEditorAttachment(attachment: Attachment): Promise<string> {
 	return (await uploadAttachmentFile(agent, attachment)).path;
 }
 
-function handleSend(input: string, attachments?: Attachment[]) {
-	const payload = buildAttachmentPromptPayload(input, attachments);
+type PromptMode = "prompt" | "fork";
 
-	// Clear only this conversation's editor after capturing the input.
-	clearCurrentConversationDraft();
+function submitPrompt(input: string, attachments: readonly Attachment[] | undefined, mode: PromptMode): void {
+	const submittedAttachments = (attachments ?? []).map((attachment) => ({ ...attachment }));
+	const payload = buildAttachmentPromptPayload(input, submittedAttachments);
+	const submittedDraftKey = currentConversationDraftKey();
+	const submittedBackendId = agent.activeBackendId;
 
+	// Clear only this conversation's editor after capturing a complete retry copy.
+	clearConversationDraft(submittedDraftKey);
 	conversationScroll.pinToBottom();
-	agent.prompt(payload.input, payload.images).catch((err: unknown) => {
-		agent.reportError(err, "Prompt failed");
-		console.error("Prompt failed:", err);
-	});
+
+	const prefix = mode === "fork" ? "Fork prompt failed" : "Prompt failed";
+	const restore = (error: unknown) => {
+		const targetSessionPath = getPromptFailureSession(error);
+		const targetDraftKey = targetSessionPath
+			? conversationDraftKey(targetSessionPath, "", submittedBackendId)
+			: submittedDraftKey;
+		conversationDrafts.restore(targetDraftKey, input, submittedAttachments);
+		agent.reportError(error, prefix);
+		if (targetDraftKey === currentConversationDraftKey()) renderApp();
+		console.error(`${prefix}:`, error);
+	};
+
+	try {
+		const request = mode === "fork"
+			? agent.forkAndPrompt(payload.input, payload.images)
+			: agent.prompt(payload.input, payload.images);
+		void request.catch(restore);
+	} catch (error) {
+		restore(error);
+	}
+}
+
+function handleSend(input: string, attachments?: Attachment[]): void {
+	submitPrompt(input, attachments, "prompt");
 }
 
 /**
@@ -901,18 +927,9 @@ const renderApp = () => {
 	});
 };
 
-/**
- * Fork the current session and prompt in the new fork.
- */
-async function handleForkAndPrompt(input: string, attachments?: Attachment[]) {
-	const payload = buildAttachmentPromptPayload(input, attachments);
-
-	try {
-		await agent.forkAndPrompt(payload.input, payload.images);
-	} catch (err) {
-		agent.reportError(err, "Fork prompt failed");
-		console.error("Fork prompt failed:", err);
-	}
+/** Fork the current session and prompt in the new fork. */
+function handleForkAndPrompt(input: string, attachments?: Attachment[]): void {
+	submitPrompt(input, attachments, "fork");
 }
 
 async function initApp() {

@@ -85,4 +85,34 @@ test.describe("conversation composer drafts", () => {
 			await mock.close();
 		}
 	});
+
+	test("restores a disconnected prompt with every attachment", async ({ page }) => {
+		const mock = await startMockPipaneServer({
+			sessions: [session("a", SESSION_A, "Conversation A", "2026-07-21T12:00:00.000Z")],
+			states: { [SESSION_A]: [] },
+			disconnectOnCommands: ["prompt"],
+		});
+
+		try {
+			await page.goto(`http://localhost:${mock.port}`);
+			const editor = page.locator("message-editor");
+			const textarea = editor.locator("textarea");
+			await expect(textarea).toBeEnabled({ timeout: 10_000 });
+			await textarea.fill("do not lose this prompt");
+			await editor.locator("input[type=file]").setInputFiles([
+				{ name: "alpha.txt", mimeType: "text/plain", buffer: Buffer.from("alpha") },
+				{ name: "beta.txt", mimeType: "text/plain", buffer: Buffer.from("beta") },
+			]);
+			await expect(editor.locator("attachment-tile")).toHaveCount(2);
+
+			await textarea.press("Enter");
+
+			await expect(page.getByText("Prompt failed: Backend transport disconnected", { exact: false })).toBeVisible();
+			await expect(textarea).toHaveValue("do not lose this prompt");
+			await expect(editor.locator("attachment-tile [title='alpha.txt']")).toBeVisible();
+			await expect(editor.locator("attachment-tile [title='beta.txt']")).toBeVisible();
+		} finally {
+			await mock.close();
+		}
+	});
 });

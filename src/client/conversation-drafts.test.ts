@@ -42,4 +42,17 @@ describe("conversation drafts", () => {
 		drafts.setAttachments("b", []);
 		expect(drafts.get("b")).toEqual({ value: "", attachments: [] });
 	});
+
+	it("restores rejected submissions without losing a newer draft", () => {
+		const drafts = new ConversationDraftStore<string>();
+		drafts.setValue("a", "newer unsent text");
+		drafts.setAttachments("a", ["newer.txt"]);
+
+		drafts.restore("a", "failed prompt", ["failed.txt", "failed.png"]);
+
+		expect(drafts.get("a")).toEqual({
+			value: "failed prompt\n\nnewer unsent text",
+			attachments: ["failed.txt", "failed.png", "newer.txt"],
+		});
+	});
 });

@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.js";
 import type { FrameTransport } from "./frame-transport.js";
+import { getPromptFailureSession } from "./prompt-failure.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 
@@ -281,6 +282,46 @@ describe("WsAgentAdapter prompt routing", () => {
 			} finally {
 				vi.useRealTimers();
 			}
+		});
+
+		it("retains the target session on a disconnected prompt failure", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, mockWs } = setupWithSession(sessionPath);
+			(mockWs.send as any).mockImplementation(() => {});
+
+			const prompting = adapter.prompt("keep this prompt");
+			await vi.waitFor(() => expect(mockWs.send).toHaveBeenCalled());
+			(adapter as any).handleTransportDisconnected();
+			const error = await prompting.then(() => undefined, (failure) => failure);
+
+			expect(error).toEqual(new Error("Backend transport disconnected"));
+			expect(getPromptFailureSession(error)).toBe(sessionPath);
+		});
+
+		it("retains the attached path when a new-session prompt disconnects", async () => {
+			const sessionPath = "/tmp/sessions/new-session.jsonl";
+			const { adapter, mockWs, simulateServerMessage } = createTestAdapter();
+			await adapter.newSession("/tmp");
+			(adapter as any)._state.model = { provider: "anthropic", id: "claude-sonnet-4-20250514" };
+			const defaultSend = (mockWs.send as any).getMockImplementation();
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				if (command.type !== "prompt") return defaultSend(raw);
+				simulateServerMessage({
+					type: "session_attached",
+					sessionPath,
+					cwd: "/tmp",
+					firstMessage: command.message,
+				});
+			});
+
+			const prompting = adapter.prompt("keep this new prompt");
+			await vi.waitFor(() => expect(adapter.sessionFile).toBe(sessionPath));
+			(adapter as any).handleTransportDisconnected();
+			const error = await prompting.then(() => undefined, (failure) => failure);
+
+			expect(error).toEqual(new Error("Backend transport disconnected"));
+			expect(getPromptFailureSession(error)).toBe(sessionPath);
 		});
 
 		it("sends the displayed model, thinking level, and control revision", async () => {

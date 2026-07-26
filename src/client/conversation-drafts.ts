@@ -32,6 +32,15 @@ export class ConversationDraftStore<TAttachment> {
 		this.set(key, current.value, attachments);
 	}
 
+	/** Restore a rejected submission without overwriting anything typed since it was sent. */
+	restore(key: string, value: string, attachments: readonly TAttachment[]): void {
+		const current = this.get(key);
+		const restoredValue = value && current.value
+			? `${value}\n\n${current.value}`
+			: value || current.value;
+		this.set(key, restoredValue, [...attachments, ...current.attachments]);
+	}
+
 	clear(key: string): void {
 		this.drafts.delete(key);
 	}

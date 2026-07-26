@@ -47,6 +47,7 @@ import type {
 } from "./backend-client.js";
 import { HttpBackendApi, type BackendApi } from "./backend-api.js";
 import type { ConnectionDiagnostics, FrameTransport } from "./frame-transport.js";
+import { associatePromptFailureSession } from "./prompt-failure.js";
 import { PIPANE_SLASH_COMMANDS } from "./slash-commands.js";
 import {
 	WebSocketFrameTransport,
@@ -97,6 +98,14 @@ interface CompactionQueuedPrompt {
 	model: NonNullable<ReturnType<typeof toCompactModelRef>>;
 	thinkingLevel: ThinkingLevelValue;
 	controlRevision: number;
+}
+
+interface StartingPrompt {
+	readonly ready: Promise<string | undefined>;
+	readonly attachedPath: string | undefined;
+	resolveReady(sessionPath: string | undefined): void;
+	readonly finished: Promise<void>;
+	resolveFinished(): void;
 }
 
 export interface WsAgentAdapterOptions {
@@ -203,12 +212,7 @@ export class WsAgentAdapter implements BackendClient {
 	 */
 	private _pendingNewPrompt = false;
 	/** Coordinate rapid sends while a session's first turn is still attaching. */
-	private _startingPrompts = new Map<string, {
-		ready: Promise<string | undefined>;
-		resolveReady: (sessionPath: string | undefined) => void;
-		finished: Promise<void>;
-		resolveFinished: () => void;
-	}>();
+	private _startingPrompts = new Map<string, StartingPrompt>();
 
 	/** Current synced JSON string from server */
 	private _syncJson = "";
@@ -1092,12 +1096,20 @@ export class WsAgentAdapter implements BackendClient {
 		return this._pendingCwd;
 	}
 
-	private createStartingPrompt(key: string) {
+	private createStartingPrompt(key: string): StartingPrompt {
 		let resolveReady!: (sessionPath: string | undefined) => void;
 		let resolveFinished!: () => void;
-		const entry = {
+		let attachedPath: string | undefined;
+		let readyResolved = false;
+		const entry: StartingPrompt = {
 			ready: new Promise<string | undefined>((resolve) => { resolveReady = resolve; }),
-			resolveReady: (sessionPath: string | undefined) => resolveReady(sessionPath),
+			get attachedPath() { return attachedPath; },
+			resolveReady: (sessionPath: string | undefined) => {
+				if (readyResolved) return;
+				readyResolved = true;
+				attachedPath = sessionPath;
+				resolveReady(sessionPath);
+			},
 			finished: new Promise<void>((resolve) => { resolveFinished = resolve; }),
 			resolveFinished: () => resolveFinished(),
 		};
@@ -1105,7 +1117,7 @@ export class WsAgentAdapter implements BackendClient {
 		return entry;
 	}
 
-	private finishStartingPrompt(key: string, entry: ReturnType<WsAgentAdapter["createStartingPrompt"]>, attachedPath?: string): void {
+	private finishStartingPrompt(key: string, entry: StartingPrompt, attachedPath?: string): void {
 		entry.resolveReady(attachedPath);
 		entry.resolveFinished();
 		if (this._startingPrompts.get(key) === entry) this._startingPrompts.delete(key);
@@ -1146,7 +1158,11 @@ export class WsAgentAdapter implements BackendClient {
 			const attachedPath = await existingStart.ready;
 			if (attachedPath && this._globalSessionStatus.get(attachedPath) === "running") {
 				this.enqueueSteering(attachedPath, text);
-				await this.send({ type: "steer", sessionPath: attachedPath, message: text });
+				try {
+					await this.send({ type: "steer", sessionPath: attachedPath, message: text });
+				} catch (error) {
+					throw associatePromptFailureSession(error, attachedPath);
+				}
 				return;
 			}
 			await existingStart.finished;
@@ -1162,13 +1178,18 @@ export class WsAgentAdapter implements BackendClient {
 			? this._globalSessionStatus.get(this._sessionPath) === "running"
 			: false;
 		if (targetIsRunning && this._sessionPath) {
+			const targetSessionPath = this._sessionPath;
 			// Optimistically reflect queued steering in the UI immediately.
-			this.enqueueSteering(this._sessionPath, text);
-			await this.send({
-				type: "steer",
-				sessionPath: this._sessionPath,
-				message: text,
-			});
+			this.enqueueSteering(targetSessionPath, text);
+			try {
+				await this.send({
+					type: "steer",
+					sessionPath: targetSessionPath,
+					message: text,
+				});
+			} catch (error) {
+				throw associatePromptFailureSession(error, targetSessionPath);
+			}
 			return;
 		}
 
@@ -1218,7 +1239,9 @@ export class WsAgentAdapter implements BackendClient {
 				}
 			} catch (err) {
 				this.rollbackSentControl(controlRevision);
-				throw err;
+				const attachedPath = startingEntry.attachedPath
+					?? (this._sessionNonce === nonce ? this._sessionPath : undefined);
+				throw associatePromptFailureSession(err, attachedPath);
 			} finally {
 				this._pendingNewPrompt = false;
 				const attachedPath = this._sessionNonce === nonce ? this._sessionPath : undefined;
@@ -1228,11 +1251,12 @@ export class WsAgentAdapter implements BackendClient {
 		}
 
 		if (!this._sessionPath) throw new Error("No session loaded");
+		const targetSessionPath = this._sessionPath;
 
 		try {
 			await this.send({
 				type: "prompt",
-				sessionPath: this._sessionPath,
+				sessionPath: targetSessionPath,
 				message: text,
 				model: modelPayload,
 				thinkingLevel,
@@ -1241,9 +1265,9 @@ export class WsAgentAdapter implements BackendClient {
 			});
 		} catch (err) {
 			this.rollbackSentControl(controlRevision);
-			throw err;
+			throw associatePromptFailureSession(err, targetSessionPath);
 		} finally {
-			this.finishStartingPrompt(startingKey, startingEntry, this._sessionPath);
+			this.finishStartingPrompt(startingKey, startingEntry, targetSessionPath);
 		}
 	}
 
