@@ -23,6 +23,7 @@ describe("REST session path confinement", () => {
 	let tmpDir: string;
 	let sessionsRoot: string;
 	let sessionPath: string;
+	let writeMatchSessionPath: string;
 	let deletePath: string;
 	let outsidePath: string;
 	let traversalPath: string;
@@ -31,6 +32,9 @@ describe("REST session path confinement", () => {
 	let projectRoot: string;
 	let previewPath: string;
 	let projectEscapePath: string;
+	let worktreeRoot: string;
+	let worktreeGeneratedPath: string;
+	let worktreeRelatedPath: string;
 	let mentionedOutsidePath: string;
 	let relativeMentionedOutsidePath: string;
 	let unmentionedOutsidePath: string;
@@ -42,6 +46,7 @@ describe("REST session path confinement", () => {
 		sessionsRoot = path.join(tmpDir, "agent", "sessions");
 		mkdirSync(sessionsRoot, { recursive: true });
 		sessionPath = path.join(sessionsRoot, "session.jsonl");
+		writeMatchSessionPath = path.join(sessionsRoot, "write-match.jsonl");
 		deletePath = path.join(sessionsRoot, "delete.jsonl");
 		outsidePath = path.join(tmpDir, "agent", "outside.jsonl");
 		traversalPath = `${sessionsRoot}${path.sep}..${path.sep}outside.jsonl`;
@@ -50,12 +55,24 @@ describe("REST session path confinement", () => {
 		projectRoot = path.join(tmpDir, "projects", "project-a");
 		previewPath = path.join(projectRoot, "docs", "guide.md");
 		projectEscapePath = path.join(projectRoot, "outside.md");
+		worktreeRoot = path.join(tmpDir, "projects", "project-a--wt-preview");
+		worktreeGeneratedPath = path.join(worktreeRoot, "docs", "generated.md");
+		worktreeRelatedPath = path.join(worktreeRoot, "docs", "related.md");
 		mentionedOutsidePath = path.join(tmpDir, "shared", "review notes.md");
 		relativeMentionedOutsidePath = path.join(tmpDir, "shared", "relative.md");
 		unmentionedOutsidePath = path.join(tmpDir, "shared", "secret.md");
 		mkdirSync(path.dirname(previewPath), { recursive: true });
 		mkdirSync(path.dirname(mentionedOutsidePath), { recursive: true });
+		mkdirSync(path.dirname(worktreeGeneratedPath), { recursive: true });
+		const worktreeName = path.basename(worktreeRoot);
+		const worktreeGitDir = path.join(projectRoot, ".git", "worktrees", worktreeName);
+		mkdirSync(worktreeGitDir, { recursive: true });
+		writeFileSync(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
+		writeFileSync(path.join(worktreeRoot, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
 		writeFileSync(previewPath, "# Guide\n\nProject documentation.\n");
+		writeFileSync(path.join(projectRoot, "docs", "generated.md"), "# Stale root document\n");
+		writeFileSync(worktreeGeneratedPath, "# Generated in worktree\n");
+		writeFileSync(worktreeRelatedPath, "# Related worktree document\n");
 		writeFileSync(mentionedOutsidePath, "# Review notes\n");
 		writeFileSync(relativeMentionedOutsidePath, "# Relative review\n");
 		writeFileSync(unmentionedOutsidePath, "private\n");
@@ -95,8 +112,86 @@ describe("REST session path confinement", () => {
 					timestamp: 2,
 				},
 			},
+			{
+				type: "message",
+				id: "failed-assistant",
+				parentId: "message-2",
+				timestamp: "2026-01-01T00:00:03.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "failed-write", name: "write", arguments: { path: unmentionedOutsidePath } }],
+				},
+			},
+			{
+				type: "message",
+				id: "failed-result",
+				parentId: "failed-assistant",
+				timestamp: "2026-01-01T00:00:04.000Z",
+				message: { role: "toolResult", toolCallId: "failed-write", content: [], isError: true },
+			},
+			{
+				type: "message",
+				id: "write-assistant",
+				parentId: "failed-result",
+				timestamp: "2026-01-01T00:00:05.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "worktree-write", name: "functions.write", arguments: { path: worktreeGeneratedPath } }],
+				},
+			},
+			{
+				type: "message",
+				id: "write-result",
+				parentId: "write-assistant",
+				timestamp: "2026-01-01T00:00:06.000Z",
+				message: { role: "toolResult", toolCallId: "worktree-write", content: [], isError: false },
+			},
+		].map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+		const writeMatchSessionLines = [
+			{
+				type: "session",
+				version: 3,
+				id: "write-match",
+				timestamp: "2026-01-01T00:00:00.000Z",
+				cwd: projectRoot,
+			},
+			{
+				type: "message",
+				id: "write-assistant",
+				parentId: null,
+				timestamp: "2026-01-01T00:00:01.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "worktree-write", name: "write", arguments: { path: worktreeGeneratedPath } }],
+				},
+			},
+			{
+				type: "message",
+				id: "write-result",
+				parentId: "write-assistant",
+				timestamp: "2026-01-01T00:00:02.000Z",
+				message: { role: "toolResult", toolCallId: "worktree-write", content: [], isError: false },
+			},
+			{
+				type: "message",
+				id: "root-read-assistant",
+				parentId: "write-result",
+				timestamp: "2026-01-01T00:00:03.000Z",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "root-read", name: "read", arguments: { path: previewPath } }],
+				},
+			},
+			{
+				type: "message",
+				id: "root-read-result",
+				parentId: "root-read-assistant",
+				timestamp: "2026-01-01T00:00:04.000Z",
+				message: { role: "toolResult", toolCallId: "root-read", content: [], isError: false },
+			},
 		].map((entry) => JSON.stringify(entry)).join("\n") + "\n";
 		writeFileSync(sessionPath, sessionLines);
+		writeFileSync(writeMatchSessionPath, writeMatchSessionLines);
 		writeFileSync(deletePath, sessionLines);
 		writeFileSync(outsidePath, "outside\n");
 		symlinkSync(outsidePath, symlinkPath);
@@ -186,6 +281,37 @@ describe("REST session path confinement", () => {
 		});
 	});
 
+	it("resolves relative preview links against the conversation's active worktree", async () => {
+		for (const [requestedPath, expectedPath, expectedHeading] of [
+			["docs/generated.md", worktreeGeneratedPath, "# Generated in worktree\n"],
+			["docs/related.md", worktreeRelatedPath, "# Related worktree document\n"],
+		] as const) {
+			const query = new URLSearchParams({ sessionPath, path: requestedPath });
+			const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toEqual({ path: expectedPath, content: expectedHeading });
+		}
+	});
+
+	it("prefers an exact successful write when later root activity resets the active checkout", async () => {
+		const query = new URLSearchParams({ sessionPath: writeMatchSessionPath, path: "docs/generated.md" });
+		const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			path: worktreeGeneratedPath,
+			content: "# Generated in worktree\n",
+		});
+	});
+
+	it("allows canonical nested paths inside a worktree evidenced by the conversation", async () => {
+		const query = new URLSearchParams({ sessionPath, path: worktreeRelatedPath });
+		const response = await fetch(`${baseUrl}/api/files/content?${query}`);
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ path: worktreeRelatedPath });
+	});
+
 	it("retrieves outside-CWD files explicitly mentioned in the conversation", async () => {
 		for (const candidate of [mentionedOutsidePath, relativeMentionedOutsidePath]) {
 			const query = new URLSearchParams({ sessionPath, path: candidate });
@@ -267,9 +393,12 @@ describe("REST session path confinement", () => {
 		const response = await fetch(`${baseUrl}/api/browse?${query}`);
 
 		expect(response.status).toBe(200);
-		expect(await response.json()).toMatchObject({
+		expect(await response.json()).toEqual({
 			path: outsideDirectory,
-			dirs: [{ name: "project-a", path: path.join(outsideDirectory, "project-a") }],
+			dirs: [
+				{ name: "project-a", path: path.join(outsideDirectory, "project-a") },
+				{ name: "project-a--wt-preview", path: worktreeRoot },
+			],
 		});
 	});
 

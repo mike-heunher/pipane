@@ -396,7 +396,7 @@ describe("SessionIndex", () => {
 			lines.push({
 				type: "message",
 				id: `assistant-${i}`,
-				parentId: null,
+				parentId: i === 0 ? null : `result-${i - 1}`,
 				timestamp: "2026-01-01T10:00:01.000Z",
 				message: {
 					role: "assistant",

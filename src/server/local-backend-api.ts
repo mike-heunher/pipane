@@ -22,7 +22,7 @@ import type {
 	LocalSettingsValidationResponse,
 	SessionInfoDTO,
 } from "../shared/backend-api.js";
-import { conversationMentionsFile } from "./conversation-file-access.js";
+import { resolveConversationFilePath } from "./conversation-file-access.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { SessionIndex } from "./session-index.js";
 import { getSessionCwd } from "./session-cwd.js";
@@ -204,28 +204,34 @@ export class LocalBackendApi implements BackendApi {
 		const resolvedSession = this.resolveSession(sessionPath);
 		const sessionCwd = getSessionCwd(resolvedSession);
 		if (!sessionCwd) throw new LocalBackendApiError("Session has no working directory", 400, "invalid_request");
-		const root = this.realpath(path.resolve(sessionCwd.replace(/^~/, process.env.HOME || "/")));
-		const requested = path.isAbsolute(requestedPath) ? requestedPath : path.resolve(root, requestedPath);
-		const resolved = this.realpath(requested);
-		if (!isPathInside(root, resolved) && !conversationMentionsFile({
+		if (!requestedPath || requestedPath.includes("\0")) {
+			throw new LocalBackendApiError("File path is invalid", 400, "invalid_request");
+		}
+
+		const cwdRoot = this.realpath(path.resolve(sessionCwd.replace(/^~/, process.env.HOME || "/")));
+		const resolution = resolveConversationFilePath({
 			sessionPath: resolvedSession,
 			sessionCwd,
-			rawRequestPath: requestedPath,
-			requestedPath: requested,
-			resolvedPath: resolved,
-		})) {
+			cwdRoot,
+			requestedPath,
+		});
+		if (!resolution.ok) {
+			if (resolution.reason === "not_found") {
+				throw new LocalBackendApiError("File not found", 404, "not_found");
+			}
 			throw new LocalBackendApiError(
-				"File is outside the session working directory and was not mentioned in the conversation",
+				"File is outside the session working directory and was not mentioned or created in the conversation",
 				403,
 				"forbidden",
 			);
 		}
-		const stat = statSync(resolved);
+
+		const stat = statSync(resolution.path);
 		if (!stat.isFile()) throw new LocalBackendApiError("Path is not a file", 400, "invalid_request");
 		if (stat.size > MAX_PREVIEW_FILE_BYTES) throw new LocalBackendApiError("File is too large to preview", 413, "invalid_request");
-		const bytes = readFileSync(resolved);
+		const bytes = readFileSync(resolution.path);
 		if (bytes.includes(0)) throw new LocalBackendApiError("Binary files cannot be previewed", 415, "invalid_request");
-		return Promise.resolve({ path: resolved, content: bytes.toString("utf8") });
+		return Promise.resolve({ path: resolution.path, content: bytes.toString("utf8") });
 	}
 
 	async createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession> {
@@ -479,9 +485,4 @@ async function writeUploadChunk(uploadPath: string, offset: number, bytes: Buffe
 	} finally {
 		await file.close();
 	}
-}
-
-function isPathInside(root: string, candidate: string): boolean {
-	const relative = path.relative(root, candidate);
-	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }

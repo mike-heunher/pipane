@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveWorktreeName } from "./worktree-name.js";
+import { createSessionCheckoutResolver, resolveWorktreeName } from "./worktree-name.js";
 
 const tempDirs: string[] = [];
 
@@ -95,6 +95,27 @@ describe("resolveWorktreeName", () => {
 
 		expect(resolveWorktreeName(first.repo, [path.join(second.worktree, "src", "other.ts")]))
 			.toBe("root");
+	});
+
+	it("returns canonical active and known worktree roots for file resolution", () => {
+		const { repo, worktree } = makeRepoWithWorktree("project--wt-preview");
+		const resolveCheckout = createSessionCheckoutResolver();
+
+		expect(resolveCheckout(repo, [
+			path.join(worktree, "docs", "plan.md"),
+			path.join(repo, "src", "main.ts"),
+		])).toEqual({
+			cwdRoot: repo,
+			activeRoot: repo,
+			activeWorktreeRoot: undefined,
+			knownWorktreeRoots: [worktree],
+		});
+		expect(resolveCheckout(repo, [path.join(worktree, "docs", "plan.md")]))
+			.toMatchObject({
+				activeRoot: worktree,
+				activeWorktreeRoot: worktree,
+				knownWorktreeRoots: [worktree],
+			});
 	});
 
 	it("does not mistake a separate git directory for a linked worktree", () => {

@@ -1,5 +1,6 @@
 # Unreleased
 
+- Resolve relative conversation file previews through successful write/edit calls and the conversation's verified Git worktree.
 - Keep project sorting tied exclusively to the latest user prompt instead of running or assistant activity.
 - Deploy isolated source-built preview rendezvous, browser, and development backend stacks without publishing npm releases.
 - Guide failed WebRTC connections through browser-local hosted or self-hosted TURN relay setup with short-lived credential forwarding and relay testing.

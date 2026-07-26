@@ -14,6 +14,7 @@ import {
 	createWorktreeNameResolver,
 	type WorktreeNameResolver,
 } from "./worktree-name.js";
+import { extractSuccessfulToolPaths } from "./session-tool-paths.js";
 
 export interface SessionListItem {
 	id: string;
@@ -49,17 +50,8 @@ interface SessionIndexCacheFile {
 }
 
 const CACHE_FORMAT_VERSION = 1 as const;
-const DEFAULT_EXTRACTOR_VERSION = "4";
+const DEFAULT_EXTRACTOR_VERSION = "5";
 const MAX_RECENT_TOOL_PATHS = 16;
-const PATH_ACTIVITY_TOOLS = new Set([
-	"edit",
-	"hypa_find",
-	"hypa_grep",
-	"hypa_ls",
-	"hypa_read",
-	"read",
-	"write",
-]);
 
 export class SessionIndex {
 	private readonly agentDir: string;
@@ -220,8 +212,6 @@ export class SessionIndex {
 			let firstMessage = "";
 			let lastActivityTime: number | undefined;
 			let lastUserPromptTimeMs = 0;
-			const pendingToolPaths = new Map<string, string[]>();
-			const recentToolPaths: string[] = [];
 
 			for (const entry of entries) {
 				if (entry?.type === "session_info" && typeof entry.name === "string") {
@@ -234,19 +224,6 @@ export class SessionIndex {
 
 				const msg = entry.message;
 				if (!msg || typeof msg.role !== "string" || !Object.prototype.hasOwnProperty.call(msg, "content")) continue;
-
-				if (msg.role === "assistant") {
-					this.rememberPendingToolPaths(msg.content, cwd, pendingToolPaths);
-				} else if (msg.role === "toolResult" && typeof msg.toolCallId === "string") {
-					const completedPaths = pendingToolPaths.get(msg.toolCallId);
-					pendingToolPaths.delete(msg.toolCallId);
-					if (msg.isError !== true && completedPaths) {
-						recentToolPaths.push(...completedPaths);
-						if (recentToolPaths.length > MAX_RECENT_TOOL_PATHS) {
-							recentToolPaths.splice(0, recentToolPaths.length - MAX_RECENT_TOOL_PATHS);
-						}
-					}
-				}
 
 				// User-prompt recency is deliberately restricted to role=user.
 				// Tool results and every other message role must never be interpreted
@@ -272,6 +249,9 @@ export class SessionIndex {
 				}
 			}
 
+			const recentToolPaths = extractSuccessfulToolPaths(entries, cwd)
+				.map((activity) => activity.path)
+				.slice(-MAX_RECENT_TOOL_PATHS);
 			const createdMs = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : NaN;
 			const created = !Number.isNaN(createdMs) ? new Date(createdMs) : new Date(statMtimeMs);
 
@@ -296,61 +276,6 @@ export class SessionIndex {
 				},
 				recentToolPaths,
 			};
-		} catch {
-			return null;
-		}
-	}
-
-	private rememberPendingToolPaths(
-		content: unknown,
-		cwd: string,
-		pendingToolPaths: Map<string, string[]>,
-	): void {
-		if (!Array.isArray(content)) return;
-		for (const chunk of content) {
-			if (chunk?.type !== "toolCall" || typeof chunk.id !== "string") continue;
-			pendingToolPaths.set(
-				chunk.id,
-				this.extractToolPaths(chunk.name, chunk.arguments, cwd),
-			);
-		}
-	}
-
-	private extractToolPaths(toolName: unknown, rawArguments: unknown, cwd: string): string[] {
-		if (typeof toolName !== "string") return [];
-		const args = this.parseToolArguments(rawArguments);
-		if (!args) return [];
-
-		if (Array.isArray(args.tool_uses)) {
-			return args.tool_uses.flatMap((toolUse: any) => this.extractToolPaths(
-				toolUse?.recipient_name,
-				toolUse?.parameters,
-				cwd,
-			));
-		}
-
-		const shortName = toolName.toLowerCase().split(".").pop() ?? "";
-		if (!PATH_ACTIVITY_TOOLS.has(shortName)) return [];
-		const candidate = typeof args.path === "string"
-			? args.path
-			: typeof args.file_path === "string"
-				? args.file_path
-				: "";
-		if (!candidate || candidate.includes("\0")) return [];
-		if (!path.isAbsolute(candidate) && !cwd) return [];
-		return [path.resolve(cwd || path.parse(candidate).root, candidate)];
-	}
-
-	private parseToolArguments(rawArguments: unknown): Record<string, any> | null {
-		if (rawArguments && typeof rawArguments === "object" && !Array.isArray(rawArguments)) {
-			return rawArguments as Record<string, any>;
-		}
-		if (typeof rawArguments !== "string") return null;
-		try {
-			const parsed = JSON.parse(rawArguments);
-			return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-				? parsed as Record<string, any>
-				: null;
 		} catch {
 			return null;
 		}

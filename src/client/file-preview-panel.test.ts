@@ -78,7 +78,7 @@ describe("linked file preview", () => {
 		await settle();
 
 		expect(fetchMock).toHaveBeenCalledWith(
-			"/api/files/content?sessionPath=%2Fsessions%2Ftest.jsonl&path=%2Fwork%2Fproject%2Fdocs%2Fguide.md",
+			"/api/files/content?sessionPath=%2Fsessions%2Ftest.jsonl&path=docs%2Fguide.md",
 			{ cache: "no-store" },
 		);
 		expect(getFilePreviewPath()).toBe("/work/project/docs/guide.md");
@@ -90,6 +90,29 @@ describe("linked file preview", () => {
 		expect(frame?.srcdoc).toContain("<table>");
 		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
 		expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+	});
+
+	it("preserves relative chat requests but canonicalizes nested and explicit file links", async () => {
+		setupPanel();
+		const api = {
+			getFileContent: vi.fn(async (_sessionPath: string, filePath: string) => ({
+				path: filePath.startsWith("/") ? filePath : `/repo--wt-feature/${filePath}`,
+				content: "# File",
+			})),
+		};
+
+		openFilePreviewLink("docs/guide%20one.md#intro", "/repo", "/sessions/test.jsonl", undefined, api);
+		await settle();
+		expect(api.getFileContent).toHaveBeenLastCalledWith("/sessions/test.jsonl", "docs/guide one.md");
+		expect(getFilePreviewPath()).toBe("/repo--wt-feature/docs/guide one.md");
+
+		openFilePreviewLink("../details.md", "/repo", "/sessions/test.jsonl", getFilePreviewPath(), api);
+		await settle();
+		expect(api.getFileContent).toHaveBeenLastCalledWith("/sessions/test.jsonl", "/repo--wt-feature/details.md");
+
+		openFilePreviewLink("file:///tmp/absolute.md#top", "/repo", "/sessions/test.jsonl", undefined, api);
+		await settle();
+		expect(api.getFileContent).toHaveBeenLastCalledWith("/sessions/test.jsonl", "/tmp/absolute.md");
 	});
 
 	it("renders KaTeX math with the active application theme", async () => {

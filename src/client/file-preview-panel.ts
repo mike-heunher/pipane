@@ -400,10 +400,9 @@ export function linkifyPreviewableInlineCode(markdown: string): string {
 	return result + linkifyInlineCode(markdown.slice(plainStart));
 }
 
-export function resolveFileHref(rawHref: string, baseDirectory: string): string | null {
-	if (!isPreviewableFileHref(rawHref) || !baseDirectory.startsWith("/")) return null;
+function decodeFileHref(rawHref: string): string | null {
+	if (!isPreviewableFileHref(rawHref)) return null;
 	let href = rawHref.trim();
-
 	if (/^file:/i.test(href)) {
 		try {
 			const url = new URL(href);
@@ -415,9 +414,14 @@ export function resolveFileHref(rawHref: string, baseDirectory: string): string 
 	} else {
 		href = stripLinkSuffix(href);
 	}
-
 	const decoded = decodePath(href);
-	if (!decoded || decoded.includes("\0")) return null;
+	return decoded && !decoded.includes("\0") ? decoded : null;
+}
+
+export function resolveFileHref(rawHref: string, baseDirectory: string): string | null {
+	if (!baseDirectory.startsWith("/")) return null;
+	const decoded = decodeFileHref(rawHref);
+	if (!decoded) return null;
 	return normalizeAbsolutePath(decoded.startsWith("/") ? decoded : `${baseDirectory}/${decoded}`);
 }
 
@@ -506,8 +510,9 @@ async function loadFile(state: FilePreviewState, filePath: string): Promise<void
 /**
  * Open a local file link in the right-hand preview pane.
  *
- * Relative links in chat use the session CWD. Relative links inside an already
- * open Markdown or HTML file use that file's directory via baseFilePath.
+ * Relative links in chat remain relative so the backend can use conversation
+ * worktree evidence before its CWD fallback. Links inside an already open
+ * Markdown or HTML file use that file's canonical directory via baseFilePath.
  */
 export function openFilePreviewLink(
 	rawHref: string,
@@ -518,8 +523,15 @@ export function openFilePreviewLink(
 	stateKey = sessionPath,
 ): boolean {
 	const baseDirectory = baseFilePath ? directoryName(baseFilePath) : cwd;
+	const decodedHref = decodeFileHref(rawHref);
 	const resolved = resolveFileHref(rawHref, baseDirectory);
-	if (!resolved) return false;
+	if (!decodedHref || !resolved) return false;
+	// Preserve relative intent for initial conversation links so the backend can
+	// choose the session's evidenced worktree before falling back to its CWD.
+	// Once a file is open, nested links use its canonical returned path.
+	const requestPath = !baseFilePath && !decodedHref.startsWith("/")
+		? decodedHref
+		: resolved;
 
 	const previous = previewStates.get(stateKey);
 	const state: FilePreviewState = {
@@ -536,7 +548,7 @@ export function openFilePreviewLink(
 	previewStates.set(stateKey, state);
 	activeSessionKey = stateKey;
 	notifyChanged();
-	void loadFile(state, resolved);
+	void loadFile(state, requestPath);
 	return true;
 }
 

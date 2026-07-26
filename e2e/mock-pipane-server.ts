@@ -113,7 +113,12 @@ export class MockPipaneServer {
 		}));
 		app.get("/api/browse", (_req, res) => res.json(options.browse ?? { path: "/tmp", dirs: [] }));
 		app.get("/api/files/content", (req, res) => {
-			const filePath = typeof req.query.path === "string" ? req.query.path : "";
+			const requestedPath = typeof req.query.path === "string" ? req.query.path : "";
+			const sessionPath = typeof req.query.sessionPath === "string" ? req.query.sessionPath : "";
+			const session = (mock?.sessions ?? options.sessions).find((candidate) => candidate.path === sessionPath);
+			const filePath = path.isAbsolute(requestedPath)
+				? requestedPath
+				: path.resolve(typeof session?.cwd === "string" ? session.cwd : "/", requestedPath);
 			const content = options.files?.[filePath];
 			if (content === undefined) {
 				res.status(404).json({ error: "File not found" });
