@@ -121,7 +121,6 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 	const rendezvous = createRendezvousServer({
 		dataDir: path.join(dir, "rendezvous"),
 		clientDist: path.resolve("dist/client"),
-		iceServers: [{ urls: turn.url, username: turn.username, credential: turn.password }],
 	});
 	const port = await rendezvous.listen();
 	const baseUrl = `http://127.0.0.1:${port}`;
@@ -236,10 +235,11 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 			if (!ticketResponse.ok) throw new Error(await ticketResponse.text());
 			const authorization = await ticketResponse.json();
 			const ticketClaims = JSON.parse(atob(authorization.ticket.split(".")[0].replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(authorization.ticket.split(".")[0].length / 4) * 4, "=")));
+			const browserTurn = { urls: options.turnUrl, username: options.turnUsername, credential: options.turnCredential };
 
 			return new Promise<BrowserPairResult>((resolve, reject) => {
 				const socket = new WebSocket(options.wsUrl);
-				const peer = new RTCPeerConnection({ iceServers: authorization.iceServers, iceTransportPolicy: "relay" });
+				const peer = new RTCPeerConnection({ iceServers: [...authorization.iceServers, browserTurn], iceTransportPolicy: "relay" });
 				const channel = peer.createDataChannel(options.label, { ordered: true, protocol: options.protocol });
 				let answerSdp: string | undefined;
 				let offerSdp = "";
@@ -412,7 +412,12 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 					if (!revocationStarted) fail(new Error("DataChannel failed"));
 				};
 				socket.onerror = () => fail(new Error("Rendezvous WebSocket failed"));
-				socket.onopen = () => send({ type: "connect_backend", backendId: options.backendId, ticket: authorization.ticket });
+				socket.onopen = () => send({
+					type: "connect_backend",
+					backendId: options.backendId,
+					ticket: authorization.ticket,
+					iceServers: [browserTurn],
+				});
 				socket.onmessage = (event) => {
 					void (async () => {
 						const message = JSON.parse(String(event.data));
@@ -459,6 +464,9 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 			protocolVersion: RENDEZVOUS_PROTOCOL_VERSION,
 			label: PIPANE_DATA_CHANNEL_LABEL,
 			protocol: PIPANE_DATA_CHANNEL_PROTOCOL,
+			turnUrl: turn.url,
+			turnUsername: turn.username,
+			turnCredential: turn.password,
 		});
 
 		expect(result).toEqual({
@@ -473,6 +481,26 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		});
 		expect(backendTrust.ownerAccountId).toBe(result.accountId);
 		expect(rendezvous.trustStore.getBackendOwner(identity.backendId)).toBe(result.accountId);
+
+		// Configure the user-provided TURN relay exactly as the recovery dialog does.
+		// The rendezvous itself has no TURN configuration, so every packaged-page
+		// connection below proves browser-owned credentials reach both ICE peers.
+		await page.evaluate(async (profile) => new Promise<void>((resolve, reject) => {
+			const request = indexedDB.open("pipane-turn-relay", 1);
+			request.onupgradeneeded = () => request.result.createObjectStore("turn-relay-settings");
+			request.onerror = () => reject(request.error);
+			request.onsuccess = () => {
+				const database = request.result;
+				const transaction = database.transaction("turn-relay-settings", "readwrite");
+				transaction.objectStore("turn-relay-settings").put(profile, "default");
+				transaction.onerror = () => reject(transaction.error);
+				transaction.oncomplete = () => { database.close(); resolve(); };
+			};
+		}), {
+			version: 1,
+			kind: "static",
+			iceServers: [{ urls: turn.url, username: turn.username, credential: turn.password }],
+		});
 
 		// Exercise the packaged zero-signup QR landing page with a second browser identity.
 		const qrPairing = backendTrust.createPairing();
@@ -523,6 +551,11 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 
 		const firstHost = page.locator(`session-picker .host-row[data-backend-id='${identity.backendId}']`);
 		await firstHost.locator("[aria-label^='Manage']").click();
+		await page.getByRole("button", { name: "TURN relay settings" }).click();
+		const relayDialog = page.locator("[data-testid='turn-relay-dialog']");
+		await expect(relayDialog).toContainText("Another TURN provider");
+		await relayDialog.locator("[aria-label='Close TURN relay settings']").click();
+		await firstHost.locator("[aria-label^='Manage']").click();
 		await page.getByRole("button", { name: "Add another device" }).click();
 		const inviteDialog = page.locator("[data-testid='device-invite-dialog']");
 		await expect(inviteDialog.locator("[data-testid='device-invite-create-status']")).toContainText("expires in 10:");
@@ -535,6 +568,22 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await invitedPage.goto(inviteUrl);
 		await expect(invitedPage.locator("[data-testid='device-invite-status']")).toContainText("Device added");
 		expect(new URL(invitedPage.url()).hash).toBe("");
+		await invitedPage.evaluate(async (profile) => new Promise<void>((resolve, reject) => {
+			const request = indexedDB.open("pipane-turn-relay", 1);
+			request.onupgradeneeded = () => request.result.createObjectStore("turn-relay-settings");
+			request.onerror = () => reject(request.error);
+			request.onsuccess = () => {
+				const database = request.result;
+				const transaction = database.transaction("turn-relay-settings", "readwrite");
+				transaction.objectStore("turn-relay-settings").put(profile, "default");
+				transaction.onerror = () => reject(transaction.error);
+				transaction.oncomplete = () => { database.close(); resolve(); };
+			};
+		}), {
+			version: 1,
+			kind: "static",
+			iceServers: [{ urls: turn.url, username: turn.username, credential: turn.password }],
+		});
 		await invitedPage.goto(baseUrl);
 		await expect(invitedPage.locator("session-picker .host-row[data-backend-id]")).toHaveCount(2, { timeout: 30_000 });
 		await expect(invitedPage.locator("session-picker .host-name")).toHaveText(["First backend", "Second backend"]);

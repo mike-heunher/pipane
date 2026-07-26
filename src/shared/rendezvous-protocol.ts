@@ -2,6 +2,12 @@ import type { BackendIdentityBinding, IceServerConfiguration } from "./trust-pro
 
 export const RENDEZVOUS_PROTOCOL_VERSION = 2 as const;
 
+const MAX_ICE_SERVERS = 8;
+const MAX_ICE_URLS_PER_SERVER = 8;
+const MAX_ICE_URL_LENGTH = 512;
+const MAX_ICE_USERNAME_LENGTH = 512;
+const MAX_ICE_CREDENTIAL_LENGTH = 1_024;
+
 export type RendezvousRole = "backend" | "browser";
 
 export function rendezvousWebSocketUrl(baseUrl: string, role: RendezvousRole): string {
@@ -72,7 +78,7 @@ export type BackendRendezvousMessage = RendezvousEnvelope & (
 );
 
 export type BrowserRendezvousCommand = RendezvousEnvelope & (
-	| { type: "connect_backend"; backendId: string; ticket: string }
+	| { type: "connect_backend"; backendId: string; ticket: string; iceServers?: IceServerConfiguration[] }
 	| { type: "signal"; connectionId: string; signal: IceSignal }
 	| { type: "close_connection"; connectionId: string; reason?: string }
 );
@@ -164,8 +170,9 @@ function decodeCommand(
 			break;
 		case "connect_backend":
 			if (role !== "browser") return unknownMessage(value.type);
-			if (!isString(value.backendId) || !isString(value.ticket)) {
-				return invalidMessage("connect_backend requires backendId and ticket");
+			if (!isString(value.backendId) || !isString(value.ticket)
+				|| (value.iceServers !== undefined && !isSupplementalIceServers(value.iceServers))) {
+				return invalidMessage("connect_backend requires backendId, ticket, and valid optional TURN servers");
 			}
 			break;
 		case "signal":
@@ -316,10 +323,44 @@ function isBackendIdentityBinding(value: unknown): value is BackendIdentityBindi
 }
 
 function isIceServers(value: unknown): value is IceServerConfiguration[] {
-	return Array.isArray(value) && value.every((server) => isRecord(server)
-		&& (isString(server.urls) || (Array.isArray(server.urls) && server.urls.length > 0 && server.urls.every(isString)))
-		&& isOptionalString(server.username)
-		&& isOptionalString(server.credential));
+	return Array.isArray(value)
+		&& value.length <= MAX_ICE_SERVERS
+		&& value.every((server) => {
+			if (!isRecord(server) || !isOptionalBoundedString(server.username, MAX_ICE_USERNAME_LENGTH)
+				|| !isOptionalBoundedString(server.credential, MAX_ICE_CREDENTIAL_LENGTH)) return false;
+			const urls = typeof server.urls === "string" ? [server.urls] : server.urls;
+			return Array.isArray(urls)
+				&& urls.length > 0
+				&& urls.length <= MAX_ICE_URLS_PER_SERVER
+				&& urls.every(isIceServerUrl);
+		});
+}
+
+function isSupplementalIceServers(value: unknown): value is IceServerConfiguration[] {
+	if (!isIceServers(value)) return false;
+	let hasTurn = false;
+	for (const server of value) {
+		const urls = typeof server.urls === "string" ? [server.urls] : server.urls;
+		if (urls.some((url) => /^turns?:/iu.test(url))) {
+			hasTurn = true;
+			if (!server.username || !server.credential) return false;
+		}
+	}
+	return hasTurn;
+}
+
+function isIceServerUrl(value: unknown): value is string {
+	if (typeof value !== "string" || value.length === 0 || value.length > MAX_ICE_URL_LENGTH || /\s/u.test(value)) return false;
+	const match = /^(stun|turns?):(?:\/\/)?(\[[^\]]+\]|[^/?#:]+)(?::(\d{1,5}))?(?:\?transport=(udp|tcp))?$/iu.exec(value);
+	if (!match) return false;
+	if (match[1].toLowerCase() === "stun" && match[4]) return false;
+	if (!match[3]) return true;
+	const port = Number.parseInt(match[3], 10);
+	return port > 0 && port <= 65_535;
+}
+
+function isOptionalBoundedString(value: unknown, maximumLength: number): value is string | undefined {
+	return value === undefined || (typeof value === "string" && value.length > 0 && value.length <= maximumLength);
 }
 
 function isErrorCode(value: unknown): value is RendezvousErrorCode {

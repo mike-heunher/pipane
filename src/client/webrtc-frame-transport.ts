@@ -1,5 +1,8 @@
+import { ConnectionAttemptError, connectionFailureDetails } from "./frame-transport.js";
 import type {
 	ConnectionDiagnostics,
+	ConnectionFailureCode,
+	ConnectionFailureDetails,
 	FrameTransport,
 	FrameTransportConnectionEvent,
 	IceCandidateDiagnostics,
@@ -30,6 +33,8 @@ import {
 
 export interface BrowserConnectionAuthorization extends ConnectionTicketResponse {
 	pairingSecret?: string;
+	/** Browser-owned short-lived TURN credentials forwarded to this backend route only. */
+	supplementalIceServers?: ConnectionTicketResponse["iceServers"];
 }
 
 export interface WebRtcFrameTransportOptions {
@@ -39,8 +44,9 @@ export interface WebRtcFrameTransportOptions {
 	authorize: () => Promise<BrowserConnectionAuthorization>;
 	iceTransportPolicy?: RTCIceTransportPolicy;
 	createPeerConnection?: (configuration: RTCConfiguration) => RTCPeerConnection;
-	createRendezvousClient?: (ticket: string) => BrowserRendezvousClient;
+	createRendezvousClient?: (ticket: string, iceServers: ConnectionTicketResponse["iceServers"]) => BrowserRendezvousClient;
 	reconnectDelayMs?: (attempt: number) => number;
+	connectionTimeoutMs?: number;
 	schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 }
 
@@ -52,8 +58,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private readonly authorize: WebRtcFrameTransportOptions["authorize"];
 	private readonly iceTransportPolicy: RTCIceTransportPolicy;
 	private readonly createPeerConnection: (configuration: RTCConfiguration) => RTCPeerConnection;
-	private readonly createRendezvousClient: (ticket: string) => BrowserRendezvousClient;
+	private readonly createRendezvousClient: (ticket: string, iceServers: ConnectionTicketResponse["iceServers"]) => BrowserRendezvousClient;
 	private readonly reconnectDelayMs: (attempt: number) => number;
+	private readonly connectionTimeoutMs: number;
 	private readonly schedule: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
@@ -71,6 +78,8 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private queuedBytes = 0;
 	private flushing = false;
 	private iceServerUrls: string[] = [];
+	private lastDiagnostics: ConnectionDiagnostics | undefined;
+	private lastFailure: ConnectionFailureDetails | undefined;
 
 	constructor(options: WebRtcFrameTransportOptions) {
 		this.rendezvousUrl = options.rendezvousUrl;
@@ -79,12 +88,14 @@ export class WebRtcFrameTransport implements FrameTransport {
 		this.authorize = options.authorize;
 		this.iceTransportPolicy = options.iceTransportPolicy ?? "all";
 		this.createPeerConnection = options.createPeerConnection ?? ((configuration) => new RTCPeerConnection(configuration));
-		this.createRendezvousClient = options.createRendezvousClient ?? ((ticket) => new BrowserRendezvousClient({
+		this.createRendezvousClient = options.createRendezvousClient ?? ((ticket, iceServers) => new BrowserRendezvousClient({
 			url: this.rendezvousUrl,
 			backendId: this.backendId,
 			ticket,
+			iceServers,
 		}));
 		this.reconnectDelayMs = options.reconnectDelayMs ?? ((attempt) => Math.min(15_000, 500 * 2 ** Math.min(attempt, 5)));
+		this.connectionTimeoutMs = options.connectionTimeoutMs ?? 20_000;
 		this.schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
 	}
 
@@ -109,15 +120,36 @@ export class WebRtcFrameTransport implements FrameTransport {
 	async connect(_endpoint: string): Promise<void> {
 		if (this.isConnected) return;
 		this.manuallyClosed = false;
-		const authorization = await this.authorize();
-		const claims = decodeTicketClaims(authorization.ticket);
-		this.iceServerUrls = collectIceServerUrls(authorization.iceServers);
-		if (claims.backendId !== this.backendId || claims.deviceId !== this.deviceIdentity.deviceId) {
-			throw new Error("Connection ticket does not match this browser and backend");
+		this.lastDiagnostics = undefined;
+		this.lastFailure = undefined;
+		this.iceServerUrls = [];
+		let authorization: BrowserConnectionAuthorization;
+		try {
+			authorization = await this.authorize();
+		} catch (error) {
+			const details = connectionFailureDetails(error);
+			const failure = details.code === "relay_configuration"
+				? error
+				: new ConnectionAttemptError("rendezvous", details.message, false);
+			this.lastFailure = connectionFailureDetails(failure);
+			this.lastDiagnostics = await this.getConnectionDiagnostics();
+			throw failure;
 		}
-		const rendezvous = this.createRendezvousClient(authorization.ticket);
+		let claims: ConnectionTicketClaims;
+		try {
+			claims = decodeTicketClaims(authorization.ticket);
+		} catch (error) {
+			throw new ConnectionAttemptError("authorization", error instanceof Error ? error.message : String(error), false);
+		}
+		const supplementalIceServers = authorization.supplementalIceServers ?? [];
+		const effectiveIceServers = [...authorization.iceServers, ...supplementalIceServers];
+		this.iceServerUrls = collectIceServerUrls(effectiveIceServers);
+		if (claims.backendId !== this.backendId || claims.deviceId !== this.deviceIdentity.deviceId) {
+			throw new ConnectionAttemptError("authorization", "Connection ticket does not match this browser and backend", false);
+		}
+		const rendezvous = this.createRendezvousClient(authorization.ticket, supplementalIceServers);
 		const peer = this.createPeerConnection({
-			iceServers: authorization.iceServers,
+			iceServers: effectiveIceServers,
 			iceTransportPolicy: this.iceTransportPolicy,
 		});
 		const channel = peer.createDataChannel(PIPANE_DATA_CHANNEL_LABEL, {
@@ -138,13 +170,26 @@ export class WebRtcFrameTransport implements FrameTransport {
 			let binding: import("../shared/trust-protocol.js").BackendIdentityBinding | undefined;
 			let remoteDescriptionSet = false;
 			const pendingCandidates: RTCIceCandidateInit[] = [];
+			let attemptTimer: ReturnType<typeof setTimeout> | undefined;
 
-			const fail = (error: unknown): void => {
+			const fail = (error: unknown, code: ConnectionFailureCode = "unknown"): void => {
 				if (settled) return;
 				settled = true;
-				this.closeInternal();
-				reject(error instanceof Error ? error : new Error(String(error)));
+				if (attemptTimer) clearTimeout(attemptTimer);
+				const failure = error instanceof ConnectionAttemptError
+					? error
+					: new ConnectionAttemptError(code, error instanceof Error ? error.message : String(error), code === "ice");
+				this.lastFailure = { code: failure.code, message: failure.message, turnRecommended: failure.turnRecommended };
+				void this.getConnectionDiagnostics().then((diagnostics) => {
+					this.lastDiagnostics = { ...diagnostics, failure: this.lastFailure };
+				}).catch(() => undefined).finally(() => {
+					this.closeInternal();
+					reject(failure);
+				});
 			};
+			attemptTimer = setTimeout(() => fail(new Error(
+				"WebRTC could not find a working network path before the connection attempt timed out",
+			), "ice"), this.connectionTimeoutMs);
 			const applyAnswer = async (): Promise<void> => {
 				if (!answerSdp || !binding || remoteDescriptionSet) return;
 				await verifyBrowserBackendBinding(binding, {
@@ -169,15 +214,25 @@ export class WebRtcFrameTransport implements FrameTransport {
 					sdpMLineIndex: candidate.sdpMLineIndex ?? null,
 				});
 			};
-			peer.onconnectionstatechange = () => {
-				if (peer.connectionState === "failed" || peer.connectionState === "closed") {
-					if (!settled) fail(new Error(`WebRTC connection ${peer.connectionState}`));
+			peer.oniceconnectionstatechange = () => {
+				if (peer.iceConnectionState === "failed") {
+					if (!settled) fail(new Error("WebRTC ICE could not establish a network path"), "ice");
 					else this.handleDisconnected();
 				}
 			};
-			channel.onerror = () => fail(new Error("WebRTC DataChannel failed"));
+			peer.onconnectionstatechange = () => {
+				if (peer.connectionState === "failed" || peer.connectionState === "closed") {
+					if (!settled) {
+						const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
+						fail(new Error(`WebRTC connection ${peer.connectionState}`), code);
+					} else this.handleDisconnected();
+				}
+			};
+			channel.onerror = () => fail(new Error("WebRTC DataChannel failed"),
+				peer.iceConnectionState === "failed" ? "ice" : "datachannel");
 			channel.onclose = () => {
-				if (!settled) fail(new Error("WebRTC DataChannel closed before authentication"));
+				if (!settled) fail(new Error("WebRTC DataChannel closed before authentication"),
+					peer.iceConnectionState === "failed" ? "ice" : "datachannel");
 				else this.handleDisconnected();
 			};
 			channel.onopen = () => {
@@ -191,7 +246,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 						deviceSignature,
 						pairingSecret: authorization.pairingSecret,
 					}));
-				}).catch(fail);
+				}).catch((error) => fail(error, "authentication"));
 			};
 			channel.onmessage = (event) => {
 				const frame = String(event.data);
@@ -200,20 +255,23 @@ export class WebRtcFrameTransport implements FrameTransport {
 					try {
 						result = JSON.parse(frame);
 					} catch {
-						fail(new Error("Backend returned an invalid authentication frame"));
+						fail(new Error("Backend returned an invalid authentication frame"), "authentication");
 						return;
 					}
 					if (result?.protocolVersion !== TRUST_PROTOCOL_VERSION || result?.type !== "authenticated") {
-						fail(new Error(result?.message || "Backend rejected DataChannel authentication"));
+						fail(new Error(result?.message || "Backend rejected DataChannel authentication"), "authentication");
 						return;
 					}
 					if (result.deviceId !== this.deviceIdentity.deviceId) {
-						fail(new Error("Backend authenticated an unexpected browser device"));
+						fail(new Error("Backend authenticated an unexpected browser device"), "authentication");
 						return;
 					}
 					this.connected = true;
 					this.reconnectAttempt = 0;
 					settled = true;
+					if (attemptTimer) clearTimeout(attemptTimer);
+					this.lastFailure = undefined;
+					this.lastDiagnostics = undefined;
 					this.emitConnectionChange({ connected: true, reconnected: this.everConnected });
 					this.everConnected = true;
 					resolve();
@@ -243,25 +301,45 @@ export class WebRtcFrameTransport implements FrameTransport {
 					};
 					if (remoteDescriptionSet) await peer.addIceCandidate(candidate);
 					else pendingCandidates.push(candidate);
-				})().catch(fail);
+				})().catch((error) => fail(error, signal.kind === "description" ? "authorization" : "ice"));
 			});
 			rendezvous.onIdentityBinding((received) => {
 				binding = received;
-				void applyAnswer().catch(fail);
+				void applyAnswer().catch((error) => fail(error, "authorization"));
 			});
-			rendezvous.onConnectionClosed((reason) => fail(new Error(reason)));
-			rendezvous.onError((error) => fail(error instanceof Error ? error : new Error(error.message)));
+			rendezvous.onConnectionClosed((reason) => fail(new Error(reason), "unknown"));
+			rendezvous.onError((error) => {
+				if (error instanceof Error) {
+					fail(error, "rendezvous");
+					return;
+				}
+				const code: ConnectionFailureCode = error.code === "backend_offline"
+					? "backend_offline"
+					: error.code === "invalid_ticket" || error.code === "unauthorized_connection" || error.code === "invalid_pairing"
+						? "authorization"
+						: "rendezvous";
+				fail(new Error(error.message), code);
+			});
 
 			try {
 				connectionId = await rendezvous.connect();
-				if (connectionId !== claims.connectionId) throw new Error("Rendezvous route does not match the connection ticket");
+			} catch (error) {
+				fail(error, "rendezvous");
+				return;
+			}
+			try {
+				if (connectionId !== claims.connectionId) throw new ConnectionAttemptError(
+					"authorization",
+					"Rendezvous route does not match the connection ticket",
+					false,
+				);
 				const offer = await peer.createOffer();
 				offerSdp = offer.sdp ?? "";
 				if (!offerSdp) throw new Error("Browser WebRTC offer is empty");
 				await peer.setLocalDescription(offer);
 				rendezvous.sendSignal({ kind: "description", type: "offer", sdp: offerSdp });
 			} catch (error) {
-				fail(error);
+				fail(error, error instanceof ConnectionAttemptError ? error.code : "datachannel");
 			}
 		});
 	}
@@ -282,6 +360,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 	async getConnectionDiagnostics(): Promise<ConnectionDiagnostics> {
 		const peer = this.peer;
 		const channel = this.channel;
+		if (!peer && this.lastDiagnostics) return structuredClone(this.lastDiagnostics);
 		let entries: any[] = [];
 		if (peer) {
 			try {
@@ -319,6 +398,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 			dtlsState: peer?.sctp?.transport.state ?? stringValue(transportStat?.dtlsState),
 			icePath: classifyIcePath(local, remote),
 			iceServerUrls: [...this.iceServerUrls],
+			...(this.lastFailure ? { failure: { ...this.lastFailure } } : {}),
 			...(selectedPair ? { selectedPair } : {}),
 			candidates,
 			dataChannel: {

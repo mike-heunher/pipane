@@ -32,6 +32,7 @@ import {
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { openConnectionDiagnosticsDialog } from "./connection-diagnostics-dialog.js";
+import { openTurnRelayDialog } from "./turn-relay-dialog.js";
 import { openDeviceInviteDialog } from "./device-invite-dialog.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
@@ -72,6 +73,7 @@ window.addEventListener("resize", () => {
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let connectionDiagnosticsOpen = false;
+let turnRelaySettingsOpen = false;
 let deviceInviteOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
@@ -538,6 +540,21 @@ async function openLocalSettingsModal(backendId?: string) {
 	}
 }
 
+async function openTurnRelaySettings(reconnectAfterSave = false): Promise<void> {
+	if (turnRelaySettingsOpen) return;
+	turnRelaySettingsOpen = true;
+	try {
+		await openTurnRelayDialog({
+			saveLabel: reconnectAfterSave ? "Save and reconnect" : "Save",
+			onSaved: () => {
+				if (reconnectAfterSave) window.location.reload();
+			},
+		});
+	} finally {
+		turnRelaySettingsOpen = false;
+	}
+}
+
 async function openConnectionDiagnosticsModal(backendId = agent.activeBackendId): Promise<void> {
 	if (!backendId || connectionDiagnosticsOpen) return;
 	connectionDiagnosticsOpen = true;
@@ -548,6 +565,7 @@ async function openConnectionDiagnosticsModal(backendId = agent.activeBackendId)
 			getDiagnostics: () => agent.getBackendConnectionDiagnostics?.(backendId)
 				?? agent.getConnectionDiagnostics?.()
 				?? Promise.resolve(undefined),
+			onConfigureRelay: () => { void openTurnRelaySettings(false); },
 		});
 	} finally {
 		connectionDiagnosticsOpen = false;
@@ -765,6 +783,7 @@ const renderApp = () => {
 	const settingsMenuCallbacks = {
 		onOpenSettings: (backendId?: string) => { void openLocalSettingsModal(backendId); },
 		onOpenDiagnostics: (backendId: string) => { void openConnectionDiagnosticsModal(backendId); },
+		onOpenRelaySettings: () => { void openTurnRelaySettings(false); },
 		onRemoveBackend: (backendId: string) => { void removeBackend(backendId); },
 		onInviteDevice: () => { void openDeviceInviteModal(); },
 		isDevMode,
@@ -960,12 +979,29 @@ async function initApp() {
 	} catch (err) {
 		clearTimeout(connectingOverlayTimer);
 		const backends = agent.workspaceBackends ?? [];
+		const relayCandidate = backends.find((backend) => backend.connectionFailure?.turnRecommended
+			|| backend.connectionFailure?.code === "relay_configuration");
 		render(
 			html`
 				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground p-6">
-					<div class="max-w-lg rounded-lg border border-border p-6">
+					<div class="max-w-lg rounded-lg border border-border p-6" data-testid="backend-unavailable-recovery">
 						<h1 class="text-lg font-semibold mb-2">Backends unavailable</h1>
 						<p class="text-destructive mb-4">${err instanceof Error ? err.message : "No authorized backend could be reached."}</p>
+						${relayCandidate ? html`
+							<div class="rounded border border-border bg-muted/30 p-4 mb-4">
+								<h2 class="font-semibold mb-2">${relayCandidate.connectionFailure?.code === "relay_configuration" ? "TURN relay settings need attention" : "No direct network path was found"}</h2>
+								<p class="text-sm text-muted-foreground mb-3">
+									${relayCandidate.connectionFailure?.code === "relay_configuration"
+										? "Pipane could not obtain valid temporary credentials from the configured relay. Check its API key, URLs, credentials, or usage quota."
+										: "Pipane reached the rendezvous service and the backend, but WebRTC could not establish a direct route. A TURN relay can carry the encrypted connection through restrictive NATs and firewalls. The relay operator can observe IP addresses, timing, and traffic volume, but not the encrypted conversation."}
+								</p>
+								<div class="flex flex-wrap gap-2">
+									<button class="rounded bg-primary text-primary-foreground px-3 py-2 text-sm" type="button" @click=${() => { void openTurnRelaySettings(true); }}>Set up a relay</button>
+									<button class="rounded border border-border px-3 py-2 text-sm" type="button" @click=${() => window.location.reload()}>Try again</button>
+									<button class="rounded border border-border px-3 py-2 text-sm" type="button" @click=${() => { void openConnectionDiagnosticsModal(relayCandidate.backendId); }}>Connection details</button>
+								</div>
+							</div>
+						` : ""}
 						${backends.length > 0 ? html`
 							<div class="grid gap-2 mb-4">
 								${backends.map((backend) => html`
@@ -977,7 +1013,7 @@ async function initApp() {
 								`)}
 							</div>
 						` : ""}
-						<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to add or recover access.</p>
+						${!relayCandidate ? html`<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to add or recover access. TURN cannot help when a backend is offline or authorization fails.</p>` : ""}
 					</div>
 				</div>
 			`,

@@ -170,14 +170,20 @@ describe("pipane rendezvous trust and signaling", () => {
 		const browser = await openSocket(rendezvousWebSocketUrl(baseUrl, "browser"));
 		const connectionRequest = eventPromise<BackendConnectionRequest>((resolve) => client.onConnectionRequest(resolve));
 		const browserConnected = nextBrowserMessage(browser);
+		const browserTurn = {
+			urls: ["turn:turn.example:3478?transport=udp", "turns:turn.example:443?transport=tcp"],
+			username: "temporary-browser",
+			credential: "temporary-credential",
+		};
 		browser.send(JSON.stringify({
 			protocolVersion: RENDEZVOUS_PROTOCOL_VERSION,
 			type: "connect_backend",
 			backendId: identity.backendId,
 			ticket: pairingTicket.ticket,
+			iceServers: [browserTurn],
 		}));
 		const [request, connected] = await Promise.all([connectionRequest, browserConnected]);
-		expect(request).toEqual({ connectionId: "c_pairing", ticket: pairingTicket.ticket, iceServers: [] });
+		expect(request).toEqual({ connectionId: "c_pairing", ticket: pairingTicket.ticket, iceServers: [browserTurn] });
 		expect(connected).toEqual({
 			protocolVersion: RENDEZVOUS_PROTOCOL_VERSION,
 			type: "backend_connected",

@@ -8,6 +8,7 @@ export interface ConnectionDiagnosticsDialogOptions {
 	backendName: string;
 	backendId: string;
 	getDiagnostics(): Promise<ConnectionDiagnostics | undefined>;
+	onConfigureRelay?: () => void;
 	clipboard?: Pick<Clipboard, "writeText">;
 	refreshIntervalMs?: number;
 }
@@ -62,7 +63,7 @@ export function openConnectionDiagnosticsDialog(options: ConnectionDiagnosticsDi
 				const scrollTop = content.scrollTop;
 				const rawWasOpen = (content.querySelector(".connection-diagnostics-raw") as HTMLDetailsElement | null)?.open ?? false;
 				content.replaceChildren(diagnostics
-					? renderDiagnostics(diagnostics)
+					? renderDiagnostics(diagnostics, options.onConfigureRelay)
 					: statusMessage("Connection statistics are available only for an active remote WebRTC backend."));
 				const nextRaw = content.querySelector(".connection-diagnostics-raw") as HTMLDetailsElement | null;
 				if (nextRaw) nextRaw.open = rawWasOpen;
@@ -107,7 +108,7 @@ export function openConnectionDiagnosticsDialog(options: ConnectionDiagnosticsDi
 	});
 }
 
-function renderDiagnostics(diagnostics: ConnectionDiagnostics): DocumentFragment {
+function renderDiagnostics(diagnostics: ConnectionDiagnostics, onConfigureRelay?: () => void): DocumentFragment {
 	const fragment = document.createDocumentFragment();
 	const path = pathDescription(diagnostics.icePath);
 	const overview = section("Overview");
@@ -122,6 +123,25 @@ function renderDiagnostics(diagnostics: ConnectionDiagnostics): DocumentFragment
 		["Signaling", diagnostics.signalingUrl],
 	]));
 	fragment.append(overview);
+
+	if (diagnostics.failure) {
+		const recovery = section("Connection recovery");
+		recovery.append(statusMessage(diagnostics.failure.message, true));
+		if (diagnostics.failure.turnRecommended) {
+			recovery.append(statusMessage(
+				"Signaling reached the backend, but ICE could not establish a direct route. A TURN relay may carry the encrypted connection through this network.",
+			));
+		}
+		if (onConfigureRelay && (diagnostics.failure.turnRecommended || diagnostics.failure.code === "relay_configuration")) {
+			const configure = button(
+				diagnostics.failure.code === "relay_configuration" ? "Edit TURN relay" : "Set up a TURN relay",
+				"Configure TURN relay",
+			);
+			configure.addEventListener("click", onConfigureRelay);
+			recovery.append(configure);
+		}
+		fragment.append(recovery);
+	}
 
 	const pairSection = section("Selected ICE path");
 	if (diagnostics.selectedPair) {
@@ -147,6 +167,11 @@ function renderDiagnostics(diagnostics: ConnectionDiagnostics): DocumentFragment
 		servers.append(list);
 	} else {
 		servers.append(statusMessage("No STUN or TURN server was configured for this connection."));
+	}
+	if (onConfigureRelay && !diagnostics.failure?.turnRecommended && diagnostics.failure?.code !== "relay_configuration") {
+		const configure = button("Configure TURN relay", "Configure TURN relay");
+		configure.addEventListener("click", onConfigureRelay);
+		servers.append(configure);
 	}
 	fragment.append(servers);
 

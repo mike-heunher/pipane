@@ -1,5 +1,59 @@
 export type IceConnectionPath = "direct-host" | "direct-stun" | "turn-relay" | "unknown";
 
+export type ConnectionFailureCode =
+	| "rendezvous"
+	| "backend_offline"
+	| "authorization"
+	| "ice"
+	| "datachannel"
+	| "authentication"
+	| "relay_configuration"
+	| "unknown";
+
+export interface ConnectionFailureDetails {
+	code: ConnectionFailureCode;
+	message: string;
+	turnRecommended: boolean;
+}
+
+export class ConnectionAttemptError extends Error implements ConnectionFailureDetails {
+	constructor(
+		readonly code: ConnectionFailureCode,
+		message: string,
+		readonly turnRecommended = code === "ice",
+	) {
+		super(message);
+		this.name = "ConnectionAttemptError";
+	}
+}
+
+export function connectionFailureDetails(error: unknown): ConnectionFailureDetails {
+	if (error && typeof error === "object") {
+		const candidate = error as Partial<ConnectionFailureDetails>;
+		if (isConnectionFailureCode(candidate.code)
+			&& typeof candidate.message === "string"
+			&& typeof candidate.turnRecommended === "boolean") {
+			return { code: candidate.code, message: candidate.message, turnRecommended: candidate.turnRecommended };
+		}
+	}
+	return {
+		code: "unknown",
+		message: error instanceof Error ? error.message : String(error),
+		turnRecommended: false,
+	};
+}
+
+function isConnectionFailureCode(value: unknown): value is ConnectionFailureCode {
+	return value === "rendezvous"
+		|| value === "backend_offline"
+		|| value === "authorization"
+		|| value === "ice"
+		|| value === "datachannel"
+		|| value === "authentication"
+		|| value === "relay_configuration"
+		|| value === "unknown";
+}
+
 export interface IceCandidateDiagnostics {
 	id: string;
 	scope: "local" | "remote";
@@ -42,6 +96,7 @@ export interface ConnectionDiagnostics {
 	dtlsState?: string;
 	icePath: IceConnectionPath;
 	iceServerUrls: string[];
+	failure?: ConnectionFailureDetails;
 	selectedPair?: SelectedIcePairDiagnostics;
 	candidates: IceCandidateDiagnostics[];
 	dataChannel: {

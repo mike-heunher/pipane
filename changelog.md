@@ -1,5 +1,6 @@
 # Unreleased
 
+- Guide failed WebRTC connections through browser-local hosted or self-hosted TURN relay setup with short-lived credential forwarding and relay testing.
 - Acknowledge prompts as soon as Pi accepts and persists them so later transient failures do not restore duplicate composer text.
 
 # 0.1.14 - 2026-07-26

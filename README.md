@@ -34,6 +34,8 @@ Run `pipane` to start the backend. It registers with `https://pipane.dev` by def
 
 Authorize the first browser by running `pipane pair` and opening its short-lived link or scanning its QR code. From an authorized pipane.dev workspace, open a host's `•••` menu and choose **Add another device** to create a one-use, ten-minute QR code and link. The new browser receives access to the same account backends without transferring the original browser's private key.
 
+If rendezvous can reach an online backend but WebRTC cannot find a direct ICE path, Pipane offers browser-local **TURN relay settings** from the recovery screen, connection diagnostics, pairing page, and host menu. The guided setup supports [Metered Open Relay](https://www.metered.ca/tools/openrelay/), a publicly reachable self-hosted coturn server using REST shared-secret credentials, or standard static `iceServers` JSON from another provider. Long-term Metered keys and coturn shared secrets remain in that browser; Pipane forwards only temporary TURN credentials for each connection. TURN relays encrypted WebRTC traffic but can still observe endpoint IP addresses, timing, and traffic volume.
+
 ### Explicit local deployments
 
 Deploy the current working tree to the separate dev instance with:

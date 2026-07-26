@@ -1,4 +1,4 @@
-import type { AuthorizedBackendDescriptor } from "../shared/trust-protocol.js";
+import type { AuthorizedBackendDescriptor, IceServerConfiguration } from "../shared/trust-protocol.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import type { BackendClient } from "./backend-client.js";
 import { DataChannelBackendApi } from "./data-channel-backend-api.js";
@@ -9,12 +9,14 @@ import {
 import { RendezvousTrustApi } from "./rendezvous-trust-api.js";
 import { WebRtcFrameTransport } from "./webrtc-frame-transport.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
+import { resolveStoredTurnRelayIceServers } from "./turn-relay.js";
 
 type RemoteTrustApi = Pick<RendezvousTrustApi, "listAuthorizedBackends" | "createConnectionTicket" | "revokeBackend">;
 
 export interface RemoteBackendManagerDependencies {
 	loadIdentity(): Promise<BrowserDeviceIdentity>;
 	createTrustApi(): RemoteTrustApi;
+	resolveTurnIceServers?(subject: string): Promise<IceServerConfiguration[]>;
 	createClient?(backendId: string, identity: BrowserDeviceIdentity, api: RemoteTrustApi): BackendClient;
 }
 
@@ -81,7 +83,13 @@ export class RemoteBackendManager {
 			rendezvousUrl: this.rendezvousUrl,
 			backendId,
 			deviceIdentity: identity,
-			authorize: () => trustApi.createConnectionTicket(identity, backendId),
+			authorize: async () => {
+				const [authorization, supplementalIceServers] = await Promise.all([
+					trustApi.createConnectionTicket(identity, backendId),
+					(this.dependencies.resolveTurnIceServers ?? resolveStoredTurnRelayIceServers)(identity.deviceId),
+				]);
+				return { ...authorization, supplementalIceServers };
+			},
 		});
 		const api = new DataChannelBackendApi(transport, backendId);
 		return new WsAgentAdapter({ transport, api });

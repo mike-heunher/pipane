@@ -16,6 +16,7 @@ import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 export interface SettingsMenuCallbacks {
 	onOpenSettings: (backendId?: string) => void;
 	onOpenDiagnostics?: (backendId: string) => void;
+	onOpenRelaySettings?: () => void;
 	onRemoveBackend?: (backendId: string) => void;
 	onInviteDevice?: () => void;
 	isDevMode: boolean;
@@ -218,6 +219,7 @@ export class SessionPicker extends LitElement {
 
 		.host-status.connected { background: #22c55e; }
 		.host-status.reconnecting { background: #f59e0b; }
+		.host-status.path-failed { background: #ef4444; }
 		.host-status.offline { background: #9ca3af; }
 
 		.host-name {
@@ -1486,8 +1488,12 @@ export class SessionPicker extends LitElement {
 	}
 
 	private renderHostControl(host: SessionHost): TemplateResult {
-		const state = host.connected ? "connected" : host.reconnecting ? "reconnecting" : "offline";
-		const statusTitle = host.connected ? "Connected" : host.reconnecting ? "Reconnecting" : host.error || (host.online ? "Unavailable" : "Offline");
+		const failure = this.agent.workspaceBackends?.find((backend) => backend.backendId === host.backendId)?.connectionFailure;
+		const pathFailed = !!failure?.turnRecommended || failure?.code === "relay_configuration";
+		const state = host.connected ? "connected" : host.reconnecting ? "reconnecting" : pathFailed ? "path-failed" : "offline";
+		const statusTitle = host.connected ? "Connected" : host.reconnecting ? "Reconnecting" : pathFailed
+			? `${host.error || "No direct network path"} — TURN relay may help`
+			: host.error || (host.online ? "Unavailable" : "Offline");
 		return html`
 			<div class="host-row host-header ${host.backendId === this.agent.activeBackendId ? "active" : ""}" data-backend-id=${host.backendId}>
 				<button
@@ -1503,6 +1509,7 @@ export class SessionPicker extends LitElement {
 					<div class="host-menu">
 						<button ?disabled=${!host.online || !host.compatible} @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenSettings(host.backendId); }}>Host settings</button>
 						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenDiagnostics?.(host.backendId); }}>Connection details</button>
+						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenRelaySettings?.(); }}>TURN relay settings</button>
 						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onInviteDevice?.(); }}>Add another device</button>
 						<button class="danger" @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onRemoveBackend?.(host.backendId); }}>Remove host</button>
 					</div>

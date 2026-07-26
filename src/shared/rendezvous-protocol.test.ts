@@ -46,6 +46,18 @@ describe("rendezvous protocol", () => {
 
 	it("requires a signed ticket for browser routes and validates candidates", () => {
 		expect(decodeBrowserCommand(wire({ type: "connect_backend", backendId: "b_backend", ticket: "ticket" })).ok).toBe(true);
+		expect(decodeBrowserCommand(wire({
+			type: "connect_backend",
+			backendId: "b_backend",
+			ticket: "ticket",
+			iceServers: [{ urls: ["turn:turn.example:3478?transport=udp", "turns:turn.example:443?transport=tcp"], username: "temporary", credential: "secret" }],
+		})).ok).toBe(true);
+		expect(decodeBrowserCommand(wire({
+			type: "connect_backend",
+			backendId: "b_backend",
+			ticket: "ticket",
+			iceServers: [{ urls: "stun:stun.example:3478" }],
+		})).ok).toBe(false);
 		expect(decodeBrowserCommand(wire({ type: "connect_backend", backendId: "b_backend" })).ok).toBe(false);
 		expect(decodeBrowserCommand(wire({
 			type: "signal",

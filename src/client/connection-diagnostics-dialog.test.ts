@@ -90,4 +90,34 @@ describe("connection diagnostics dialog", () => {
 		await closed;
 		expect(document.querySelector("[data-testid='connection-diagnostics']")).toBeNull();
 	});
+
+	it("offers TURN recovery for a retained ICE path failure", async () => {
+		const configure = vi.fn();
+		const failed: ConnectionDiagnostics = {
+			...diagnostics,
+			connectionState: "failed",
+			iceConnectionState: "failed",
+			icePath: "unknown",
+			selectedPair: undefined,
+			failure: {
+				code: "ice",
+				message: "WebRTC ICE could not establish a network path",
+				turnRecommended: true,
+			},
+		};
+		const closed = openConnectionDiagnosticsDialog({
+			backendName: "piweb",
+			backendId: "b_backend",
+			getDiagnostics: async () => failed,
+			onConfigureRelay: configure,
+			refreshIntervalMs: 60_000,
+		});
+		await vi.waitFor(() => expect(document.body.textContent).toContain("direct route"));
+		const setup = [...document.querySelectorAll<HTMLButtonElement>("button")]
+			.find((item) => item.textContent === "Set up a TURN relay")!;
+		setup.click();
+		expect(configure).toHaveBeenCalledOnce();
+		(document.querySelector("[aria-label='Close connection diagnostics']") as HTMLButtonElement).click();
+		await closed;
+	});
 });

@@ -1,6 +1,10 @@
 import { loadOrCreateBrowserDeviceIdentity, type BrowserDeviceIdentity } from "./device-identity.js";
 import { parsePairingUrl, RendezvousTrustApi } from "./rendezvous-trust-api.js";
 import { WebRtcFrameTransport } from "./webrtc-frame-transport.js";
+import { connectionFailureDetails } from "./frame-transport.js";
+import { resolveStoredTurnRelayIceServers } from "./turn-relay.js";
+import { openTurnRelayDialog } from "./turn-relay-dialog.js";
+import type { IceServerConfiguration } from "../shared/trust-protocol.js";
 
 interface PairingTransport {
 	connect(endpoint: string): Promise<void>;
@@ -11,6 +15,8 @@ export interface PairingPageDependencies {
 	loadIdentity: () => Promise<BrowserDeviceIdentity>;
 	createTrustApi: () => Pick<RendezvousTrustApi, "createPairingTicket">;
 	createTransport: (options: ConstructorParameters<typeof WebRtcFrameTransport>[0]) => PairingTransport;
+	resolveTurnIceServers?: (subject: string) => Promise<IceServerConfiguration[]>;
+	openRelayDialog?: typeof openTurnRelayDialog;
 }
 
 const defaultDependencies: PairingPageDependencies = {
@@ -66,6 +72,21 @@ export async function initializePairingPage(
 		color: "inherit",
 		cursor: "pointer",
 	});
+	const relayButton = document.createElement("button");
+	relayButton.type = "button";
+	relayButton.textContent = "Set up a TURN relay";
+	relayButton.dataset.testid = "pairing-turn-relay";
+	relayButton.hidden = true;
+	Object.assign(relayButton.style, {
+		marginTop: "18px",
+		marginLeft: "8px",
+		border: "1px solid #2563eb",
+		borderRadius: "8px",
+		padding: "9px 14px",
+		background: "transparent",
+		color: "#2563eb",
+		cursor: "pointer",
+	});
 	const continueLink = document.createElement("a");
 	continueLink.textContent = "Open backend";
 	continueLink.dataset.testid = "pairing-continue";
@@ -79,21 +100,24 @@ export async function initializePairingPage(
 		color: "#fff",
 		textDecoration: "none",
 	});
-	card.append(title, description, status, retry, continueLink);
+	card.append(title, description, status, retry, relayButton, continueLink);
 	shell.append(card);
 	root.append(shell);
 
 	let running = false;
+	let currentIdentity: BrowserDeviceIdentity | undefined;
 	const pair = async (): Promise<void> => {
 		if (running) return;
 		running = true;
 		retry.hidden = true;
+		relayButton.hidden = true;
 		status.textContent = "Creating this browser's private device key…";
 		continueLink.hidden = true;
 		let transport: PairingTransport | undefined;
 		try {
 			const capability = parsePairingUrl(window.location.href);
 			const identity = await dependencies.loadIdentity();
+			currentIdentity = identity;
 			const api = dependencies.createTrustApi();
 			status.textContent = "Contacting the backend…";
 			transport = dependencies.createTransport({
@@ -103,6 +127,7 @@ export async function initializePairingPage(
 				authorize: async () => ({
 					...await api.createPairingTicket(identity, capability),
 					pairingSecret: capability.secret,
+					supplementalIceServers: await (dependencies.resolveTurnIceServers ?? resolveStoredTurnRelayIceServers)(identity.deviceId),
 				}),
 			});
 			await transport.connect("webrtc");
@@ -119,10 +144,19 @@ export async function initializePairingPage(
 			status.textContent = error instanceof Error ? error.message : "Pairing failed";
 			status.style.color = "#b91c1c";
 			retry.hidden = false;
+			const failure = connectionFailureDetails(error);
+			relayButton.hidden = !failure.turnRecommended && failure.code !== "relay_configuration";
 		} finally {
 			running = false;
 		}
 	};
 	retry.addEventListener("click", () => void pair());
+	relayButton.addEventListener("click", () => {
+		void (dependencies.openRelayDialog ?? openTurnRelayDialog)({
+			subject: currentIdentity?.deviceId,
+			saveLabel: "Save and try again",
+			onSaved: () => { void pair(); },
+		});
+	});
 	await pair();
 }

@@ -32,13 +32,14 @@ class FakeSocket {
 	}
 }
 
-function setup() {
+function setup(iceServers: ConstructorParameters<typeof BrowserRendezvousClient>[0]["iceServers"] = []) {
 	const socket = new FakeSocket();
 	const createWebSocket = vi.fn(() => socket as BrowserRendezvousSocket);
 	const client = new BrowserRendezvousClient({
 		url: "https://signal.example/base?ignored=true",
 		backendId: "b_expected",
 		ticket: "ticket",
+		iceServers,
 		createWebSocket,
 	});
 	return { client, socket, createWebSocket };
@@ -72,6 +73,19 @@ describe("BrowserRendezvousClient", () => {
 		}));
 		socket.receive({ type: "signal", connectionId: "c_one", signal: offer });
 		expect(received).toEqual([offer]);
+	});
+
+	it("forwards only short-lived browser TURN credentials while opening a route", async () => {
+		const iceServers = [{ urls: ["turn:turn.example:3478?transport=udp"], username: "temporary", credential: "credential" }];
+		const { client, socket } = setup(iceServers);
+		const connecting = client.connect();
+		socket.open();
+		expect(socket.sent[0]).toEqual(expect.objectContaining({
+			type: "connect_backend",
+			iceServers,
+		}));
+		socket.receive({ type: "backend_connected", backendId: "b_expected", connectionId: "c_turn" });
+		await connecting;
 	});
 
 	it("rejects offline connection attempts and surfaces route closure", async () => {

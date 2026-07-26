@@ -5,7 +5,7 @@ import type { WireImage } from "../shared/ws-protocol.js";
 import type { SlashCommandInfo } from "../shared/ws-protocol.js";
 import type { ThinkingLevelValue } from "../shared/thinking-levels.js";
 import type { BackendApi, SessionInfoDTO } from "./backend-api.js";
-import type { ConnectionDiagnostics } from "./frame-transport.js";
+import type { ConnectionDiagnostics, ConnectionFailureDetails } from "./frame-transport.js";
 import type { AuthorizedBackendDescriptor } from "../shared/trust-protocol.js";
 
 export type { SessionInfoDTO } from "./backend-api.js";
@@ -37,6 +37,7 @@ export interface WorkspaceBackendState extends AuthorizedBackendDescriptor {
 	connected: boolean;
 	reconnecting: boolean;
 	error?: string;
+	connectionFailure?: ConnectionFailureDetails;
 }
 
 export interface BackendClient extends BackendApi {

@@ -9,7 +9,7 @@ import {
 	MAX_DATA_CHANNEL_MESSAGE_BYTES,
 	encodeDataChannelFrame,
 } from "../shared/data-channel-framing.js";
-import type { BackendIdentityBinding, ConnectionTicketClaims } from "../shared/trust-protocol.js";
+import type { BackendIdentityBinding, ConnectionTicketClaims, IceServerConfiguration } from "../shared/trust-protocol.js";
 import { loadOrCreateBackendIdentity, signBackendIdentityBinding } from "../server/backend-identity.js";
 import { generateBrowserDeviceIdentity } from "./device-identity.js";
 import type { BrowserRendezvousClient } from "./browser-rendezvous-client.js";
@@ -63,6 +63,7 @@ class FakePeer {
 	signalingState: RTCSignalingState = "stable";
 	readonly sctp = { maxMessageSize: 262_144, transport: { state: "connected" as RTCDtlsTransportState } };
 	onicecandidate: ((event: RTCPeerConnectionIceEvent) => unknown) | null = null;
+	oniceconnectionstatechange: ((event: Event) => unknown) | null = null;
 	onconnectionstatechange: ((event: Event) => unknown) | null = null;
 	readonly channel = new FakeChannel();
 	readonly setLocalDescription = vi.fn(async () => {});
@@ -280,6 +281,78 @@ describe("WebRtcFrameTransport", () => {
 		reconnect?.();
 		await vi.waitFor(() => expect(authorize).toHaveBeenCalledTimes(2));
 		transport.close();
+	});
+
+	it("classifies an ICE path failure and retains sanitized failed-attempt diagnostics", async () => {
+		const dir = mkdtempSync(path.join(tmpdir(), "pipane-ice-failure-test-"));
+		cleanupDirs.push(dir);
+		const backend = loadOrCreateBackendIdentity(path.join(dir, "identity.json"));
+		const device = await generateBrowserDeviceIdentity();
+		const claims: ConnectionTicketClaims = {
+			version: 1,
+			kind: "connection",
+			ticketId: "t_ice_failure",
+			backendId: backend.backendId,
+			connectionId: "c_ice_failure",
+			deviceId: device.deviceId,
+			devicePublicKey: device.publicKey,
+			accountId: "a_owner",
+			issuedAt: Date.now(),
+			expiresAt: Date.now() + 60_000,
+		};
+		const peer = new FakePeer();
+		const rendezvous = new FakeRendezvous(claims.connectionId);
+		const supplementalIceServers = [{
+			urls: ["turn:turn.example:3478?transport=udp"],
+			username: "temporary-user",
+			credential: "temporary-password",
+		}];
+		const createPeerConnection = vi.fn((_configuration: RTCConfiguration) => peer as unknown as RTCPeerConnection);
+		const createRendezvousClient = vi.fn((_ticket: string, _servers: IceServerConfiguration[]) => rendezvous as unknown as BrowserRendezvousClient);
+		const transport = new WebRtcFrameTransport({
+			rendezvousUrl: "https://signal.example",
+			backendId: backend.backendId,
+			deviceIdentity: device,
+			authorize: async () => ({
+				ticket: encodeClaims(claims),
+				iceServers: [{ urls: "stun:stun.example:3478" }],
+				supplementalIceServers,
+			}),
+			createPeerConnection,
+			createRendezvousClient,
+			connectionTimeoutMs: 60_000,
+		});
+		const connecting = transport.connect("webrtc");
+		await vi.waitFor(() => expect(rendezvous.sendSignal).toHaveBeenCalled());
+		expect(createPeerConnection).toHaveBeenCalledWith(expect.objectContaining({
+			iceServers: [{ urls: "stun:stun.example:3478" }, ...supplementalIceServers],
+		}));
+		expect(createRendezvousClient).toHaveBeenCalledWith(expect.any(String), supplementalIceServers);
+		peer.iceConnectionState = "failed";
+		peer.oniceconnectionstatechange?.(new Event("iceconnectionstatechange"));
+		await expect(connecting).rejects.toEqual(expect.objectContaining({ code: "ice", turnRecommended: true }));
+		const diagnostics = await transport.getConnectionDiagnostics();
+		expect(diagnostics.failure).toEqual(expect.objectContaining({ code: "ice", turnRecommended: true }));
+		expect(diagnostics.iceServerUrls).toContain("turn:turn.example:3478?transport=udp");
+		expect(JSON.stringify(diagnostics)).not.toContain("temporary-password");
+	});
+
+	it("retains relay-configuration failures that happen before peer creation", async () => {
+		const device = await generateBrowserDeviceIdentity();
+		const configurationError = Object.assign(new Error("Metered rejected the TURN API key"), {
+			code: "relay_configuration" as const,
+			turnRecommended: false,
+		});
+		const transport = new WebRtcFrameTransport({
+			rendezvousUrl: "https://signal.example",
+			backendId: "b_expected",
+			deviceIdentity: device,
+			authorize: async () => { throw configurationError; },
+		});
+		await expect(transport.connect("unused")).rejects.toBe(configurationError);
+		await expect(transport.getConnectionDiagnostics()).resolves.toEqual(expect.objectContaining({
+			failure: expect.objectContaining({ code: "relay_configuration", turnRecommended: false }),
+		}));
 	});
 
 	it("rejects a ticket for another browser before creating a peer", async () => {

@@ -12,7 +12,7 @@ import {
 	type RendezvousErrorCode,
 	type WithoutProtocolVersion,
 } from "../shared/rendezvous-protocol.js";
-import type { ConnectionTicketClaims } from "../shared/trust-protocol.js";
+import type { ConnectionTicketClaims, IceServerConfiguration } from "../shared/trust-protocol.js";
 import {
 	deriveBackendId,
 	extractDtlsFingerprint,
@@ -351,7 +351,7 @@ export class RendezvousHub {
 		}
 		const command = decoded.value;
 		if (command.type === "connect_backend") {
-			this.connectBrowser(socket, command.backendId, command.ticket);
+			this.connectBrowser(socket, command.backendId, command.ticket, command.iceServers ?? []);
 			return;
 		}
 
@@ -386,7 +386,12 @@ export class RendezvousHub {
 		});
 	}
 
-	private connectBrowser(socket: WebSocket, backendId: string, ticket: string): void {
+	private connectBrowser(
+		socket: WebSocket,
+		backendId: string,
+		ticket: string,
+		browserIceServers: IceServerConfiguration[],
+	): void {
 		const backend = this.backends.get(backendId);
 		if (!backend || backend.socket.readyState !== WebSocket.OPEN) {
 			this.sendBrowserError(socket, "backend_offline", "Backend is offline");
@@ -434,7 +439,13 @@ export class RendezvousHub {
 			type: "connection_request",
 			connectionId: route.connectionId,
 			ticket,
-			iceServers: this.iceServerProvider.issue(backendId),
+			iceServers: [
+				...this.iceServerProvider.issue(backendId),
+				...browserIceServers.map((server) => ({
+					...server,
+					urls: Array.isArray(server.urls) ? [...server.urls] : server.urls,
+				})),
+			],
 		});
 		this.sendBrowser(socket, { type: "backend_connected", backendId, connectionId: route.connectionId });
 	}

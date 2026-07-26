@@ -26,7 +26,8 @@ import type {
 	LocalSettingsReadResponse,
 	LocalSettingsValidationResponse,
 } from "./backend-api.js";
-import type { ConnectionDiagnostics } from "./frame-transport.js";
+import { connectionFailureDetails } from "./frame-transport.js";
+import type { ConnectionDiagnostics, ConnectionFailureDetails } from "./frame-transport.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import type { UpdateRunResponse, UpdateSnapshot } from "../shared/updates.js";
 
@@ -40,6 +41,7 @@ interface BackendContext {
 	client?: BackendClient;
 	sessions: SessionInfoDTO[];
 	error?: string;
+	connectionFailure?: ConnectionFailureDetails;
 	initializing?: Promise<void>;
 	initialized: boolean;
 	unsubscribers: Array<() => void>;
@@ -117,6 +119,7 @@ export class WorkspaceBackendClient implements BackendClient {
 			connected: context.client?.isConnected ?? false,
 			reconnecting: context.client?.isReconnecting ?? false,
 			...(context.error ? { error: context.error } : {}),
+			...(context.connectionFailure ? { connectionFailure: { ...context.connectionFailure } } : {}),
 		}));
 	}
 
@@ -143,10 +146,12 @@ export class WorkspaceBackendClient implements BackendClient {
 			try {
 				await client.connect(endpoint);
 				context.error = undefined;
+				context.connectionFailure = undefined;
 				await this.refreshContextSessions(context);
 				return context;
 			} catch (error) {
 				context.error = errorMessage(error);
+				context.connectionFailure = connectionFailureDetails(error);
 				this.emitWorkspaceChange();
 				throw error;
 			}
@@ -348,6 +353,7 @@ export class WorkspaceBackendClient implements BackendClient {
 		context.unsubscribers.push(
 			client.onConnectionChange((connected) => {
 				context.error = connected ? undefined : context.error;
+				context.connectionFailure = connected ? undefined : context.connectionFailure;
 				if (connected && this.connectedOnce) void this.refreshContextSessions(context);
 				this.emitWorkspaceChange();
 				if (this.activeId === backendId) this.emit(this.connectionListeners, connected);
@@ -399,9 +405,11 @@ export class WorkspaceBackendClient implements BackendClient {
 		try {
 			await client.connect(this.endpoint);
 			context.error = undefined;
+			context.connectionFailure = undefined;
 			await this.refreshContextSessions(context);
 		} catch (error) {
 			context.error = errorMessage(error);
+			context.connectionFailure = connectionFailureDetails(error);
 			this.emitWorkspaceChange();
 			throw error;
 		}
