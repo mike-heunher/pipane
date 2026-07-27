@@ -230,6 +230,10 @@ export class WorkspaceBackendClient implements BackendClient {
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }> { return this.requireActiveClient().fork(entryId); }
 	forkAndPrompt(text: string, images?: WireImage[]): Promise<void> { return this.requireActiveClient().forkAndPrompt(text, images); }
 
+	prefetchSession(sessionPath: string, backendId = this.activeId): void {
+		this.contexts.get(backendId)?.client?.prefetchSession?.(sessionPath);
+	}
+
 	async switchSession(sessionPath: string, cwd?: string, backendId = this.activeId): Promise<void> {
 		const context = await this.activateContext(backendId, false);
 		await this.ensureConversationInitialized(context);

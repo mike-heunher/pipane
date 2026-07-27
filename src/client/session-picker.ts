@@ -1327,6 +1327,12 @@ export class SessionPicker extends LitElement {
 
 	// ── Actions ─────────────────────────────────────────────────────────────
 
+	private prefetchSession(session: SessionInfoDTO): void {
+		if (session.path.startsWith("__virtual__")) return;
+		if (session.id === this.agent?.sessionId && (!session.backendId || session.backendId === this.agent.activeBackendId)) return;
+		this.agent.prefetchSession?.(session.path, session.backendId);
+	}
+
 	private async handleSessionClick(session: SessionInfoDTO) {
 		if (session.id === this.agent?.sessionId && (!session.backendId || session.backendId === this.agent.activeBackendId)) return;
 		if (session.path.startsWith("__virtual__")) return; // Can't switch to another virtual session
@@ -1769,6 +1775,9 @@ export class SessionPicker extends LitElement {
 					return html`
 					<button
 						class="session-item ${s.id === activeId && (!s.backendId || s.backendId === this.agent.activeBackendId) ? "active" : ""}"
+						@pointerenter=${() => this.prefetchSession(s)}
+						@focus=${() => this.prefetchSession(s)}
+						@pointerdown=${() => this.prefetchSession(s)}
 						@click=${() => this.handleSessionClick(s)}
 						title=${sessionTitle}
 					>

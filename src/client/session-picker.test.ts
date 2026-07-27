@@ -120,6 +120,20 @@ describe("session-picker", () => {
 		expect(isPreviewHostname("preview.pipane.dev.example.com")).toBe(false);
 	});
 
+	it("prefetches a cached session before pointer selection", async () => {
+		const agent = new MockAgent();
+		const target = createSession({ id: "target", cwd: "/sessions" });
+		agent.sessionId = "active";
+		agent.setSessions([target]);
+		const prefetchSession = vi.fn();
+		(agent as any).prefetchSession = prefetchSession;
+		const el = await createPicker(agent);
+
+		getSessionItems(el)[0].dispatchEvent(new Event("pointerenter"));
+
+		expect(prefetchSession).toHaveBeenCalledWith(target.path, undefined);
+	});
+
 	it("places a settings gear beside New project", async () => {
 		const agent = new MockAgent();
 		const onOpenSettings = vi.fn();

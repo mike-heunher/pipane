@@ -24,7 +24,7 @@ import { CONTENT_ADDRESSED_SESSION_SYNC_FEATURE, UPLOADED_IMAGE_PROMPT_FEATURE }
  * Create an adapter with a mocked WebSocket. Returns the adapter and a
  * spy that captures all messages sent over the WS.
  */
-function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
+function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessionCache" | "requestFrame"> = {}) {
 	const sent: any[] = [];
 	let messageHandler: ((ev: { data: string }) => void) | null = null;
 
@@ -100,6 +100,8 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch"> = {}) {
 		fetch: options.fetch ?? (async (input) => {
 			throw new Error(`Unexpected adapter HTTP request: ${String(input)}`);
 		}),
+		...(options.sessionCache !== undefined ? { sessionCache: options.sessionCache } : {}),
+		...(options.requestFrame ? { requestFrame: options.requestFrame } : {}),
 	});
 
 	return {
@@ -1292,12 +1294,13 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(a._cachedMessageHashes).toEqual([cachedMessageHash, newMessageHash]);
 		});
 
-		it("accepts a not-modified confirmation only for the loaded cached hash", async () => {
+		it("accepts not-modified without decoding or rerendering the visible cache", async () => {
 			const sessionPath = "/tmp/sessions/unchanged.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
 			const a = adapter as any;
+			const messages = [{ role: "user", content: "cached" }];
 			const json = JSON.stringify({
-				messages: [{ role: "user", content: "cached" }],
+				messages,
 				isStreaming: false,
 				pendingToolCalls: [],
 				toolCallTimings: {},
@@ -1306,10 +1309,11 @@ describe("WsAgentAdapter prompt routing", () => {
 				steeringQueue: [],
 			});
 			const hash = await computeHash(json);
+			a._state.messages = messages;
 			a._syncJson = json;
 			a._syncHash = hash;
 
-			await a.applySessionSyncBatch([{
+			const changes = await a.applySessionSyncBatch([{
 				type: "session_sync",
 				sessionPath,
 				revision: 3,
@@ -1319,8 +1323,51 @@ describe("WsAgentAdapter prompt routing", () => {
 				__sessionNonce: a._sessionNonce,
 			}]);
 
-			expect(adapter.state.messages).toEqual([{ role: "user", content: "cached" }]);
+			expect(changes).toBeUndefined();
+			expect(adapter.state.messages).toBe(messages);
 			expect(a._syncRevision).toBe(3);
+		});
+
+		it("consumes a prefetched cache snapshot and emits one render event", async () => {
+			const sessionPath = "/tmp/sessions/prefetched.jsonl";
+			const state = {
+				messages: [{ role: "user", content: "ready" }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off" as const,
+				steeringQueue: [],
+			};
+			const json = JSON.stringify(state);
+			const load = vi.fn().mockResolvedValue({
+				json,
+				hash: await computeHash(json),
+				state,
+				messageHashes: [await computeHash(JSON.stringify(state.messages[0]))],
+				messageObjects: new Map(),
+			});
+			const { adapter } = createTestAdapter({
+				sessionCache: { load, save: vi.fn(), remove: vi.fn() },
+			});
+			const a = adapter as any;
+			a.cacheBackendId = "backend-one";
+			a._backendFeatures.add(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE);
+			const sessions = vi.fn();
+			const content = vi.fn();
+			const status = vi.fn();
+			adapter.onSessionChange(sessions);
+			adapter.onContentChange(content);
+			adapter.onStatusChange(status);
+
+			adapter.prefetchSession(sessionPath);
+			await adapter.switchSession(sessionPath);
+
+			expect(load).toHaveBeenCalledOnce();
+			expect(adapter.state.messages).toEqual(state.messages);
+			expect(sessions).toHaveBeenCalledOnce();
+			expect(content).not.toHaveBeenCalled();
+			expect(status).not.toHaveBeenCalled();
 		});
 
 		it("advertises cached hashes only when the backend capability is present", async () => {

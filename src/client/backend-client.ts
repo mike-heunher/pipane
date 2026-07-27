@@ -96,6 +96,8 @@ export interface BackendClient extends BackendApi {
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>>;
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }>;
 	forkAndPrompt(text: string, images?: WireImage[]): Promise<void>;
+	/** Warm a bounded browser cache entry before an anticipated session switch. */
+	prefetchSession?(sessionPath: string, backendId?: string): void;
 	switchSession(sessionPath: string, cwd?: string, backendId?: string): Promise<void>;
 	newSession(cwd?: string, backendId?: string): Promise<void>;
 	/** Pause or restore full session snapshots while retaining host-level status/catalog events. */
@@ -126,6 +128,7 @@ export type SessionPickerBackendClient = Pick<
 	| "getBackendConnectionDiagnostics"
 	| "removeBackend"
 	| "listSessions"
+	| "prefetchSession"
 	| "switchSession"
 	| "newSession"
 	| "deleteSession"

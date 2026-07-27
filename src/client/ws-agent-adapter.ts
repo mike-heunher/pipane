@@ -244,6 +244,8 @@ export class WsAgentAdapter implements BackendClient {
 	private _cachedMessageHashes: string[] = [];
 	private _cachedMessageObjects = new Map<string, AgentMessage>();
 	private readonly cacheSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** At most two verified snapshots anticipated by sidebar hover/focus. */
+	private readonly prefetchedSessionStates = new Map<string, Promise<CachedSessionState | undefined>>();
 
 	// ── session_sync frame queue ──────────────────────────────────────────
 	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
@@ -942,7 +944,8 @@ export class WsAgentAdapter implements BackendClient {
 					void this.requestFullSessionSync(syncSessionPath, true);
 					return;
 				}
-				syncOps.push({ op: "full", data: this._syncJson, hash: syncMessage.hash });
+				// The verified cache is already visible and authoritative. Re-decoding
+				// and emitting the identical state would needlessly rerender the thread.
 				continue;
 			}
 
@@ -964,6 +967,11 @@ export class WsAgentAdapter implements BackendClient {
 				hashes: [...syncMessage.messageHashes],
 				objects,
 			};
+		}
+
+		if (syncOps.length === 0) {
+			this._syncRevision = nextRevision;
+			return;
 		}
 
 		// After reconnect/re-subscribe, we must receive a full sync first.
@@ -1048,12 +1056,33 @@ export class WsAgentAdapter implements BackendClient {
 		this._cachedMessageObjects = new Map();
 	}
 
+	prefetchSession(sessionPath: string): void {
+		if (!this.sessionCache || !this.cacheBackendId
+			|| !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)
+			|| this.prefetchedSessionStates.has(sessionPath)) return;
+		const backendId = this.cacheBackendId;
+		const pending = this.sessionCache.load(backendId, sessionPath).catch(() => undefined);
+		this.prefetchedSessionStates.set(sessionPath, pending);
+		while (this.prefetchedSessionStates.size > 2) {
+			const oldest = this.prefetchedSessionStates.keys().next().value as string | undefined;
+			if (oldest === undefined) break;
+			this.prefetchedSessionStates.delete(oldest);
+		}
+		void pending.then((cached) => {
+			if (!cached && this.prefetchedSessionStates.get(sessionPath) === pending) {
+				this.prefetchedSessionStates.delete(sessionPath);
+			}
+		});
+	}
+
 	private async restoreCachedSession(sessionPath: string, nonce: number): Promise<boolean> {
 		if (!this.sessionCache || !this.cacheBackendId
 			|| !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)) return false;
 		let cached: CachedSessionState | undefined;
 		try {
-			cached = await this.sessionCache.load(this.cacheBackendId, sessionPath);
+			const prefetched = this.prefetchedSessionStates.get(sessionPath);
+			this.prefetchedSessionStates.delete(sessionPath);
+			cached = await (prefetched ?? this.sessionCache.load(this.cacheBackendId, sessionPath));
 		} catch {
 			return false;
 		}
@@ -1070,17 +1099,18 @@ export class WsAgentAdapter implements BackendClient {
 
 	private applyCachedState(state: WireSessionState, sessionPath: string): void {
 		this._state.messages = [...state.messages];
-		this._state.isStreaming = state.isStreaming;
-		this._sessionStatus = state.isStreaming ? "attached" : "detached";
+		const isRunning = this._globalSessionStatus.get(sessionPath) === "running";
+		this._state.isStreaming = state.isStreaming || isRunning;
+		this._sessionStatus = this._state.isStreaming ? "attached" : "detached";
 		this._pendingToolCallIds = new Set(state.pendingToolCalls);
 		this._toolCallTimings = state.toolCallTimings;
 		this.applyAuthoritativeControlState(state.model, state.thinkingLevel);
 		if (state.steeringQueue.length > 0) this._steeringQueues.set(sessionPath, [...state.steeringQueue]);
 		else this._steeringQueues.delete(sessionPath);
 		this._state.error = state.error || undefined;
+		// A session event already makes consumers reread content, status, controls,
+		// and steering. Separate notifications would render the same state again.
 		this.emitSessionChange();
-		this.emitContentChange();
-		this.emitStatusChange();
 	}
 
 	private scheduleSessionCacheSave(
@@ -1919,6 +1949,7 @@ export class WsAgentAdapter implements BackendClient {
 			if (!isMissingSessionError(error)) throw error;
 		}
 		this._optimisticSessions.delete(sessionPath);
+		this.prefetchedSessionStates.delete(sessionPath);
 		if (this.sessionCache && this.cacheBackendId) {
 			void this.sessionCache.remove(this.cacheBackendId, sessionPath).catch(() => {});
 		}
@@ -1956,7 +1987,7 @@ export class WsAgentAdapter implements BackendClient {
 
 		// Paint a verified serialized browser snapshot immediately when available,
 		// then let the backend confirm it or supply only missing message bodies.
-		await this.restoreCachedSession(sessionPath, nonce);
+		const restoredFromCache = await this.restoreCachedSession(sessionPath, nonce);
 		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
 
 		await this.requestFullSessionSync(sessionPath);
@@ -1965,13 +1996,19 @@ export class WsAgentAdapter implements BackendClient {
 		// If the session is currently running on the server, restore streaming state
 		// so the stop button is visible, and mark as "attached" to prevent file-watcher
 		// re-fetches from racing with streaming events.
+		const wasStreaming = this._state.isStreaming;
+		const previousStatus = this._sessionStatus;
 		if (this._globalSessionStatus.get(sessionPath) === "running") {
 			this._sessionStatus = "attached";
 			this._state.isStreaming = true;
 		}
 
-		this.emitSessionChange();
-		this.emitStatusChange();
+		if (!restoredFromCache) {
+			this.emitSessionChange();
+			this.emitStatusChange();
+		} else if (wasStreaming !== this._state.isStreaming || previousStatus !== this._sessionStatus) {
+			this.emitStatusChange();
+		}
 	}
 
 	/** Create a new virtual session (no JSONL file until first message) */
