@@ -1,5 +1,6 @@
 # Unreleased
 
+- Paint a compact recent-message preview first, then progressively hydrate and expand cached conversations.
 - Prefetch bounded cached conversations and avoid redundant unchanged-state renders for near-instant repeat switches.
 - Restore conversations immediately from a bounded browser cache and transfer only uncached content-addressed messages on repeat switches.
 - Replace full-width update banners with tiny per-backend upgrade indicators and selectable update menus.

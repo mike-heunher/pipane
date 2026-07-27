@@ -31,6 +31,39 @@ describe("IndexedDbSessionStateCache", () => {
 		expect(restored?.messageObjects.get(restored.messageHashes[0])).toMatchObject({ role: "user", content: "cached" });
 	});
 
+	it("loads a small render-ready tail before the full snapshot", async () => {
+		const cache = new IndexedDbSessionStateCache({ indexedDB: new IDBFactory() });
+		const messages = Array.from({ length: 30 }, (_, index) => ({
+			role: "user",
+			content: `message ${index + 1}`,
+			timestamp: index + 1,
+		}));
+		const json = JSON.stringify({
+			messages,
+			isStreaming: false,
+			pendingToolCalls: [],
+			toolCallTimings: {},
+			model: null,
+			thinkingLevel: "off",
+			steeringQueue: [],
+		});
+		await cache.save("backend-a", "/sessions/preview.jsonl", json, await computeHash(json));
+
+		const preview = await cache.loadPreview("backend-a", "/sessions/preview.jsonl");
+		expect(preview?.state.messages).toHaveLength(10);
+		expect(preview?.state.messages[0]).toMatchObject({ content: "message 21" });
+		expect((await cache.load("backend-a", "/sessions/preview.jsonl"))?.state.messages).toHaveLength(30);
+	});
+
+	it("omits a preview that would duplicate an oversized message", async () => {
+		const cache = new IndexedDbSessionStateCache({ indexedDB: new IDBFactory() });
+		const json = sessionJson("x".repeat(300 * 1024));
+		await cache.save("backend-a", "/sessions/oversized.jsonl", json, await computeHash(json));
+
+		expect(await cache.loadPreview("backend-a", "/sessions/oversized.jsonl")).toBeUndefined();
+		expect(await cache.load("backend-a", "/sessions/oversized.jsonl")).toBeDefined();
+	});
+
 	it("evicts least-recently-saved sessions by count", async () => {
 		const cache = new IndexedDbSessionStateCache({ indexedDB: new IDBFactory(), maxSessions: 1 });
 		const first = sessionJson("first");

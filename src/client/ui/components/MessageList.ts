@@ -17,7 +17,7 @@ import { customElement, property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ToolCallTimings } from "../../../shared/tool-runtime.js";
-import { renderMessage } from "../message-registry.js";
+import { getMessageRenderer, renderMessage } from "../message-registry.js";
 import "./Messages.js";
 
 function countThinkingParts(message: AgentMessage): number {
@@ -38,10 +38,13 @@ export class PiMessageList extends LitElement {
 	@property({ type: String }) sessionPath = "";
 	/** 0 disables truncation. */
 	@property({ type: Number }) initialCount = 0;
+	/** Small first-paint window expanded to initialCount after two frames. */
+	@property({ type: Number }) firstPaintCount = 10;
 	@property({ type: Boolean }) hideOlderThinking = false;
 	@property({ type: Number }) keepThinkingParts = 3;
 
 	private visibleCount = 0;
+	private expansionGeneration = 0;
 
 	createRenderRoot() {
 		return this; // light DOM for shared styles
@@ -53,24 +56,56 @@ export class PiMessageList extends LitElement {
 	}
 
 	protected override willUpdate(changedProperties: PropertyValues<this>): void {
-		if (changedProperties.has("sessionPath") || changedProperties.has("initialCount")) {
-			this.visibleCount = this.initialCount;
+		if (changedProperties.has("sessionPath") || changedProperties.has("initialCount")
+			|| changedProperties.has("firstPaintCount")) {
+			this.expansionGeneration++;
+			this.visibleCount = this.initialCount > 0
+				? Math.min(this.initialCount, Math.max(1, this.firstPaintCount))
+				: 0;
 		}
 	}
 
+	protected override updated(changedProperties: PropertyValues<this>): void {
+		if (!changedProperties.has("sessionPath") && !changedProperties.has("initialCount")
+			&& !changedProperties.has("firstPaintCount")) return;
+		if (this.initialCount <= 0 || this.visibleCount >= this.initialCount) return;
+		const generation = this.expansionGeneration;
+		requestAnimationFrame(() => requestAnimationFrame(() => {
+			if (generation !== this.expansionGeneration || !this.isConnected) return;
+			this.visibleCount = this.initialCount;
+			this.requestUpdate();
+		}));
+	}
+
+	override disconnectedCallback(): void {
+		this.expansionGeneration++;
+		super.disconnectedCallback();
+	}
+
 	render() {
-		// Build toolResultsById map for inline tool result rendering
+		const renderableIndices: number[] = [];
+		for (let index = 0; index < this.messages.length; index++) {
+			const message = this.messages[index];
+			if (message.role === "user" || message.role === "assistant" || getMessageRenderer(message.role)) {
+				renderableIndices.push(index);
+			}
+		}
+		const visibleLimit = this.initialCount > 0
+			? this.visibleCount || Math.min(this.initialCount, Math.max(1, this.firstPaintCount))
+			: renderableIndices.length;
+		const hiddenCount = this.initialCount > 0 ? Math.max(0, renderableIndices.length - visibleLimit) : 0;
+		const firstVisibleMessageIndex = renderableIndices[hiddenCount] ?? this.messages.length;
+		const visibleMessages = this.messages.slice(firstVisibleMessageIndex);
+
+		// Only index results that can be consumed by the visible tail.
 		const toolResultsById = new Map<string, any>();
-		for (const msg of this.messages) {
-			if ((msg as any).role === "toolResult") {
-				toolResultsById.set((msg as any).toolCallId, msg);
+		for (const message of visibleMessages) {
+			if ((message as any).role === "toolResult") {
+				toolResultsById.set((message as any).toolCallId, message);
 			}
 		}
 
-		const items = this.buildRenderItems(toolResultsById);
-		const visibleLimit = this.initialCount > 0 ? this.visibleCount || this.initialCount : items.length;
-		const hiddenCount = this.initialCount > 0 ? Math.max(0, items.length - visibleLimit) : 0;
-		const visibleItems = hiddenCount > 0 ? items.slice(hiddenCount) : items;
+		const items = this.buildRenderItems(visibleMessages, toolResultsById, hiddenCount, firstVisibleMessageIndex);
 		const nextBatchSize = Math.min(hiddenCount, this.initialCount);
 
 		return html`<div class="flex flex-col gap-3">
@@ -82,7 +117,7 @@ export class PiMessageList extends LitElement {
 				>Show ${nextBatchSize} earlier messages (${hiddenCount} hidden)</button>`
 				: ""}
 			${repeat(
-				visibleItems,
+				items,
 				(it) => it.key,
 				(it) => html`<div data-message-index=${String(it.messageIndex)} style="display: contents;">${it.template}</div>`,
 			)}
@@ -91,21 +126,32 @@ export class PiMessageList extends LitElement {
 	}
 
 	private showEarlierMessages(): void {
-		this.visibleCount = (this.visibleCount || this.initialCount) + this.initialCount;
+		this.expansionGeneration++;
+		this.visibleCount = Math.max(this.visibleCount || 0, this.initialCount) + this.initialCount;
 		this.requestUpdate();
 	}
 
-	private buildRenderItems(toolResultsById: Map<string, any>): Array<{ key: string; template: TemplateResult; messageIndex: number }> {
+	private buildRenderItems(
+		messages: readonly AgentMessage[],
+		toolResultsById: Map<string, any>,
+		firstRenderableIndex: number,
+		firstVisibleMessageIndex: number,
+	): Array<{ key: string; template: TemplateResult; messageIndex: number }> {
 		const items: Array<{ key: string; template: TemplateResult; messageIndex: number }> = [];
-		let index = 0;
+		let index = firstRenderableIndex;
 		const keepThinkingParts = Number.isFinite(this.keepThinkingParts)
 			? Math.max(0, Math.floor(this.keepThinkingParts))
 			: 0;
 		let thinkingPartsToHide = this.hideOlderThinking
 			? Math.max(0, this.messages.reduce((total, message) => total + countThinkingParts(message), 0) - keepThinkingParts)
 			: 0;
+		if (thinkingPartsToHide > 0) {
+			for (let messageIndex = 0; messageIndex < firstVisibleMessageIndex; messageIndex++) {
+				thinkingPartsToHide -= Math.min(thinkingPartsToHide, countThinkingParts(this.messages[messageIndex]));
+			}
+		}
 
-		for (const msg of this.messages) {
+		for (const msg of messages) {
 			// Skip standalone toolResult — rendered inline via assistant-message
 			if ((msg as any).role === "toolResult") continue;
 

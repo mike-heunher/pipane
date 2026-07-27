@@ -8,6 +8,8 @@ const MANIFEST_STORE = "manifests";
 const SNAPSHOT_STORE = "snapshots";
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 20;
+const PREVIEW_RENDERABLE_MESSAGES = 10;
+const MAX_PREVIEW_BYTES = 256 * 1024;
 
 interface CacheManifest {
 	key: string;
@@ -15,6 +17,8 @@ interface CacheManifest {
 	sessionPath: string;
 	hash: string;
 	messageHashes: string[];
+	previewJson?: string;
+	previewHash?: string;
 	byteSize: number;
 	lastAccessedAt: number;
 }
@@ -32,7 +36,13 @@ export interface CachedSessionState {
 	messageObjects: Map<string, AgentMessage>;
 }
 
+export interface CachedSessionPreview {
+	hash: string;
+	state: WireSessionState;
+}
+
 export interface SessionStateCache {
+	loadPreview?(backendId: string, sessionPath: string): Promise<CachedSessionPreview | undefined>;
 	load(backendId: string, sessionPath: string): Promise<CachedSessionState | undefined>;
 	save(
 		backendId: string,
@@ -75,6 +85,20 @@ async function hashMessages(messages: readonly AgentMessage[]): Promise<string[]
 	return hashes;
 }
 
+async function createPreview(state: WireSessionState): Promise<{ json: string; hash: string; bytes: number } | undefined> {
+	let renderable = 0;
+	let start = state.messages.length;
+	for (let index = state.messages.length - 1; index >= 0; index--) {
+		start = index;
+		if (state.messages[index].role !== "toolResult") renderable++;
+		if (renderable >= PREVIEW_RENDERABLE_MESSAGES) break;
+	}
+	const json = JSON.stringify({ ...state, messages: state.messages.slice(start) });
+	const bytes = new TextEncoder().encode(json).byteLength;
+	if (bytes > MAX_PREVIEW_BYTES) return undefined;
+	return { json, hash: await computeHash(json), bytes };
+}
+
 export class IndexedDbSessionStateCache implements SessionStateCache {
 	private readonly factory: IDBFactory;
 	private readonly maxBytes: number;
@@ -87,6 +111,20 @@ export class IndexedDbSessionStateCache implements SessionStateCache {
 		this.factory = factory;
 		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 		this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+	}
+
+	async loadPreview(backendId: string, sessionPath: string): Promise<CachedSessionPreview | undefined> {
+		const db = await this.open();
+		const key = cacheKey(backendId, sessionPath);
+		const transaction = db.transaction(MANIFEST_STORE, "readonly");
+		const manifest = await requestResult(transaction.objectStore(MANIFEST_STORE).get(key)) as CacheManifest | undefined;
+		await transactionComplete(transaction);
+		if (!manifest?.previewJson || !manifest.previewHash) return undefined;
+		const decoded = decodeSessionStateJson(manifest.previewJson);
+		const actualHash = decoded.ok ? await computeHash(manifest.previewJson) : undefined;
+		if (!decoded.ok || actualHash !== manifest.previewHash) return undefined;
+		void this.touch(key);
+		return { hash: manifest.hash, state: decoded.value };
 	}
 
 	async load(backendId: string, sessionPath: string): Promise<CachedSessionState | undefined> {
@@ -111,6 +149,7 @@ export class IndexedDbSessionStateCache implements SessionStateCache {
 		for (let index = 0; index < manifest.messageHashes.length; index++) {
 			messageObjects.set(manifest.messageHashes[index], decoded.value.messages[index]);
 		}
+		if (!manifest.previewJson) void this.backfillPreview(key, manifest.hash, decoded.value);
 		void this.touch(key);
 		return {
 			json: snapshot.json,
@@ -134,13 +173,15 @@ export class IndexedDbSessionStateCache implements SessionStateCache {
 			? [...messageHashes]
 			: await hashMessages(decoded.value.messages);
 		const key = cacheKey(backendId, sessionPath);
+		const preview = await createPreview(decoded.value);
 		const manifest: CacheManifest = {
 			key,
 			backendId,
 			sessionPath,
 			hash,
 			messageHashes: hashes,
-			byteSize: new TextEncoder().encode(json).byteLength,
+			...(preview ? { previewJson: preview.json, previewHash: preview.hash } : {}),
+			byteSize: new TextEncoder().encode(json).byteLength + (preview?.bytes ?? 0),
 			lastAccessedAt: Date.now(),
 		};
 		const db = await this.open();
@@ -172,6 +213,29 @@ export class IndexedDbSessionStateCache implements SessionStateCache {
 			request.onerror = () => reject(request.error ?? new Error("Could not open the session cache"));
 		});
 		return this.database;
+	}
+
+	private async backfillPreview(key: string, snapshotHash: string, state: WireSessionState): Promise<void> {
+		try {
+			const preview = await createPreview(state);
+			if (!preview) return;
+			const db = await this.open();
+			const transaction = db.transaction(MANIFEST_STORE, "readwrite");
+			const store = transaction.objectStore(MANIFEST_STORE);
+			const current = await requestResult(store.get(key)) as CacheManifest | undefined;
+			if (current?.hash === snapshotHash && !current.previewJson) {
+				store.put({
+					...current,
+					previewJson: preview.json,
+					previewHash: preview.hash,
+					byteSize: current.byteSize + preview.bytes,
+				});
+			}
+			await transactionComplete(transaction);
+			await this.prune();
+		} catch {
+			// Lazy preview migration is optional; the complete snapshot remains valid.
+		}
 	}
 
 	private async touch(key: string): Promise<void> {

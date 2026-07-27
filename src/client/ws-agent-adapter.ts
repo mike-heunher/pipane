@@ -1078,26 +1078,51 @@ export class WsAgentAdapter implements BackendClient {
 	private async restoreCachedSession(sessionPath: string, nonce: number): Promise<boolean> {
 		if (!this.sessionCache || !this.cacheBackendId
 			|| !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)) return false;
-		let cached: CachedSessionState | undefined;
+		const backendId = this.cacheBackendId;
+		const prefetched = this.prefetchedSessionStates.get(sessionPath);
+		this.prefetchedSessionStates.delete(sessionPath);
+		let painted = false;
 		try {
-			const prefetched = this.prefetchedSessionStates.get(sessionPath);
-			this.prefetchedSessionStates.delete(sessionPath);
-			cached = await (prefetched ?? this.sessionCache.load(this.cacheBackendId, sessionPath));
+			if (!prefetched && this.sessionCache.loadPreview) {
+				const preview = await this.sessionCache.loadPreview(backendId, sessionPath);
+				if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return false;
+				if (preview) {
+					this.assignCachedState(preview.state, sessionPath);
+					this.emitSessionChange();
+					painted = true;
+				}
+			}
+
+			const cached = await (prefetched ?? this.sessionCache.load(backendId, sessionPath));
+			if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return false;
+			if (!cached) return painted;
+			this._syncJson = cached.json;
+			this._syncHash = cached.hash;
+			this._syncRevision = undefined;
+			this._cachedStateHash = cached.hash;
+			this._cachedMessageHashes = cached.messageHashes;
+			this._cachedMessageObjects = cached.messageObjects;
+			if (painted) this.scheduleCachedHydration(cached, sessionPath, nonce);
+			else {
+				this.assignCachedState(cached.state, sessionPath);
+				this.emitSessionChange();
+				painted = true;
+			}
+			return painted;
 		} catch {
-			return false;
+			return painted;
 		}
-		if (!cached || nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return false;
-		this._syncJson = cached.json;
-		this._syncHash = cached.hash;
-		this._syncRevision = undefined;
-		this._cachedStateHash = cached.hash;
-		this._cachedMessageHashes = cached.messageHashes;
-		this._cachedMessageObjects = cached.messageObjects;
-		this.applyCachedState(cached.state, sessionPath);
-		return true;
 	}
 
-	private applyCachedState(state: WireSessionState, sessionPath: string): void {
+	private scheduleCachedHydration(cached: CachedSessionState, sessionPath: string, nonce: number): void {
+		this.requestFrame(() => this.requestFrame(() => {
+			if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath || this._syncHash !== cached.hash) return;
+			this.assignCachedState(cached.state, sessionPath);
+			this.emitContentChange();
+		}));
+	}
+
+	private assignCachedState(state: WireSessionState, sessionPath: string): void {
 		this._state.messages = [...state.messages];
 		const isRunning = this._globalSessionStatus.get(sessionPath) === "running";
 		this._state.isStreaming = state.isStreaming || isRunning;
@@ -1108,9 +1133,6 @@ export class WsAgentAdapter implements BackendClient {
 		if (state.steeringQueue.length > 0) this._steeringQueues.set(sessionPath, [...state.steeringQueue]);
 		else this._steeringQueues.delete(sessionPath);
 		this._state.error = state.error || undefined;
-		// A session event already makes consumers reread content, status, controls,
-		// and steering. Separate notifications would render the same state again.
-		this.emitSessionChange();
 	}
 
 	private scheduleSessionCacheSave(

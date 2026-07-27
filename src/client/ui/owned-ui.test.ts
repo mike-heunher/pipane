@@ -304,6 +304,28 @@ describe("owned message and tool rendering", () => {
 		expect(list.querySelectorAll("user-message")).toHaveLength(2);
 	});
 
+	it("paints a small tail before expanding to the configured history window", async () => {
+		const list = new PiMessageList();
+		list.sessionPath = "/tmp/progressive.jsonl";
+		list.initialCount = 20;
+		list.firstPaintCount = 3;
+		list.messages = Array.from({ length: 30 }, (_, index) => ({
+			role: "user",
+			content: `message ${index + 1}`,
+			timestamp: index + 1,
+		})) as any;
+		document.body.appendChild(list);
+		await list.updateComplete;
+
+		const firstPaint = Array.from(list.querySelectorAll<any>("user-message"), (message) => message.message.content);
+		expect(firstPaint).toEqual(["message 28", "message 29", "message 30"]);
+
+		await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+		await list.updateComplete;
+		expect(list.querySelectorAll("user-message")).toHaveLength(20);
+		expect(list.querySelector(".show-earlier-btn")?.textContent).toContain("10 hidden");
+	});
+
 	it("hides all but the most recent configured thinking parts", async () => {
 		const list = new PiMessageList();
 		list.hideOlderThinking = true;

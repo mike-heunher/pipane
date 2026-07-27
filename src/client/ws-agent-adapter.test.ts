@@ -1370,6 +1370,63 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(status).not.toHaveBeenCalled();
 		});
 
+		it("paints a compact cache preview before hydrating the verified full state", async () => {
+			const sessionPath = "/tmp/sessions/preview.jsonl";
+			const previewState = {
+				messages: [{ role: "user", content: "recent" }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off" as const,
+				steeringQueue: [],
+			};
+			const fullState = { ...previewState, messages: [
+				{ role: "user", content: "older" },
+				...previewState.messages,
+			] };
+			const json = JSON.stringify(fullState);
+			const hash = await computeHash(json);
+			let resolveFull!: (value: any) => void;
+			const full = new Promise((resolve) => { resolveFull = resolve; });
+			const frames: FrameRequestCallback[] = [];
+			const { adapter } = createTestAdapter({
+				requestFrame: (callback) => { frames.push(callback); return frames.length; },
+				sessionCache: {
+					loadPreview: vi.fn().mockResolvedValue({ hash, state: previewState }),
+					load: vi.fn().mockReturnValue(full),
+					save: vi.fn(),
+					remove: vi.fn(),
+				},
+			});
+			const a = adapter as any;
+			a.cacheBackendId = "backend-one";
+			a._backendFeatures.add(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE);
+			a._sessionPath = sessionPath;
+			const sessions = vi.fn();
+			const content = vi.fn();
+			adapter.onSessionChange(sessions);
+			adapter.onContentChange(content);
+
+			const restoring = a.restoreCachedSession(sessionPath, a._sessionNonce);
+			await vi.waitFor(() => expect(adapter.state.messages).toEqual(previewState.messages));
+			expect(sessions).toHaveBeenCalledOnce();
+			resolveFull({
+				json,
+				hash,
+				state: fullState,
+				messageHashes: [],
+				messageObjects: new Map(),
+			});
+			await restoring;
+			expect(adapter.state.messages).toEqual(previewState.messages);
+
+			frames.shift()!(0);
+			frames.shift()!(0);
+			expect(adapter.state.messages).toEqual(fullState.messages);
+			expect(content).toHaveBeenCalledOnce();
+		});
+
 		it("advertises cached hashes only when the backend capability is present", async () => {
 			const sessionPath = "/tmp/sessions/resume.jsonl";
 			const { adapter, sent } = setupWithSession(sessionPath);
