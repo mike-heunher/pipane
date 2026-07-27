@@ -304,7 +304,7 @@ describe("owned message and tool rendering", () => {
 		expect(list.querySelectorAll("user-message")).toHaveLength(2);
 	});
 
-	it("paints a small tail before expanding to the configured history window", async () => {
+	it("keeps the small switch tail stable until history is explicitly expanded", async () => {
 		const list = new PiMessageList();
 		list.sessionPath = "/tmp/progressive.jsonl";
 		list.initialCount = 20;
@@ -322,8 +322,12 @@ describe("owned message and tool rendering", () => {
 
 		await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 		await list.updateComplete;
-		expect(list.querySelectorAll("user-message")).toHaveLength(20);
-		expect(list.querySelector(".show-earlier-btn")?.textContent).toContain("10 hidden");
+		expect(list.querySelectorAll("user-message")).toHaveLength(3);
+
+		(list.querySelector(".show-earlier-btn") as HTMLButtonElement).click();
+		await list.updateComplete;
+		expect(list.querySelectorAll("user-message")).toHaveLength(23);
+		expect(list.querySelector(".show-earlier-btn")?.textContent).toContain("7 hidden");
 	});
 
 	it("hides all but the most recent configured thinking parts", async () => {

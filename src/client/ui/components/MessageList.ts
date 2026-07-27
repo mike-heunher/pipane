@@ -38,13 +38,12 @@ export class PiMessageList extends LitElement {
 	@property({ type: String }) sessionPath = "";
 	/** 0 disables truncation. */
 	@property({ type: Number }) initialCount = 0;
-	/** Small first-paint window expanded to initialCount after two frames. */
+	/** Stable switch window; older history expands only on explicit request. */
 	@property({ type: Number }) firstPaintCount = 10;
 	@property({ type: Boolean }) hideOlderThinking = false;
 	@property({ type: Number }) keepThinkingParts = 3;
 
 	private visibleCount = 0;
-	private expansionGeneration = 0;
 
 	createRenderRoot() {
 		return this; // light DOM for shared styles
@@ -58,29 +57,12 @@ export class PiMessageList extends LitElement {
 	protected override willUpdate(changedProperties: PropertyValues<this>): void {
 		if (changedProperties.has("sessionPath") || changedProperties.has("initialCount")
 			|| changedProperties.has("firstPaintCount")) {
-			this.expansionGeneration++;
 			this.visibleCount = this.initialCount > 0
 				? Math.min(this.initialCount, Math.max(1, this.firstPaintCount))
 				: 0;
 		}
 	}
 
-	protected override updated(changedProperties: PropertyValues<this>): void {
-		if (!changedProperties.has("sessionPath") && !changedProperties.has("initialCount")
-			&& !changedProperties.has("firstPaintCount")) return;
-		if (this.initialCount <= 0 || this.visibleCount >= this.initialCount) return;
-		const generation = this.expansionGeneration;
-		requestAnimationFrame(() => requestAnimationFrame(() => {
-			if (generation !== this.expansionGeneration || !this.isConnected) return;
-			this.visibleCount = this.initialCount;
-			this.requestUpdate();
-		}));
-	}
-
-	override disconnectedCallback(): void {
-		this.expansionGeneration++;
-		super.disconnectedCallback();
-	}
 
 	render() {
 		const renderableIndices: number[] = [];
@@ -126,8 +108,8 @@ export class PiMessageList extends LitElement {
 	}
 
 	private showEarlierMessages(): void {
-		this.expansionGeneration++;
-		this.visibleCount = Math.max(this.visibleCount || 0, this.initialCount) + this.initialCount;
+		const current = this.visibleCount || Math.min(this.initialCount, Math.max(1, this.firstPaintCount));
+		this.visibleCount = current + this.initialCount;
 		this.requestUpdate();
 	}
 
@@ -158,14 +140,14 @@ export class PiMessageList extends LitElement {
 			// Try custom renderer first (registered via registerMessageRenderer)
 			const customTemplate = renderMessage(msg);
 			if (customTemplate) {
-				items.push({ key: `msg:${index}`, template: customTemplate, messageIndex: index });
+				items.push({ key: `msg:${index - firstRenderableIndex}`, template: customTemplate, messageIndex: index });
 				index++;
 				continue;
 			}
 
 			if (msg.role === "user") {
 				items.push({
-					key: `msg:${index}`,
+					key: `msg:${index - firstRenderableIndex}`,
 					template: html`<user-message .message=${msg}></user-message>`,
 					messageIndex: index,
 				});
@@ -178,7 +160,7 @@ export class PiMessageList extends LitElement {
 				thinkingPartsToHide -= hiddenThinkingParts;
 
 				items.push({
-					key: `msg:${index}`,
+					key: `msg:${index - firstRenderableIndex}`,
 					template: html`<assistant-message
 						.message=${msg}
 						.isStreaming=${isThisMessageStreaming}
