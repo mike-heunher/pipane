@@ -330,6 +330,47 @@ describe("owned message and tool rendering", () => {
 		expect(list.querySelector(".show-earlier-btn")?.textContent).toContain("7 hidden");
 	});
 
+	it("prepends stable older rows from the bottom until the viewport is filled", async () => {
+		const frames: FrameRequestCallback[] = [];
+		const requestFrame = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		try {
+			const scrollArea = document.createElement("div");
+			scrollArea.id = "chat-scroll-area";
+			Object.defineProperty(scrollArea, "clientHeight", { value: 500 });
+			const list = new PiMessageList();
+			list.sessionPath = "/tmp/fill.jsonl";
+			list.initialCount = 20;
+			list.firstPaintCount = 3;
+			list.messages = Array.from({ length: 30 }, (_, index) => ({
+				role: "user",
+				content: `message ${index + 1}`,
+				timestamp: index + 1,
+			})) as any;
+			scrollArea.appendChild(list);
+			document.body.appendChild(scrollArea);
+			await list.updateComplete;
+			const stack = list.querySelector<HTMLElement>(".message-stack")!;
+			Object.defineProperty(stack, "scrollHeight", {
+				get: () => list.querySelectorAll("user-message").length * 80,
+			});
+			const newest = list.querySelectorAll("user-message")[2];
+
+			frames.shift()!(0);
+			await list.updateComplete;
+			expect(list.querySelectorAll("user-message")).toHaveLength(8);
+			expect(list.querySelectorAll("user-message")[7]).toBe(newest);
+
+			frames.shift()!(16);
+			await list.updateComplete;
+			expect(list.querySelectorAll("user-message")).toHaveLength(8);
+		} finally {
+			requestFrame.mockRestore();
+		}
+	});
+
 	it("hides all but the most recent configured thinking parts", async () => {
 		const list = new PiMessageList();
 		list.hideOlderThinking = true;

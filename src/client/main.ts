@@ -873,7 +873,7 @@ const renderApp = () => {
 								@touchcancel=${handleConversationTouchEnd}
 								@pointerdown=${handleConversationPointerDown}
 							>
-								<div class="max-w-3xl mx-auto p-4 pb-4">
+								<div class="max-w-3xl mx-auto p-4 pb-4 min-h-full flex flex-col justify-end">
 									<pi-message-list
 										.messages=${messages}
 										.isStreaming=${isStreaming}

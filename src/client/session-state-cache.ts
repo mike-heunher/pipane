@@ -8,7 +8,7 @@ const MANIFEST_STORE = "manifests";
 const SNAPSHOT_STORE = "snapshots";
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_SESSIONS = 20;
-const PREVIEW_RENDERABLE_MESSAGES = 10;
+const PREVIEW_RENDERABLE_MESSAGES = 50;
 const MAX_PREVIEW_BYTES = 256 * 1024;
 
 interface CacheManifest {
@@ -86,17 +86,19 @@ async function hashMessages(messages: readonly AgentMessage[]): Promise<string[]
 }
 
 async function createPreview(state: WireSessionState): Promise<{ json: string; hash: string; bytes: number } | undefined> {
-	let renderable = 0;
-	let start = state.messages.length;
+	const starts: number[] = [];
 	for (let index = state.messages.length - 1; index >= 0; index--) {
-		start = index;
-		if (state.messages[index].role !== "toolResult") renderable++;
-		if (renderable >= PREVIEW_RENDERABLE_MESSAGES) break;
+		if (state.messages[index].role !== "toolResult") starts.push(index);
+		if (starts.length >= PREVIEW_RENDERABLE_MESSAGES) break;
 	}
-	const json = JSON.stringify({ ...state, messages: state.messages.slice(start) });
-	const bytes = new TextEncoder().encode(json).byteLength;
-	if (bytes > MAX_PREVIEW_BYTES) return undefined;
-	return { json, hash: await computeHash(json), bytes };
+	if (starts.length === 0) starts.push(0);
+	for (let count = starts.length; count > 0; count = Math.min(count - 1, Math.floor(count * 0.75))) {
+		const start = starts[count - 1];
+		const json = JSON.stringify({ ...state, messages: state.messages.slice(start) });
+		const bytes = new TextEncoder().encode(json).byteLength;
+		if (bytes <= MAX_PREVIEW_BYTES) return { json, hash: await computeHash(json), bytes };
+	}
+	return undefined;
 }
 
 export class IndexedDbSessionStateCache implements SessionStateCache {

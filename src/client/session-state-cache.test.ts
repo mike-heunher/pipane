@@ -33,7 +33,7 @@ describe("IndexedDbSessionStateCache", () => {
 
 	it("loads a small render-ready tail before the full snapshot", async () => {
 		const cache = new IndexedDbSessionStateCache({ indexedDB: new IDBFactory() });
-		const messages = Array.from({ length: 30 }, (_, index) => ({
+		const messages = Array.from({ length: 80 }, (_, index) => ({
 			role: "user",
 			content: `message ${index + 1}`,
 			timestamp: index + 1,
@@ -50,9 +50,9 @@ describe("IndexedDbSessionStateCache", () => {
 		await cache.save("backend-a", "/sessions/preview.jsonl", json, await computeHash(json));
 
 		const preview = await cache.loadPreview("backend-a", "/sessions/preview.jsonl");
-		expect(preview?.state.messages).toHaveLength(10);
-		expect(preview?.state.messages[0]).toMatchObject({ content: "message 21" });
-		expect((await cache.load("backend-a", "/sessions/preview.jsonl"))?.state.messages).toHaveLength(30);
+		expect(preview?.state.messages).toHaveLength(50);
+		expect(preview?.state.messages[0]).toMatchObject({ content: "message 31" });
+		expect((await cache.load("backend-a", "/sessions/preview.jsonl"))?.state.messages).toHaveLength(80);
 	});
 
 	it("omits a preview that would duplicate an oversized message", async () => {

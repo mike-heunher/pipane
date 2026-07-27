@@ -44,6 +44,8 @@ export class PiMessageList extends LitElement {
 	@property({ type: Number }) keepThinkingParts = 3;
 
 	private visibleCount = 0;
+	private fillFrame: number | undefined;
+	private readonly fillBatchCount = 5;
 
 	createRenderRoot() {
 		return this; // light DOM for shared styles
@@ -63,6 +65,31 @@ export class PiMessageList extends LitElement {
 		}
 	}
 
+	protected override updated(): void {
+		this.scheduleViewportFill();
+	}
+
+	override disconnectedCallback(): void {
+		if (this.fillFrame !== undefined) cancelAnimationFrame(this.fillFrame);
+		this.fillFrame = undefined;
+		super.disconnectedCallback();
+	}
+
+	private scheduleViewportFill(): void {
+		if (this.fillFrame !== undefined || this.initialCount <= 0 || this.visibleCount >= this.initialCount) return;
+		const sessionPath = this.sessionPath;
+		this.fillFrame = requestAnimationFrame(() => {
+			this.fillFrame = undefined;
+			if (!this.isConnected || sessionPath !== this.sessionPath) return;
+			const scrollArea = this.closest<HTMLElement>("#chat-scroll-area");
+			const stack = this.querySelector<HTMLElement>(".message-stack");
+			if (!scrollArea || !stack) return;
+			const targetHeight = Math.max(0, scrollArea.clientHeight - 32);
+			if (stack.scrollHeight >= targetHeight) return;
+			this.visibleCount = Math.min(this.initialCount, this.visibleCount + this.fillBatchCount);
+			this.requestUpdate();
+		});
+	}
 
 	render() {
 		const renderableIndices: number[] = [];
@@ -87,10 +114,16 @@ export class PiMessageList extends LitElement {
 			}
 		}
 
-		const items = this.buildRenderItems(visibleMessages, toolResultsById, hiddenCount, firstVisibleMessageIndex);
+		const items = this.buildRenderItems(
+			visibleMessages,
+			toolResultsById,
+			hiddenCount,
+			firstVisibleMessageIndex,
+			renderableIndices.length,
+		);
 		const nextBatchSize = Math.min(hiddenCount, this.initialCount);
 
-		return html`<div class="flex flex-col gap-3">
+		return html`<div class="message-stack flex flex-col gap-3">
 			${hiddenCount > 0
 				? html`<button
 					type="button"
@@ -118,6 +151,7 @@ export class PiMessageList extends LitElement {
 		toolResultsById: Map<string, any>,
 		firstRenderableIndex: number,
 		firstVisibleMessageIndex: number,
+		totalRenderableCount: number,
 	): Array<{ key: string; template: TemplateResult; messageIndex: number }> {
 		const items: Array<{ key: string; template: TemplateResult; messageIndex: number }> = [];
 		let index = firstRenderableIndex;
@@ -140,14 +174,14 @@ export class PiMessageList extends LitElement {
 			// Try custom renderer first (registered via registerMessageRenderer)
 			const customTemplate = renderMessage(msg);
 			if (customTemplate) {
-				items.push({ key: `msg:${index - firstRenderableIndex}`, template: customTemplate, messageIndex: index });
+				items.push({ key: this.messageKey(msg, index, totalRenderableCount), template: customTemplate, messageIndex: index });
 				index++;
 				continue;
 			}
 
 			if (msg.role === "user") {
 				items.push({
-					key: `msg:${index - firstRenderableIndex}`,
+					key: this.messageKey(msg, index, totalRenderableCount),
 					template: html`<user-message .message=${msg}></user-message>`,
 					messageIndex: index,
 				});
@@ -160,7 +194,7 @@ export class PiMessageList extends LitElement {
 				thinkingPartsToHide -= hiddenThinkingParts;
 
 				items.push({
-					key: `msg:${index - firstRenderableIndex}`,
+					key: this.messageKey(msg, index, totalRenderableCount),
 					template: html`<assistant-message
 						.message=${msg}
 						.isStreaming=${isThisMessageStreaming}
@@ -176,6 +210,13 @@ export class PiMessageList extends LitElement {
 		}
 
 		return items;
+	}
+
+	private messageKey(message: AgentMessage, index: number, totalRenderableCount: number): string {
+		const timestamp = (message as any).timestamp;
+		return timestamp !== undefined && timestamp !== null
+			? `${String(message.role)}:${String(timestamp)}`
+			: `tail:${index - totalRenderableCount}`;
 	}
 
 	/** Check if a message is the last assistant message in the array */
