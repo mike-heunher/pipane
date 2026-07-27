@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { readSessionFromDisk, SessionJsonl } from "./session-jsonl.js";
+import { computeHashSync, readSessionFromDisk, SessionJsonl } from "./session-jsonl.js";
 import { SessionRegistry } from "./session-registry.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
@@ -178,6 +178,68 @@ describe("WsHandler protocol boundary", () => {
 			{ priority: "bulk", transferKey: "active-session-sync" },
 			{ priority: "bulk", transferKey: "active-session-sync" },
 		]);
+	});
+
+	it("sends an authoritative manifest plus only uncached message bodies", () => {
+		const first = { role: "user", content: "already cached", timestamp: 1 } as any;
+		const second = { role: "assistant", content: [{ type: "text", text: "new" }], timestamp: 2 } as any;
+		const sessionPath = "/tmp/content-addressed.jsonl";
+		const { handler, registry } = makeHandler();
+		const actor = registry.get(sessionPath);
+		actor.attach({ process: { id: 91 }, release: vi.fn() } as any, new SessionJsonl({
+			messages: [first, second],
+			model: null,
+			thinkingLevel: "off",
+		}));
+		const { ws, sent } = makeWs();
+		handler.clients.set(ws, { subscribedSession: null, lastVersion: 0, lastJson: "", lastHash: "" });
+
+		handler.handleSubscribeSession(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "content",
+			type: "subscribe_session",
+			sessionPath,
+			knownMessageHashes: [computeHashSync(JSON.stringify(first))],
+		});
+
+		const sync = sent.find((message) => message.type === "session_sync");
+		expect(sync).toMatchObject({
+			op: "content",
+			messageHashes: [
+				computeHashSync(JSON.stringify(first)),
+				computeHashSync(JSON.stringify(second)),
+			],
+			messages: [{ hash: computeHashSync(JSON.stringify(second)), message: second }],
+			state: { isStreaming: true, thinkingLevel: "off" },
+		});
+	});
+
+	it("confirms an unchanged cached state without retransmitting messages", () => {
+		const sessionPath = "/tmp/not-modified.jsonl";
+		const { handler, registry } = makeHandler();
+		const actor = registry.get(sessionPath);
+		actor.attach({ process: { id: 92 }, release: vi.fn() } as any, new SessionJsonl({
+			messages: [{ role: "user", content: "cached", timestamp: 1 } as any],
+			model: null,
+			thinkingLevel: "off",
+		}));
+		const hash = actor.session!.hash;
+		const { ws, sent } = makeWs();
+		handler.clients.set(ws, { subscribedSession: null, lastVersion: 0, lastJson: "", lastHash: "" });
+
+		handler.handleSubscribeSession(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "unchanged",
+			type: "subscribe_session",
+			sessionPath,
+			cachedStateHash: hash,
+			knownMessageHashes: [],
+		});
+
+		expect(sent.find((message) => message.type === "session_sync")).toMatchObject({
+			op: "not_modified",
+			hash,
+		});
 	});
 
 	it("coalesces detached file bursts and sends only the resulting delta", async () => {

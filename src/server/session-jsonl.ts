@@ -26,7 +26,7 @@ import { computeSyncOp, type SyncOp } from "../shared/jsonl-sync.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 
 /** Synchronous SHA-256 hash (server-only, uses node:crypto). */
-function computeHashSync(data: string): string {
+export function computeHashSync(data: string): string {
 	return createHash("sha256").update(data, "utf8").digest("hex");
 }
 

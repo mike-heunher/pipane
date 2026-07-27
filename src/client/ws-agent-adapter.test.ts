@@ -16,7 +16,7 @@ import type { FrameTransport } from "./frame-transport.js";
 import { getPromptFailureSession } from "./prompt-failure.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
-import { UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
+import { CONTENT_ADDRESSED_SESSION_SYNC_FEATURE, UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -219,7 +219,7 @@ describe("WsAgentAdapter transport injection", () => {
 			},
 			onConnectionChange: () => () => {},
 		};
-		const adapter = new WsAgentAdapter({ transport });
+		const adapter = new WsAgentAdapter({ transport, api: {} as any });
 
 		await adapter.connect("rtc://backend-one");
 		expect(await adapter.fetchAvailableModels()).toEqual([{ provider: "mock", id: "model" }]);
@@ -1241,6 +1241,105 @@ describe("WsAgentAdapter prompt routing", () => {
 
 			expect(adapter.state.thinkingLevel).toBe("max");
 			expect((adapter as any)._pendingControl.revision).toBeGreaterThan(oldRevision);
+		});
+	});
+
+	describe("content-addressed session sync", () => {
+		it("reconstructs authoritative order from cached and newly supplied message bodies", async () => {
+			const sessionPath = "/tmp/sessions/content.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+			const a = adapter as any;
+			const cachedMessage = { role: "user", content: "cached", timestamp: 1 };
+			const newMessage = { role: "assistant", content: [{ type: "text", text: "new" }], timestamp: 2 };
+			const cachedMessageHash = await computeHash(JSON.stringify(cachedMessage));
+			const newMessageHash = await computeHash(JSON.stringify(newMessage));
+			const state = {
+				messages: [cachedMessage, newMessage],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off",
+				steeringQueue: [],
+			};
+			const json = JSON.stringify(state);
+			a._cachedStateHash = "old-state";
+			a._cachedMessageHashes = [cachedMessageHash];
+			a._cachedMessageObjects = new Map([[cachedMessageHash, cachedMessage]]);
+
+			await a.applySessionSyncBatch([{
+				type: "session_sync",
+				sessionPath,
+				revision: 2,
+				op: "content",
+				hash: await computeHash(json),
+				messageHashes: [cachedMessageHash, newMessageHash],
+				messages: [{ hash: newMessageHash, message: newMessage }],
+				state: {
+					isStreaming: false,
+					pendingToolCalls: [],
+					toolCallTimings: {},
+					model: null,
+					thinkingLevel: "off",
+					steeringQueue: [],
+				},
+				__sessionPath: sessionPath,
+				__sessionNonce: a._sessionNonce,
+			}]);
+
+			expect(adapter.state.messages).toEqual([cachedMessage, newMessage]);
+			expect(a._syncJson).toBe(json);
+			expect(a._cachedMessageHashes).toEqual([cachedMessageHash, newMessageHash]);
+		});
+
+		it("accepts a not-modified confirmation only for the loaded cached hash", async () => {
+			const sessionPath = "/tmp/sessions/unchanged.jsonl";
+			const { adapter } = setupWithSession(sessionPath);
+			const a = adapter as any;
+			const json = JSON.stringify({
+				messages: [{ role: "user", content: "cached" }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off",
+				steeringQueue: [],
+			});
+			const hash = await computeHash(json);
+			a._syncJson = json;
+			a._syncHash = hash;
+
+			await a.applySessionSyncBatch([{
+				type: "session_sync",
+				sessionPath,
+				revision: 3,
+				op: "not_modified",
+				hash,
+				__sessionPath: sessionPath,
+				__sessionNonce: a._sessionNonce,
+			}]);
+
+			expect(adapter.state.messages).toEqual([{ role: "user", content: "cached" }]);
+			expect(a._syncRevision).toBe(3);
+		});
+
+		it("advertises cached hashes only when the backend capability is present", async () => {
+			const sessionPath = "/tmp/sessions/resume.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+			const a = adapter as any;
+			a._backendFeatures.add(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE);
+			a._syncJson = "cached-json";
+			a._syncHash = "cached-state";
+			a._cachedStateHash = "cached-state";
+			a._cachedMessageHashes = ["message-one"];
+
+			await a.subscribeToSession(sessionPath);
+
+			expect(sent.at(-1)).toMatchObject({
+				type: "subscribe_session",
+				cachedStateHash: "cached-state",
+				knownMessageHashes: ["message-one"],
+			});
 		});
 	});
 

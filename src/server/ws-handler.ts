@@ -34,6 +34,7 @@ import {
 	readSessionFromDisk,
 	getSessionFileSize,
 	serializeSessionState,
+	computeHashSync,
 } from "./session-jsonl.js";
 import { getSessionCwd } from "./session-cwd.js";
 import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFoundMessage } from "./pi-runtime.js";
@@ -52,6 +53,7 @@ import {
 	type ServerMessagePayload,
 	type InlineWireImage,
 	type WireImage,
+	type WireSessionState,
 } from "../shared/ws-protocol.js";
 import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import {
@@ -553,6 +555,45 @@ export class WsHandler {
 		this.sendSuccess(ws, command.id, "install_pi", {});
 	}
 
+	private makeInitialSessionSync(
+		sessionPath: string,
+		json: string,
+		hash: string,
+		command: CommandOf<"subscribe_session">,
+	): ServerMessagePayload {
+		const revision = this.revisionForState(sessionPath, hash);
+		if (command.cachedStateHash === hash) {
+			return { type: "session_sync", sessionPath, revision, op: "not_modified", hash };
+		}
+		if (command.knownMessageHashes !== undefined) {
+			const state = JSON.parse(json) as WireSessionState;
+			const known = new Set(command.knownMessageHashes);
+			const messageHashes: string[] = [];
+			const messages: Array<{ hash: string; message: WireSessionState["messages"][number] }> = [];
+			const emitted = new Set<string>();
+			for (const message of state.messages) {
+				const messageHash = computeHashSync(JSON.stringify(message));
+				messageHashes.push(messageHash);
+				if (!known.has(messageHash) && !emitted.has(messageHash)) {
+					messages.push({ hash: messageHash, message });
+					emitted.add(messageHash);
+				}
+			}
+			const { messages: _messages, ...metadata } = state;
+			return {
+				type: "session_sync",
+				sessionPath,
+				revision,
+				op: "content",
+				hash,
+				messageHashes,
+				messages,
+				state: metadata,
+			};
+		}
+		return { type: "session_sync", sessionPath, revision, op: "full", data: json, hash };
+	}
+
 	private handleSubscribeSession(ws: ServerFrameConnection, command: CommandOf<"subscribe_session">): void {
 		const client = this.clients.get(ws);
 		if (!client) return;
@@ -594,14 +635,12 @@ export class WsHandler {
 			client.lastJson = attached.json;
 			client.lastHash = attached.hash;
 			client.lastVersion = attached.version;
-			this.sendMessage(ws, {
-				type: "session_sync",
+			this.sendMessage(ws, this.makeInitialSessionSync(
 				sessionPath,
-				revision: this.revisionForState(sessionPath, attached.hash),
-				op: "full",
-				data: attached.json,
-				hash: attached.hash,
-			});
+				attached.json,
+				attached.hash,
+				command,
+			));
 		} else {
 			// Detached — read from disk
 			const { json, hash } = readSessionFromDisk(sessionPath);
@@ -610,14 +649,7 @@ export class WsHandler {
 			client.lastVersion = 0;
 			// Track file size for change detection
 			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
-			this.sendMessage(ws, {
-				type: "session_sync",
-				sessionPath,
-				revision: this.revisionForState(sessionPath, hash),
-				op: "full",
-				data: json,
-				hash,
-			});
+			this.sendMessage(ws, this.makeInitialSessionSync(sessionPath, json, hash, command));
 		}
 
 		// Extension status is a separate, authoritative snapshot so reconnects

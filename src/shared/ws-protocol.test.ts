@@ -12,6 +12,8 @@ import {
 
 const envelope = { protocolVersion: WS_PROTOCOL_VERSION, id: "req-1" };
 const model = { provider: "anthropic", modelId: "claude-sonnet" };
+const cachedStateHash = "a".repeat(64);
+const cachedMessageHash = "b".repeat(64);
 const sessionStats = {
 	sessionFile: "/sessions/a.jsonl",
 	sessionId: "session-a",
@@ -27,7 +29,7 @@ const sessionStats = {
 
 const clientCommands = [
 	{ type: "install_pi" },
-	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl" },
+	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl", cachedStateHash, knownMessageHashes: [cachedMessageHash] },
 	{ type: "prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2, images: [{ type: "image", uploadedPath: "/tmp/pipane-upload/photo.png", mimeType: "image/png" }] },
 	{ type: "steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
 	{ type: "remove_steering", sessionPath: "/sessions/a.jsonl", index: 0 },
@@ -73,6 +75,17 @@ const serverEvents: ServerMessagePayload[] = [
 	{ type: "extension_status", sessionPath: "/sessions/a.jsonl", statuses: { build: "ready" } },
 	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 3, op: "full", data: "{}", hash: "abc" },
 	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 4, op: "delta", patches: [{ offset: 1, deleteCount: 0, insert: "x" }], baseHash: "abc", hash: "def" },
+	{
+		type: "session_sync",
+		sessionPath: "/sessions/a.jsonl",
+		revision: 5,
+		op: "content",
+		hash: "ghi",
+		messageHashes: [cachedMessageHash],
+		messages: [{ hash: cachedMessageHash, message: { role: "user", content: "hello", timestamp: 1 } as any }],
+		state: { isStreaming: false, pendingToolCalls: [], toolCallTimings: {}, model: null, thinkingLevel: "off", steeringQueue: [] },
+	},
+	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 6, op: "not_modified", hash: "ghi" },
 	{ type: "control_state", sessionPath: "/sessions/a.jsonl", controlRevision: 2, model: { provider: "anthropic", id: "claude-sonnet" }, thinkingLevel: "high" },
 	{ type: "session_attached", sessionPath: "/sessions/a.jsonl", cwd: "/project", firstMessage: "hello" },
 	{ type: "sessions_changed", file: "/sessions/a.jsonl" },

@@ -1,5 +1,6 @@
 # Unreleased
 
+- Restore conversations immediately from a bounded browser cache and transfer only uncached content-addressed messages on repeat switches.
 - Replace full-width update banners with tiny per-backend upgrade indicators and selectable update menus.
 - Add a stronger PIPANE sidebar wordmark with an outlined badge shown only on preview.pipane.dev.
 - Resolve relative conversation file previews through successful write/edit calls and the conversation's verified Git worktree.

@@ -5,6 +5,7 @@ import type { ToolCallTimings } from "./tool-runtime.js";
 
 /** Increment when a breaking WebSocket wire change is introduced. */
 export const WS_PROTOCOL_VERSION = 1 as const;
+export const MAX_KNOWN_SESSION_MESSAGE_HASHES = 4_096;
 
 export type SessionRuntimeStatus = "running" | "done";
 export type SessionRuntimeStatuses = Record<string, SessionRuntimeStatus>;
@@ -77,7 +78,13 @@ interface SessionCommand {
 
 export type ClientCommand = CommandEnvelope & (
 	| { type: "install_pi" }
-	| ({ type: "subscribe_session" } & SessionCommand)
+	| ({
+		type: "subscribe_session";
+		/** Exact authoritative state previously cached by this browser. */
+		cachedStateHash?: string;
+		/** Content hashes for cached materialized display messages. */
+		knownMessageHashes?: string[];
+	} & SessionCommand)
 	| ({
 		type: "prompt";
 		message: string;
@@ -183,12 +190,34 @@ export interface WireSessionState {
 	error?: string;
 }
 
+export type WireSessionStateMetadata = Omit<WireSessionState, "messages">;
+
+export interface ContentAddressedMessage {
+	hash: string;
+	message: AgentMessage;
+}
+
+export type InitialSessionSyncOp =
+	| {
+		op: "content";
+		hash: string;
+		/** Authoritative display order; duplicate hashes are allowed. */
+		messageHashes: string[];
+		/** Bodies absent from the browser's declared cache. */
+		messages: ContentAddressedMessage[];
+		state: WireSessionStateMetadata;
+	}
+	| {
+		op: "not_modified";
+		hash: string;
+	};
+
 export type SessionSyncMessage = ServerEnvelope & {
 	type: "session_sync";
 	sessionPath: string;
 	/** Monotonic revision of the authoritative state for this session. */
 	revision: number;
-} & SyncOp;
+} & (SyncOp | InitialSessionSyncOp);
 
 export type InitMessage = ServerEnvelope & {
 	type: "init";
@@ -306,6 +335,12 @@ function string(value: unknown, path: string, allowEmpty = true): string {
 
 function optionalString(value: unknown, path: string): string | undefined {
 	return value === undefined ? undefined : string(value, path);
+}
+
+function contentHash(value: unknown, path: string): string {
+	const hash = string(value, path, false);
+	if (!/^[a-f0-9]{64}$/u.test(hash)) fail(path, "expected a lowercase SHA-256 hash");
+	return hash;
 }
 
 function boolean(value: unknown, path: string): boolean {
@@ -466,6 +501,16 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 				optionalString(command.cwd, "$command.cwd");
 				break;
 			case "subscribe_session":
+				sessionPath();
+				if (command.cachedStateHash !== undefined) contentHash(command.cachedStateHash, "$command.cachedStateHash");
+				if (command.knownMessageHashes !== undefined) {
+					const hashes = array(command.knownMessageHashes, "$command.knownMessageHashes")
+						.map((hash, index) => contentHash(hash, `$command.knownMessageHashes[${index}]`));
+					if (hashes.length > MAX_KNOWN_SESSION_MESSAGE_HASHES) {
+						fail("$command.knownMessageHashes", `expected at most ${MAX_KNOWN_SESSION_MESSAGE_HASHES} hashes`);
+					}
+				}
+				break;
 			case "abort":
 			case "hard_kill":
 			case "get_session_stats":
@@ -625,6 +670,22 @@ function clientCommandType(value: unknown, path: string): ClientCommandType {
 	return type as ClientCommandType;
 }
 
+function validateSessionStateMetadata(value: unknown, path: string): void {
+	const state = record(value, path);
+	boolean(state.isStreaming, `${path}.isStreaming`);
+	stringArray(state.pendingToolCalls, `${path}.pendingToolCalls`);
+	const timings = record(state.toolCallTimings, `${path}.toolCallTimings`);
+	for (const [toolCallId, value] of Object.entries(timings)) {
+		const timing = record(value, `${path}.toolCallTimings.${toolCallId}`);
+		finiteNumber(timing.startedAt, `${path}.toolCallTimings.${toolCallId}.startedAt`);
+		if (timing.completedAt !== undefined) finiteNumber(timing.completedAt, `${path}.toolCallTimings.${toolCallId}.completedAt`);
+	}
+	if (state.model !== null) compactModel(state.model, `${path}.model`);
+	thinkingLevel(state.thinkingLevel, `${path}.thinkingLevel`);
+	stringArray(state.steeringQueue, `${path}.steeringQueue`);
+	optionalString(state.error, `${path}.error`);
+}
+
 function validatePatches(value: unknown, path: string): void {
 	array(value, path).forEach((item, index) => {
 		const patch = record(item, `${path}[${index}]`);
@@ -690,8 +751,18 @@ export function decodeServerMessage(raw: string): ProtocolDecodeResult<ServerMes
 				} else if (message.op === "delta") {
 					string(message.baseHash, "$message.baseHash", false);
 					validatePatches(message.patches, "$message.patches");
-				} else {
-					fail("$message.op", "expected full or delta");
+				} else if (message.op === "content") {
+					array(message.messageHashes, "$message.messageHashes")
+						.forEach((hash, index) => contentHash(hash, `$message.messageHashes[${index}]`));
+					array(message.messages, "$message.messages").forEach((item, index) => {
+						const body = record(item, `$message.messages[${index}]`);
+						contentHash(body.hash, `$message.messages[${index}].hash`);
+						const materialized = record(body.message, `$message.messages[${index}].message`);
+						string(materialized.role, `$message.messages[${index}].message.role`, false);
+					});
+					validateSessionStateMetadata(message.state, "$message.state");
+				} else if (message.op !== "not_modified") {
+					fail("$message.op", "expected full, delta, content, or not_modified");
 				}
 				break;
 			case "control_state":
@@ -727,20 +798,7 @@ export function decodeSessionStateJson(raw: string): ProtocolDecodeResult<WireSe
 			const message = record(item, `$session.messages[${index}]`);
 			string(message.role, `$session.messages[${index}].role`, false);
 		});
-		boolean(state.isStreaming, "$session.isStreaming");
-		stringArray(state.pendingToolCalls, "$session.pendingToolCalls");
-		const timings = record(state.toolCallTimings, "$session.toolCallTimings");
-		for (const [toolCallId, value] of Object.entries(timings)) {
-			const timing = record(value, `$session.toolCallTimings.${toolCallId}`);
-			finiteNumber(timing.startedAt, `$session.toolCallTimings.${toolCallId}.startedAt`);
-			if (timing.completedAt !== undefined) {
-				finiteNumber(timing.completedAt, `$session.toolCallTimings.${toolCallId}.completedAt`);
-			}
-		}
-		if (state.model !== null) compactModel(state.model, "$session.model");
-		thinkingLevel(state.thinkingLevel, "$session.thinkingLevel");
-		stringArray(state.steeringQueue, "$session.steeringQueue");
-		optionalString(state.error, "$session.error");
+		validateSessionStateMetadata(state, "$session");
 		return { ok: true, value: state as unknown as WireSessionState };
 	} catch (error) {
 		return decodeFailure(value, error, "session_sync");

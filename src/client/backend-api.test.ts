@@ -9,6 +9,20 @@ function jsonResponse(data: unknown, status = 200): Response {
 }
 
 describe("HttpBackendApi", () => {
+	it("loads backend capabilities without caching the response", async () => {
+		const capabilities = {
+			backendId: "local",
+			semanticProtocolVersion: 2,
+			applicationProtocolVersions: [1],
+			features: ["content-addressed-session-sync"],
+		};
+		const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(capabilities));
+		const api = new HttpBackendApi({ fetch: fetchMock });
+
+		await expect(api.getCapabilities()).resolves.toEqual(capabilities);
+		expect(fetchMock).toHaveBeenCalledWith("/api/capabilities", { cache: "no-store" });
+	});
+
 	it("maps session, file, and directory operations onto the current HTTP API", async () => {
 		const session = {
 			id: "one",

@@ -30,6 +30,15 @@ function sendError(res: Response, error: unknown): void {
 export function registerRestApi(app: Express, options: RegisterRestApiOptions = {}): BackendApi {
 	const api = options.api ?? new LocalBackendApi(options);
 
+	app.get("/api/capabilities", async (_req, res) => {
+		try {
+			if (!api.getCapabilities) throw new LocalBackendApiError("Backend capabilities are unavailable", 503, "conflict");
+			res.json(await api.getCapabilities());
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
 	app.get("/api/sessions", async (_req, res) => {
 		try {
 			res.json(await api.listSessions());

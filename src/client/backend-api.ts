@@ -1,6 +1,7 @@
 import type { UpdateRunResponse, UpdateSnapshot, UpdateTarget } from "../shared/updates.js";
 import type {
 	BackendApi,
+	BackendCapabilities,
 	DirectoryEntry,
 	DirectoryListing,
 	FileContentResponse,
@@ -52,6 +53,10 @@ export class HttpBackendApi implements BackendApi {
 
 	constructor(options: HttpBackendApiOptions = {}) {
 		this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+	}
+
+	getCapabilities(): Promise<BackendCapabilities> {
+		return this.requestJson("/api/capabilities", { cache: "no-store" });
 	}
 
 	listSessions(): Promise<SessionInfoDTO[]> {

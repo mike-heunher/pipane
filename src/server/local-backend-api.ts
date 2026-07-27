@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, open, readFile, rm, unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
-import { MAX_UPLOAD_FILE_BYTES, UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
+import {
+	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
+	MAX_UPLOAD_FILE_BYTES,
+	UPLOADED_IMAGE_PROMPT_FEATURE,
+} from "../shared/backend-api.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import { WS_PROTOCOL_VERSION, type InlineWireImage } from "../shared/ws-protocol.js";
 import type {
@@ -102,8 +106,9 @@ export class LocalBackendApi implements BackendApi {
 	}
 
 	async getCapabilities(): Promise<BackendCapabilities> {
-		const backendId = this.backendId();
-		if (!backendId) throw new LocalBackendApiError("Backend identity is unavailable", 503, "conflict");
+		// IndexedDB is already isolated by HTTP origin, so an unregistered local
+		// backend can use a stable origin-local namespace before rendezvous exists.
+		const backendId = this.backendId() ?? "local";
 		return {
 			backendId,
 			semanticProtocolVersion: BACKEND_PROTOCOL_VERSION,
@@ -115,6 +120,7 @@ export class LocalBackendApi implements BackendApi {
 				"file-preview",
 				"file-upload",
 				UPLOADED_IMAGE_PROMPT_FEATURE,
+				CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
 				"local-settings",
 				"updates",
 			],

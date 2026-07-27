@@ -94,6 +94,69 @@ test.describe("Real stack e2e", () => {
 		await expect(sessionItem.locator(".session-worktree")).toHaveText("root", { timeout: 10000 });
 	});
 
+	test("resumes an unchanged conversation from the browser content cache", async ({ page, harness }) => {
+		harness.setScenarios([
+			{ match: "cache-session-one", chunks: textChunks("First cached response.") },
+			{ match: "cache-session-two", chunks: textChunks("Second cached response.") },
+		]);
+		const sentFrames: any[] = [];
+		const receivedFrames: any[] = [];
+		page.on("websocket", (socket) => {
+			socket.on("framesent", ({ payload }) => {
+				try { sentFrames.push(JSON.parse(String(payload))); } catch { /* chunk envelope */ }
+			});
+			socket.on("framereceived", ({ payload }) => {
+				try { receivedFrames.push(JSON.parse(String(payload))); } catch { /* chunk envelope */ }
+			});
+		});
+
+		await gotoFreshSession(page, harness);
+		const textarea = page.locator("message-editor").locator("textarea").first();
+		await textarea.fill("cache-session-one");
+		await textarea.press("Enter");
+		await expect(page.getByText("First cached response.", { exact: false })).toBeVisible({ timeout: 15_000 });
+		await expect(page.locator(".status-stop-button")).toBeHidden({ timeout: 10_000 });
+		const firstPath = await page.evaluate(() => (document.querySelector("session-picker") as any)?.agent?.sessionFile as string);
+		expect(firstPath).toBeTruthy();
+		// The cache write is deliberately deferred until streaming settles.
+		await expect.poll(async () => page.evaluate(async (path) => {
+			const workspace = (document.querySelector("session-picker") as any)?.agent;
+			const client = workspace?.activeClient ?? workspace;
+			if (!client?.sessionCache || !client.cacheBackendId) return false;
+			return !!await client.sessionCache.load(client.cacheBackendId, path);
+		}, firstPath), { timeout: 10_000 }).toBe(true);
+
+		await page.evaluate(async () => {
+			const picker = document.querySelector("session-picker") as any;
+			await picker.agent.newSession(picker.agent.cwd);
+		});
+		await textarea.fill("cache-session-two");
+		await textarea.press("Enter");
+		await expect(page.getByText("Second cached response.", { exact: false })).toBeVisible({ timeout: 15_000 });
+		await expect.poll(async () => page.evaluate((path) => {
+			const picker = document.querySelector("session-picker") as any;
+			return picker.sessions?.some((session: any) => session.path === path) ?? false;
+		}, firstPath)).toBe(true);
+
+		sentFrames.length = 0;
+		receivedFrames.length = 0;
+		await page.evaluate(async (path) => {
+			const picker = document.querySelector("session-picker") as any;
+			const session = picker.sessions.find((candidate: any) => candidate.path === path);
+			if (!session) throw new Error("Cached session was not listed");
+			await picker.handleSessionClick(session);
+		}, firstPath);
+		await expect(page.getByText("First cached response.", { exact: false })).toBeVisible({ timeout: 10_000 });
+
+		expect(sentFrames.find((frame) => frame.type === "subscribe_session" && frame.sessionPath === firstPath)).toMatchObject({
+			cachedStateHash: expect.any(String),
+			knownMessageHashes: expect.any(Array),
+		});
+		expect(receivedFrames.find((frame) => frame.type === "session_sync" && frame.sessionPath === firstPath)).toMatchObject({
+			op: "not_modified",
+		});
+	});
+
 	test("shows authoritative session statistics through /session", async ({ page, harness }) => {
 		harness.setScenarios([
 			{ match: "session-stats-e2e", chunks: textChunks("Session stats are ready.") },

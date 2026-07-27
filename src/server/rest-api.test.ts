@@ -200,6 +200,7 @@ describe("REST session path confinement", () => {
 		registerRestApi(app, {
 			localSettingsStore: new LocalSettingsStore({ homeDir: tmpDir, settingsPath }),
 			sessionPaths: new SessionPathGuard(sessionsRoot),
+			backendId: "backend-test",
 			uploadDirectory: path.join(tmpDir, "uploads"),
 		});
 		server = await new Promise<Server>((resolve) => {
@@ -229,6 +230,15 @@ describe("REST session path confinement", () => {
 		const query = new URLSearchParams({ path: candidate });
 		return fetch(`${baseUrl}${endpoint}?${query}`);
 	}
+
+	it("advertises content-addressed browser synchronization", async () => {
+		const response = await fetch(`${baseUrl}/api/capabilities`);
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			backendId: "backend-test",
+			features: expect.arrayContaining(["content-addressed-session-sync"]),
+		});
+	});
 
 	it("allows raw and message reads for a real session", async () => {
 		const raw = await requestSessionEndpoint("/api/sessions/raw", sessionPath);
