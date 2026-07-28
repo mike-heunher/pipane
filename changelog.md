@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.15 - 2026-07-28
+
 - Keep the mobile sessions menu, composer, and bottom status visible above the on-screen keyboard across renders.
 - Fill cached conversations upward from the newest message until the viewport is occupied without moving the stable tail.
 - Make settings available at `/settings`, with direct loading, browser navigation, and a workspace-wide sidebar entry point.
