@@ -541,6 +541,14 @@ html, body {
 	overflow: hidden;
 }
 
+.app-viewport-shell {
+	position: fixed;
+	top: var(--app-viewport-top, 0px);
+	left: var(--app-viewport-left, 0px);
+	width: var(--app-viewport-width, 100vw);
+	height: var(--app-viewport-height, 100dvh);
+}
+
 #chat-scroll-area {
 	overscroll-behavior: contain;
 }
@@ -1061,7 +1069,10 @@ markdown-block pre code {
 
 	.sidebar-mobile-overlay {
 		position: fixed;
-		inset: 0;
+		top: var(--app-viewport-top, 0px);
+		left: var(--app-viewport-left, 0px);
+		width: var(--app-viewport-width, 100vw);
+		height: var(--app-viewport-height, 100dvh);
 		z-index: 999;
 		display: flex;
 	}

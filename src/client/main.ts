@@ -54,6 +54,21 @@ const agent: BackendClient = appRuntime.client;
 initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
 document.addEventListener("keydown", handleConversationKeyDown);
+
+function syncAppViewport(): void {
+	const viewport = window.visualViewport;
+	const rootStyle = document.documentElement.style;
+	rootStyle.setProperty("--app-viewport-top", `${viewport?.offsetTop ?? 0}px`);
+	rootStyle.setProperty("--app-viewport-left", `${viewport?.offsetLeft ?? 0}px`);
+	rootStyle.setProperty("--app-viewport-width", `${viewport?.width ?? window.innerWidth}px`);
+	rootStyle.setProperty("--app-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
+}
+
+syncAppViewport();
+window.visualViewport?.addEventListener("resize", syncAppViewport);
+window.visualViewport?.addEventListener("scroll", syncAppViewport);
+window.addEventListener("resize", syncAppViewport);
+
 const isMobile = () => window.innerWidth <= 768;
 let wasMobile = isMobile();
 let mobileSidebarOpen = false;
@@ -95,6 +110,14 @@ let updateSnoozeRefreshTimer: number | undefined;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
 let slashCommandRequest = 0;
 const conversationDrafts = new ConversationDraftStore<Attachment>();
+
+function openMobileSidebar(): void {
+	// Mobile Safari does not reliably move focus from a textarea to a tapped
+	// button. Blur explicitly so opening the sidebar dismisses the keyboard.
+	getMessageEditor()?.querySelector("textarea")?.blur();
+	mobileSidebarOpen = true;
+	renderApp();
+}
 
 function applyBackendSettings(payload: { settings?: any }): void {
 	canvasFeatureEnabled = payload.settings?.canvas?.enabled === true;
@@ -831,7 +854,7 @@ const renderApp = () => {
 	};
 
 	const appHtml = html`
-		<div class="w-full h-screen flex flex-col bg-background text-foreground overflow-hidden">
+		<div class="app-viewport-shell flex flex-col bg-background text-foreground overflow-hidden">
 			<!-- Main content: sidebar + chat -->
 			<div class="flex flex-1 overflow-hidden">
 				${!isMobile()
@@ -845,8 +868,10 @@ const renderApp = () => {
 					${isMobile()
 						? html`
 							<button
+								type="button"
 								class="mobile-sidebar-btn"
-								@click=${() => { mobileSidebarOpen = true; renderApp(); }}
+								@click=${openMobileSidebar}
+								aria-label="Open sessions"
 								title="Open sessions"
 							>
 								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -960,20 +985,20 @@ const renderApp = () => {
 		</div>
 	`;
 
-	// Mobile sidebar overlay
-	if (mobileSidebarOpen && isMobile()) {
-		const mobileOverlay = html`
+	// Keep the root template stable while toggling the mobile overlay. Switching
+	// between a bare app template and a wrapper recreated message-editor, whose
+	// initial focus reopened the phone keyboard as the sidebar was opening.
+	const mobileOverlay = mobileSidebarOpen && isMobile()
+		? html`
 			<div class="sidebar-mobile-overlay">
 				<div class="sidebar-panel shrink-0 border-r border-border bg-background overflow-hidden">
 					<session-picker .agent=${agent} .prefetchedSessions=${prefetchedSessions} .settingsMenu=${settingsMenuCallbacks} .sessionsPerProject=${sessionsPerProject}></session-picker>
 				</div>
 				<div class="sidebar-mobile-backdrop" @click=${() => { mobileSidebarOpen = false; renderApp(); }}></div>
 			</div>
-		`;
-		render(html`${appHtml}${mobileOverlay}`, app);
-	} else {
-		render(appHtml, app);
-	}
+		`
+		: "";
+	render(html`${appHtml}${mobileOverlay}`, app);
 
 	// Post-render setup
 	requestAnimationFrame(() => {
