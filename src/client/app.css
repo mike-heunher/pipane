@@ -1259,7 +1259,7 @@ body.is-file-preview-resizing .file-preview-frame {
 	white-space: nowrap;
 }
 
-.file-preview-close {
+.file-preview-header-action {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -1276,9 +1276,14 @@ body.is-file-preview-resizing .file-preview-frame {
 	transition: background 0.15s, color 0.15s;
 }
 
-.file-preview-close:hover {
+.file-preview-header-action:hover:not(:disabled) {
 	background: var(--accent, rgba(0, 0, 0, 0.05));
 	color: var(--foreground, #111);
+}
+
+.file-preview-header-action:disabled {
+	cursor: default;
+	opacity: 0.45;
 }
 
 .file-preview-body {

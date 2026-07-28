@@ -27,6 +27,7 @@ import {
 	isFilePreviewVisible,
 	isPreviewableFileHref,
 	openFilePreviewLink,
+	openFilePreviewLinkInNewWindow,
 	setFilePreviewSession,
 } from "./file-preview-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
@@ -305,29 +306,44 @@ function installChatJsonlJumpListener() {
 	});
 }
 
+function handleFilePreviewLinkEvent(event: MouseEvent, openInNewWindow: boolean): void {
+	if (event.defaultPrevented || event.altKey) return;
+	const target = event.target as HTMLElement | null;
+	const anchor = target?.closest("a") as HTMLAnchorElement | null;
+	if (!anchor) return;
+
+	const messageList = document.querySelector("pi-message-list");
+	const previewPanel = anchor.closest(".file-preview-panel");
+	if (!previewPanel && (!messageList || !messageList.contains(anchor))) return;
+
+	const rawHref = anchor.getAttribute("href") ?? "";
+	const cwd = agent?.cwd;
+	const sessionPath = agent?.sessionFile;
+	if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;
+	const handled = openInNewWindow
+		? openFilePreviewLinkInNewWindow(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent)
+		: openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent, currentSessionScopeKey());
+	if (!handled) return;
+
+	event.preventDefault();
+	if (!openInNewWindow) {
+		if (isCanvasVisible()) closeCanvas();
+		if (isJsonlPanelVisible()) toggleJsonlPanel();
+		renderApp();
+	}
+}
+
 function installFilePreviewLinkListener() {
 	if (filePreviewLinkListenerInstalled) return;
 	filePreviewLinkListenerInstalled = true;
 
 	document.addEventListener("click", (event) => {
-		const target = event.target as HTMLElement | null;
-		const anchor = target?.closest("a") as HTMLAnchorElement | null;
-		if (!anchor) return;
-
-		const messageList = document.querySelector("pi-message-list");
-		const previewPanel = anchor.closest(".file-preview-panel");
-		if (!previewPanel && (!messageList || !messageList.contains(anchor))) return;
-
-		const rawHref = anchor.getAttribute("href") ?? "";
-		const cwd = agent?.cwd;
-		const sessionPath = agent?.sessionFile;
-		if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;
-		if (!openFilePreviewLink(rawHref, cwd, sessionPath, previewPanel ? getFilePreviewPath() : undefined, agent, currentSessionScopeKey())) return;
-
-		event.preventDefault();
-		if (isCanvasVisible()) closeCanvas();
-		if (isJsonlPanelVisible()) toggleJsonlPanel();
-		renderApp();
+		if (event.button !== 0) return;
+		handleFilePreviewLinkEvent(event, event.metaKey || event.ctrlKey || event.shiftKey);
+	});
+	document.addEventListener("auxclick", (event) => {
+		if (event.button !== 1) return;
+		handleFilePreviewLinkEvent(event, true);
 	});
 }
 

@@ -8,6 +8,7 @@ import {
 	isPreviewableFileHref,
 	linkifyPreviewableInlineCode,
 	openFilePreviewLink,
+	openFilePreviewLinkInNewWindow,
 	resolveFileHref,
 	setFilePreviewSession,
 } from "./file-preview-panel.js";
@@ -207,6 +208,48 @@ describe("linked file preview", () => {
 		closeFilePreview();
 	});
 
+	it("opens preview links in a separate sandboxed window without opening the pane", async () => {
+		const popupDocument = document.implementation.createHTMLDocument("");
+		const popup = { document: popupDocument, closed: false, opener: window } as unknown as Window;
+		const openSpy = vi.spyOn(window, "open").mockReturnValue(popup);
+		const api = {
+			getFileContent: vi.fn(async () => ({
+				path: "/work/project/docs/guide.md",
+				content: "# Separate Guide",
+			})),
+		};
+
+		expect(openFilePreviewLinkInNewWindow("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, api)).toBe(true);
+		expect(openSpy).toHaveBeenCalledWith("about:blank", "_blank");
+		expect(isFilePreviewVisible()).toBe(false);
+		expect(popupDocument.querySelector(".file-preview-window-status")?.textContent).toBe("Loading file…");
+		await settle();
+
+		expect(api.getFileContent).toHaveBeenCalledWith("/sessions/test.jsonl", "docs/guide.md");
+		const frame = popupDocument.querySelector<HTMLIFrameElement>(".file-preview-window-frame");
+		expect(frame?.srcdoc).toContain("<h1>Separate Guide</h1>");
+		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
+		expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+		expect(popup.opener).toBeNull();
+	});
+
+	it("moves an open preview into a separate window and closes the pane", async () => {
+		const container = setupPanel();
+		const popupDocument = document.implementation.createHTMLDocument("");
+		vi.spyOn(window, "open").mockReturnValue({ document: popupDocument, closed: false, opener: window } as unknown as Window);
+		const api = { getFileContent: vi.fn(async () => ({ path: "/work/project/guide.md", content: "# Guide" })) };
+		openFilePreviewLink("guide.md", "/work/project", "/sessions/test.jsonl", undefined, api);
+		await settle();
+
+		const button = container.querySelector<HTMLButtonElement>(".file-preview-open-window");
+		expect(button?.getAttribute("aria-label")).toBe("Open file preview in new window");
+		button?.click();
+
+		expect(isFilePreviewVisible()).toBe(false);
+		expect(container.querySelector(".file-preview-panel")).toBeNull();
+		expect(popupDocument.querySelector<HTMLIFrameElement>(".file-preview-window-frame")?.srcdoc).toContain("<h1>Guide</h1>");
+	});
+
 	it("renders HTML with active scripts in an isolated iframe", async () => {
 		const container = setupPanel();
 		const source = "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive</h1><script>const template = '<head>'; document.body.dataset.ready = 'yes';<\/script></body></html>";
@@ -224,6 +267,8 @@ describe("linked file preview", () => {
 		expect(frame?.srcdoc).toContain("document.body.dataset.ready = 'yes'");
 		expect(frame?.srcdoc).toMatch(/^<!doctype html><script>/);
 		expect(frame?.srcdoc.indexOf("pipane:file-preview-link")).toBeLessThan(frame?.srcdoc.indexOf("const template") ?? 0);
+		expect(frame?.srcdoc).toContain('document.addEventListener("auxclick"');
+		expect(frame?.srcdoc).toContain("event.metaKey || event.ctrlKey || event.shiftKey");
 		expect(frame?.getAttribute("sandbox")).toContain("allow-scripts");
 	});
 

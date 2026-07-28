@@ -1,5 +1,7 @@
 # Unreleased
 
+- Open linked file previews in a separate sandboxed window from modified links or the preview header.
+
 # 0.1.15 - 2026-07-28
 
 - Keep the mobile sessions menu, composer, and bottom status visible above the on-screen keyboard across renders.

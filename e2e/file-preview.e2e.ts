@@ -86,6 +86,13 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		await page.goto(`http://localhost:${server.port}`);
 		const guideLink = page.getByRole("link", { name: "project guide" });
 		await expect(guideLink).toBeVisible();
+		const directPopupPromise = page.waitForEvent("popup");
+		await guideLink.click({ modifiers: ["Control"] });
+		const directPopup = await directPopupPromise;
+		await expect(directPopup.frameLocator(".file-preview-window-frame").getByRole("heading", { name: "Project Guide" })).toBeVisible();
+		await expect(page.locator(".file-preview-panel")).toHaveCount(0);
+		await directPopup.close();
+
 		await guideLink.click();
 
 		const panel = page.locator(".file-preview-panel");
@@ -131,8 +138,12 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		await inlinePathLink.click();
 		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 
-		await panel.getByRole("button", { name: "Close file preview" }).click();
+		const movedPopupPromise = page.waitForEvent("popup");
+		await panel.getByRole("button", { name: "Open file preview in new window" }).click();
+		const movedPopup = await movedPopupPromise;
 		await expect(panel).toBeHidden();
+		await expect(movedPopup.frameLocator(".file-preview-window-frame").getByRole("heading", { name: "Details" })).toBeVisible();
+		await movedPopup.close();
 	} finally {
 		await server.close();
 	}

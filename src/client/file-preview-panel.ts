@@ -50,13 +50,21 @@ const FRAME_LINK_BRIDGE = String.raw`<script>(() => {
 		const path = href.split(/[?#]/, 1)[0];
 		return path.startsWith("/") || path.startsWith("./") || path.startsWith("../") || path.includes("/") || /\.(?:md|markdown|mdown|mkd|mdx|txt|log|json|jsonl|ya?ml|toml|ini|conf|config|xml|html?|css|scss|sass|less|[cm]?[jt]sx?|vue|svelte|py|rb|php|java|kt|kts|go|rs|swift|c|cc|cpp|cxx|h|hh|hpp|hxx|sh|bash|zsh|fish|ps1|sql|graphql|gql|proto|dockerfile)$/i.test(path) || /^(?:readme|changelog|agents?)$/i.test(path);
 	};
-	document.addEventListener("click", (event) => {
-		if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+	const forwardLink = (event, newWindow) => {
+		if (event.defaultPrevented || event.altKey) return;
 		const anchor = event.target instanceof Element ? event.target.closest("a") : null;
 		const href = anchor?.getAttribute("href")?.trim() || "";
 		if (!isLocalFile(href)) return;
 		event.preventDefault();
-		parent.postMessage({ type: "${FRAME_LINK_MESSAGE}", href }, "*");
+		parent.postMessage({ type: "${FRAME_LINK_MESSAGE}", href, newWindow }, "*");
+	};
+	document.addEventListener("click", (event) => {
+		if (event.button !== 0) return;
+		forwardLink(event, event.metaKey || event.ctrlKey || event.shiftKey);
+	}, true);
+	document.addEventListener("auxclick", (event) => {
+		if (event.button !== 1) return;
+		forwardLink(event, true);
 	}, true);
 })();</script>`;
 
@@ -441,6 +449,14 @@ function injectFrameBridge(content: string): string {
 	return `${content.slice(0, insertionPoint)}${FRAME_LINK_BRIDGE}${content.slice(insertionPoint)}`;
 }
 
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character] ?? character);
+}
+
+function renderSourceDocument(content: string): string {
+	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html{color-scheme:light dark}body{margin:0;padding:1rem;background:Canvas;color:CanvasText}pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}</style></head><body><pre>${escapeHtml(content)}</pre></body></html>`;
+}
+
 function renderMarkdownDocument(markdown: string): string {
 	const rendered = markdownParser.parse(linkifyPreviewableInlineCode(markdown));
 	return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${renderPreviewThemeStyles()}<style>${katexStyles}</style>${MARKDOWN_STYLES}${FRAME_LINK_BRIDGE}</head><body><main class="markdown-preview">${rendered}</main></body></html>`;
@@ -469,10 +485,14 @@ function installFrameMessageListener(): void {
 	window.addEventListener("message", (event) => {
 		const frame = container?.querySelector<HTMLIFrameElement>(".file-preview-frame");
 		if (!frame?.contentWindow || event.source !== frame.contentWindow) return;
-		const data = event.data as { type?: unknown; href?: unknown } | null;
+		const data = event.data as { type?: unknown; href?: unknown; newWindow?: unknown } | null;
 		if (data?.type !== FRAME_LINK_MESSAGE || typeof data.href !== "string" || data.href.length > 4096) return;
 		const state = previewStates.get(activeSessionKey);
 		if (!state || !isPreviewableFileHref(data.href)) return;
+		if (data.newWindow === true) {
+			openFilePreviewLinkInNewWindow(data.href, "/", state.sessionPath, state.path, state.api);
+			return;
+		}
 		openFilePreviewLink(data.href, "/", state.sessionPath, state.path, state.api, state.key);
 	});
 }
@@ -522,16 +542,9 @@ export function openFilePreviewLink(
 	api: Pick<BackendApi, "getFileContent">,
 	stateKey = sessionPath,
 ): boolean {
-	const baseDirectory = baseFilePath ? directoryName(baseFilePath) : cwd;
-	const decodedHref = decodeFileHref(rawHref);
-	const resolved = resolveFileHref(rawHref, baseDirectory);
-	if (!decodedHref || !resolved) return false;
-	// Preserve relative intent for initial conversation links so the backend can
-	// choose the session's evidenced worktree before falling back to its CWD.
-	// Once a file is open, nested links use its canonical returned path.
-	const requestPath = !baseFilePath && !decodedHref.startsWith("/")
-		? decodedHref
-		: resolved;
+	const request = resolveFilePreviewRequest(rawHref, cwd, baseFilePath);
+	if (!request) return false;
+	const { resolved, requestPath } = request;
 
 	const previous = previewStates.get(stateKey);
 	const state: FilePreviewState = {
@@ -550,6 +563,92 @@ export function openFilePreviewLink(
 	notifyChanged();
 	void loadFile(state, requestPath);
 	return true;
+}
+
+function resolveFilePreviewRequest(rawHref: string, cwd: string, baseFilePath: string | undefined): { resolved: string; requestPath: string } | null {
+	const baseDirectory = baseFilePath ? directoryName(baseFilePath) : cwd;
+	const decodedHref = decodeFileHref(rawHref);
+	const resolved = resolveFileHref(rawHref, baseDirectory);
+	if (!decodedHref || !resolved) return null;
+	// Preserve relative intent for initial conversation links so the backend can
+	// choose the session's evidenced worktree before falling back to its CWD.
+	return {
+		resolved,
+		requestPath: !baseFilePath && !decodedHref.startsWith("/") ? decodedHref : resolved,
+	};
+}
+
+function renderPreviewWindow(popup: Window, title: string, frameDocument?: string, status = ""): void {
+	const document = popup.document;
+	const root = document.documentElement || document.appendChild(document.createElement("html"));
+	root.replaceChildren();
+	const head = document.createElement("head");
+	const titleElement = document.createElement("title");
+	titleElement.textContent = title;
+	head.appendChild(titleElement);
+	const style = document.createElement("style");
+	style.textContent = "html,body{width:100%;height:100%;margin:0;overflow:hidden;background:Canvas;color:CanvasText}.file-preview-window-frame{display:block;width:100%;height:100%;border:0}.file-preview-window-status{display:grid;height:100%;place-items:center;font:14px system-ui,sans-serif}";
+	head.appendChild(style);
+	const body = document.createElement("body");
+	if (frameDocument) {
+		const frame = document.createElement("iframe");
+		frame.className = "file-preview-window-frame";
+		frame.title = `${title} preview`;
+		frame.setAttribute("sandbox", FRAME_SANDBOX);
+		frame.referrerPolicy = "no-referrer";
+		frame.srcdoc = frameDocument;
+		body.appendChild(frame);
+	} else {
+		const message = document.createElement("div");
+		message.className = "file-preview-window-status";
+		message.textContent = status;
+		body.appendChild(message);
+	}
+	root.append(head, body);
+}
+
+function documentForFile(filePath: string, content: string): string {
+	return isMarkdownFile(filePath)
+		? renderMarkdownDocument(content)
+		: isHtmlFile(filePath)
+			? injectFrameBridge(content)
+			: renderSourceDocument(content);
+}
+
+/** Open a local file in a separate sandboxed browser window without changing pane state. */
+export function openFilePreviewLinkInNewWindow(
+	rawHref: string,
+	cwd: string,
+	sessionPath: string,
+	baseFilePath: string | undefined,
+	api: Pick<BackendApi, "getFileContent">,
+): boolean {
+	const request = resolveFilePreviewRequest(rawHref, cwd, baseFilePath);
+	if (!request) return false;
+	const popup = window.open("about:blank", "_blank");
+	if (!popup) return false;
+	popup.opener = null;
+	const initialTitle = baseName(request.resolved) || "File preview";
+	renderPreviewWindow(popup, initialTitle, undefined, "Loading file…");
+	void api.getFileContent(sessionPath, request.requestPath).then((payload) => {
+		if (popup.closed) return;
+		const path = typeof payload.path === "string" ? payload.path : request.resolved;
+		renderPreviewWindow(popup, baseName(path) || "File preview", documentForFile(path, payload.content));
+	}).catch((error: unknown) => {
+		if (popup.closed) return;
+		renderPreviewWindow(popup, initialTitle, undefined, error instanceof Error ? error.message : String(error));
+	});
+	return true;
+}
+
+function openCurrentFilePreviewInNewWindow(): void {
+	const state = previewStates.get(activeSessionKey);
+	if (!state || state.loading || state.error) return;
+	const popup = window.open("about:blank", "_blank");
+	if (!popup) return;
+	popup.opener = null;
+	renderPreviewWindow(popup, baseName(state.path) || "File preview", documentForFile(state.path, state.content));
+	closeFilePreview();
 }
 
 export function setFilePreviewSession(sessionPath: string | undefined, stateKey = sessionPath): void {
@@ -634,7 +733,15 @@ function renderPanel(): void {
 				</div>
 				<button
 					type="button"
-					class="file-preview-close"
+					class="file-preview-header-action file-preview-open-window"
+					@click=${openCurrentFilePreviewInNewWindow}
+					?disabled=${state.loading || Boolean(state.error)}
+					title="Open in new window"
+					aria-label="Open file preview in new window"
+				>↗</button>
+				<button
+					type="button"
+					class="file-preview-header-action file-preview-close"
 					@click=${closeFilePreview}
 					title="Close file preview"
 					aria-label="Close file preview"
