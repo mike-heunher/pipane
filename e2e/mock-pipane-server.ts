@@ -105,6 +105,7 @@ export class MockPipaneServer {
 		const uploads = new Map<string, { fileName: string; mimeType: string; size: number }>();
 		app.use(express.json({ limit: "1mb" }));
 		app.use(express.static(CLIENT_DIST));
+		app.get(["/settings", "/settings/"], (_req, res) => res.sendFile(path.join(CLIENT_DIST, "index.html")));
 		app.get("/api/sessions", (_req, res) => res.json(mock?.sessions ?? options.sessions));
 		app.get("/api/settings/local", (_req, res) => res.json({
 			settings: options.settings ?? {

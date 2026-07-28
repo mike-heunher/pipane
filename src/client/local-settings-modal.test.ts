@@ -142,6 +142,18 @@ describe("local settings command center", () => {
 		await closed;
 	});
 
+	it("closes when route navigation aborts the dialog", async () => {
+		const api = createApi();
+		const controller = new AbortController();
+		const closed = openLocalSettingsDialog({ api, signal: controller.signal });
+		await waitForSettings();
+
+		controller.abort();
+		await closed;
+
+		expect(document.querySelector(".local-settings-overlay")).toBeNull();
+	});
+
 	it("opens the JSONL viewer from the Messages category", async () => {
 		const api = createApi();
 		const onToggleJsonl = vi.fn();

@@ -1,4 +1,5 @@
 import "./app.css";
+import { isSettingsPath } from "./settings-route.js";
 
 // Unregister stale service workers before either the local workspace or pairing flow starts.
 if ("serviceWorker" in navigator) {
@@ -22,7 +23,7 @@ async function bootstrap(): Promise<void> {
 	}
 	const backendId = backendIdFromPath(window.location.pathname);
 	const rendezvousWorkspace = backendId !== undefined
-		|| (window.location.pathname === "/" && await isRendezvousHost());
+		|| ((window.location.pathname === "/" || isSettingsPath(window.location.pathname)) && await isRendezvousHost());
 	if (rendezvousWorkspace) {
 		try {
 			const [

@@ -276,12 +276,27 @@ test.describe("UI behavior and visual goldens", () => {
 	});
 
 	test("settings command center", async ({ page }) => {
-		await page.goto(`http://localhost:${mock.port}`);
+		const origin = `http://localhost:${mock.port}`;
+		await page.goto(origin);
 		await openMainSession(page);
 		await page.locator("session-picker").getByTitle("Settings").click();
+		await expect(page).toHaveURL(`${origin}/settings`);
 		await expect(page.locator(".local-settings-panel")).toBeVisible();
 		await expect(page.locator(".local-settings-status.is-valid")).toBeVisible();
 		await captureAndCompare(page, "settings-command-center.png");
+
+		await page.goBack();
+		await expect(page).toHaveURL(`${origin}/`);
+		await expect(page.locator(".local-settings-panel")).toBeHidden();
+		await page.goForward();
+		await expect(page.locator(".local-settings-panel")).toBeVisible();
+		await page.getByRole("button", { name: "Close settings" }).click();
+		await expect(page).toHaveURL(`${origin}/`);
+
+		await page.goto(`${origin}/settings`);
+		await expect(page.locator(".local-settings-status.is-valid")).toBeVisible();
+		await page.getByRole("button", { name: "Close settings" }).click();
+		await expect(page).toHaveURL(`${origin}/`);
 	});
 
 	test("tool renderers", async ({ page }) => {

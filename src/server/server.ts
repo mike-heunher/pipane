@@ -234,6 +234,9 @@ const sessionPaths = new SessionPathGuard(SESSIONS_DIR);
 // Serve static files in production
 const clientDist = path.resolve(__dirname, "../../client");
 app.use(express.static(clientDist));
+app.get(["/settings", "/settings/"], (_request, response) => {
+	response.sendFile(path.join(clientDist, "index.html"));
+});
 
 // ============================================================================
 // Core modules

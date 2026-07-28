@@ -1,6 +1,7 @@
 # Unreleased
 
 - Fill cached conversations upward from the newest message until the viewport is occupied without moving the stable tail.
+- Make settings available at `/settings`, with direct loading, browser navigation, and a workspace-wide sidebar entry point.
 - Keep session-switch previews visually stable instead of auto-expanding history while pinned to the bottom.
 - Paint a compact recent-message preview first, then progressively hydrate and expand cached conversations.
 - Prefetch bounded cached conversations and avoid redundant unchanged-state renders for near-instant repeat switches.

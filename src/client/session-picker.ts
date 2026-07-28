@@ -1631,19 +1631,17 @@ export class SessionPicker extends LitElement {
 					</div>
 					<div class="header-right">
 						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>
-						${!isWorkspace ? html`
-							<button
-								class="settings-btn"
-								@click=${() => this.settingsMenu?.onOpenSettings()}
-								title="Settings"
-								aria-label="Settings"
-							>
-								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-									<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
-									<circle cx="12" cy="12" r="3"></circle>
-								</svg>
-							</button>
-						` : nothing}
+						<button
+							class="settings-btn"
+							@click=${() => this.settingsMenu?.onOpenSettings()}
+							title="Settings"
+							aria-label="Settings"
+						>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+								<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
+								<circle cx="12" cy="12" r="3"></circle>
+							</svg>
+						</button>
 					</div>
 				</div>
 				${isWorkspace ? html`

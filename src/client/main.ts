@@ -31,6 +31,7 @@ import {
 } from "./file-preview-panel.js";
 import { openModelPickerDialog } from "./model-picker-dialog.js";
 import { openLocalSettingsDialog } from "./local-settings-modal.js";
+import { enterSettingsRoute, isSettingsPath, leaveSettingsRoute } from "./settings-route.js";
 import { openConnectionDiagnosticsDialog } from "./connection-diagnostics-dialog.js";
 import { openTurnRelayDialog } from "./turn-relay-dialog.js";
 import { openDeviceInviteDialog } from "./device-invite-dialog.js";
@@ -71,6 +72,7 @@ window.addEventListener("resize", () => {
 });
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
+let routedSettingsAbort: AbortController | undefined;
 let connectionDiagnosticsOpen = false;
 let turnRelaySettingsOpen = false;
 let deviceInviteOpen = false;
@@ -510,14 +512,17 @@ function renderToolbarExtras() {
 	`;
 }
 
-async function openLocalSettingsModal(backendId?: string) {
+async function openLocalSettingsModal(backendId?: string, routed = false) {
 	if (localSettingsModalOpen) return;
 	localSettingsModalOpen = true;
+	const routeAbort = routed ? new AbortController() : undefined;
+	if (routeAbort) routedSettingsAbort = routeAbort;
 	try {
 		if (backendId && backendId !== agent.activeBackendId) await agent.activateBackend?.(backendId);
 		await openLocalSettingsDialog({
 			api: agent,
 			isJsonlVisible: isJsonlPanelVisible(),
+			signal: routeAbort?.signal,
 			onToggleJsonl: () => {
 				if (isFilePreviewVisible()) closeFilePreview();
 				toggleJsonlPanel();
@@ -536,8 +541,30 @@ async function openLocalSettingsModal(backendId?: string) {
 		agent.reportError(error, "Failed to open backend settings");
 	} finally {
 		localSettingsModalOpen = false;
+		if (routeAbort) {
+			if (routedSettingsAbort === routeAbort) routedSettingsAbort = undefined;
+			if (routeAbort.signal.aborted) queueMicrotask(syncSettingsRoute);
+			else leaveSettingsRoute();
+		} else {
+			syncSettingsRoute();
+		}
 	}
 }
+
+function openRoutedSettings(): void {
+	enterSettingsRoute();
+	void openLocalSettingsModal(undefined, true);
+}
+
+function syncSettingsRoute(): void {
+	if (isSettingsPath(window.location.pathname)) {
+		if (!localSettingsModalOpen) void openLocalSettingsModal(undefined, true);
+		return;
+	}
+	routedSettingsAbort?.abort();
+}
+
+window.addEventListener("popstate", syncSettingsRoute);
 
 async function openTurnRelaySettings(reconnectAfterSave = false): Promise<void> {
 	if (turnRelaySettingsOpen) return;
@@ -782,7 +809,10 @@ const renderApp = () => {
 	const draft = conversationDrafts.get(draftKey);
 
 	const settingsMenuCallbacks = {
-		onOpenSettings: (backendId?: string) => { void openLocalSettingsModal(backendId); },
+		onOpenSettings: (backendId?: string) => {
+			if (backendId) void openLocalSettingsModal(backendId);
+			else openRoutedSettings();
+		},
 		onOpenDiagnostics: (backendId: string) => { void openConnectionDiagnosticsModal(backendId); },
 		onOpenRelaySettings: () => { void openTurnRelaySettings(false); },
 		onRemoveBackend: (backendId: string) => { void removeBackend(backendId); },
@@ -1202,6 +1232,7 @@ async function initApp() {
 
 	renderApp();
 	void refreshUpdateNotices();
+	syncSettingsRoute();
 
 	prefetchedSessions = undefined;
 

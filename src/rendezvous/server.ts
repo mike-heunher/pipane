@@ -195,7 +195,7 @@ export function createRendezvousServer(
 	if (clientDist && existsSync(path.join(clientDist, "index.html"))) {
 		app.use(express.static(clientDist));
 		app.use((request, response, next) => {
-			if (request.method === "GET" && (/^\/(?:pair|invite)\/[^/]+$/u.test(request.path) || /^\/backend\/[^/]+$/u.test(request.path))) {
+			if (request.method === "GET" && (/^\/(?:pair|invite)\/[^/]+$/u.test(request.path) || /^\/backend\/[^/]+$/u.test(request.path) || /^\/settings\/?$/u.test(request.path))) {
 				response.sendFile(path.join(clientDist, "index.html"));
 				return;
 			}

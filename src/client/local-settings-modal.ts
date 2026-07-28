@@ -142,6 +142,7 @@ export function openLocalSettingsDialog(opts: {
 	onSaved?: (settings: LocalSettingsFormValue) => void | Promise<void>;
 	onToggleJsonl?: () => void;
 	isJsonlVisible?: boolean;
+	signal?: AbortSignal;
 }): Promise<void> {
 	return new Promise((resolve) => {
 		const overlay = createElement("div", "local-settings-overlay");
@@ -230,13 +231,16 @@ export function openLocalSettingsDialog(opts: {
 			setStatus("Unsaved changes", "dirty");
 		};
 
-		const close = () => {
-			if (closed || busy) return;
+		const close = (force = false) => {
+			if (closed || (busy && !force)) return;
 			closed = true;
 			document.removeEventListener("keydown", onKeyDown);
+			opts.signal?.removeEventListener("abort", onAbort);
 			overlay.remove();
 			resolve();
 		};
+
+		const onAbort = () => close(true);
 
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (event.key === "Escape") {
@@ -594,16 +598,22 @@ export function openLocalSettingsDialog(opts: {
 			renderNavigation();
 			renderContent();
 		});
-		closeBtn.addEventListener("click", close);
-		cancelBtn.addEventListener("click", close);
+		closeBtn.addEventListener("click", () => close());
+		cancelBtn.addEventListener("click", () => close());
 		saveBtn.addEventListener("click", () => { void save(); });
 		overlay.addEventListener("click", (event) => {
 			if (event.target === overlay) close();
 		});
 		document.addEventListener("keydown", onKeyDown);
+		opts.signal?.addEventListener("abort", onAbort, { once: true });
+		if (opts.signal?.aborted) {
+			onAbort();
+			return;
+		}
 
 		setStatus("Loading settings…", "loading");
 		void opts.api.getLocalSettings().then((payload) => {
+			if (closed) return;
 			settings = normalizeSettings(payload.settings);
 			settingsPath = payload.path || settingsPath;
 			renderNavigation();
@@ -611,10 +621,12 @@ export function openLocalSettingsDialog(opts: {
 			if (payload.errors?.length) setStatus(payload.errors.join(" "), "error");
 			else setStatus(`${settingsPath} · valid`, "valid");
 		}).catch((error) => {
+			if (closed) return;
 			renderNavigation();
 			renderContent();
 			setStatus(error instanceof Error ? error.message : String(error), "error");
 		}).finally(() => {
+			if (closed) return;
 			setBusy(false);
 			requestAnimationFrame(() => search.focus());
 		});

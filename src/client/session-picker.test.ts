@@ -226,7 +226,10 @@ describe("session-picker", () => {
 		expect(hosts[0].querySelector(".host-name")?.textContent).toBe("alpha");
 		expect(hosts[1].querySelector(".host-name")?.textContent).toBe("beta");
 		expect(el.shadowRoot!.querySelector(".header + .host-list")).not.toBeNull();
-		expect(el.shadowRoot!.querySelector(".header .settings-btn")).toBeNull();
+		const workspaceSettings = el.shadowRoot!.querySelector<HTMLButtonElement>(".header .settings-btn");
+		expect(workspaceSettings).not.toBeNull();
+		workspaceSettings!.click();
+		expect(onOpenSettings).toHaveBeenCalledWith();
 		expect(Array.from(el.shadowRoot!.querySelectorAll(".group-label"), (label) => label.textContent)).toEqual([
 			"beta / project",
 			"alpha / project",
