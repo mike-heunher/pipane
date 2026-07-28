@@ -310,13 +310,16 @@ function handleFilePreviewLinkEvent(event: MouseEvent, openInNewWindow: boolean)
 	if (event.defaultPrevented || event.altKey) return;
 	const target = event.target as HTMLElement | null;
 	const anchor = target?.closest("a") as HTMLAnchorElement | null;
-	if (!anchor) return;
+	const newWindowButton = target?.closest<HTMLButtonElement>(".file-preview-link-open-window") ?? null;
+	if (!anchor && !newWindowButton) return;
 
 	const messageList = document.querySelector("pi-message-list");
-	const previewPanel = anchor.closest(".file-preview-panel");
-	if (!previewPanel && (!messageList || !messageList.contains(anchor))) return;
+	const previewPanel = anchor?.closest(".file-preview-panel") ?? null;
+	const linkControl = anchor ?? newWindowButton;
+	if (!previewPanel && (!messageList || !linkControl || !messageList.contains(linkControl))) return;
 
-	const rawHref = anchor.getAttribute("href") ?? "";
+	const rawHref = newWindowButton?.dataset.filePreviewHref ?? anchor?.getAttribute("href") ?? "";
+	openInNewWindow ||= Boolean(newWindowButton);
 	const cwd = agent?.cwd;
 	const sessionPath = agent?.sessionFile;
 	if (!cwd || !sessionPath || !isPreviewableFileHref(rawHref)) return;

@@ -1,6 +1,6 @@
 # Unreleased
 
-- Open linked file previews in a separate sandboxed window from modified links or the preview header.
+- Open linked file previews in a separate sandboxed window from visible link actions, modified links, or the preview header.
 
 # 0.1.15 - 2026-07-28
 

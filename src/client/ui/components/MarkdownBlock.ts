@@ -3,6 +3,7 @@ import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { html, LitElement } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { isPreviewableFileHref } from "../../file-preview-panel.js";
 import { Marked, type Tokens } from "marked";
 
 const KATEX_OPTIONS = {
@@ -101,6 +102,15 @@ function encodeCode(code: string): string {
 	return btoa(binary);
 }
 
+function escapeAttribute(value: string): string {
+	return value.replace(/[&"<>]/g, (character) => ({
+		"&": "&amp;",
+		'"': "&quot;",
+		"<": "&lt;",
+		">": "&gt;",
+	})[character] ?? character);
+}
+
 function replaceCodeBlocks(content: string): string {
 	let result = content.replace(
 		/<pre><code class="language-(\w+)">([\s\S]+?)<\/code><\/pre>/g,
@@ -134,8 +144,11 @@ export class MarkdownBlock extends LitElement {
 		const renderer = new markdown.Renderer();
 		const originalLink = renderer.link;
 		renderer.link = function (token) {
-			return originalLink.call(this, token)
+			const link = originalLink.call(this, token)
 				.replace("<a ", '<a target="_blank" rel="noopener noreferrer" ');
+			if (!isPreviewableFileHref(token.href)) return link;
+			const href = escapeAttribute(token.href);
+			return `${link}<button type="button" class="file-preview-link-open-window" data-file-preview-href="${href}" title="Open file preview in new window" aria-label="Open file preview in new window">↗</button>`;
 		};
 		const originalTable = renderer.table;
 		renderer.table = function (token) {

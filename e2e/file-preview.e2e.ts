@@ -86,8 +86,10 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		await page.goto(`http://localhost:${server.port}`);
 		const guideLink = page.getByRole("link", { name: "project guide" });
 		await expect(guideLink).toBeVisible();
+		const directOpenButton = page.getByRole("button", { name: "Open file preview in new window" }).first();
+		await expect(directOpenButton).toBeVisible();
 		const directPopupPromise = page.waitForEvent("popup");
-		await guideLink.click({ modifiers: ["Control"] });
+		await directOpenButton.click();
 		const directPopup = await directPopupPromise;
 		await expect(directPopup.frameLocator(".file-preview-window-frame").getByRole("heading", { name: "Project Guide" })).toBeVisible();
 		await expect(page.locator(".file-preview-panel")).toHaveCount(0);

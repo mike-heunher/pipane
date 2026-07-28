@@ -1161,6 +1161,30 @@ markdown-block pre code {
 
 /* ── Linked file preview side panel ───────────────────────────── */
 
+.file-preview-link-open-window {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.15rem;
+	height: 1.15rem;
+	margin-inline: 0.18rem 0.1rem;
+	padding: 0;
+	border: 0;
+	border-radius: 0.2rem;
+	background: transparent;
+	color: var(--muted-foreground, #6b7280);
+	cursor: pointer;
+	font-size: 0.72rem;
+	line-height: 1;
+	vertical-align: text-bottom;
+}
+
+.file-preview-link-open-window:hover,
+.file-preview-link-open-window:focus-visible {
+	background: var(--accent, rgba(0, 0, 0, 0.05));
+	color: var(--foreground, #111);
+}
+
 .file-preview-container {
 	position: relative;
 	width: 45%;
