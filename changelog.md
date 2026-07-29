@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add Home, Desktop, Documents, Downloads, and root shortcuts to the new-project folder selector.
 - Open linked file previews in a separate sandboxed window from visible link actions, modified links, or the preview header.
 
 # 0.1.15 - 2026-07-28

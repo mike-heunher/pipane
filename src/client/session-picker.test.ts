@@ -279,6 +279,38 @@ describe("session-picker", () => {
 		expect(el.shadowRoot!.querySelectorAll(".host-row")).toHaveLength(1);
 	});
 
+	it("offers common shortcuts in the new-project folder selector", async () => {
+		const agent = new MockAgent();
+		const browseDirectory = vi.spyOn(agent, "browseDirectory").mockImplementation(async (requestedPath) => ({
+			path: requestedPath === "~"
+				? "/home/user"
+				: requestedPath.replace(/^~/u, "/home/user"),
+			dirs: [],
+		}));
+		const newSession = vi.spyOn(agent, "newSession");
+		const el = await createPicker(agent);
+
+		el.shadowRoot!.querySelector<HTMLButtonElement>(".new-btn")!.click();
+		await vi.waitFor(() => expect(browseDirectory).toHaveBeenCalledWith("~"));
+		await vi.waitFor(() => expect(el.shadowRoot!.querySelector<HTMLButtonElement>('[data-shortcut="desktop"]')?.disabled).toBe(false));
+
+		const shortcuts = Array.from(el.shadowRoot!.querySelectorAll<HTMLButtonElement>(".folder-shortcut"));
+		expect(shortcuts.map((button) => button.textContent?.trim())).toEqual([
+			"Home",
+			"Desktop",
+			"Documents",
+			"Downloads",
+			"Root",
+		]);
+
+		el.shadowRoot!.querySelector<HTMLButtonElement>('[data-shortcut="desktop"]')!.click();
+		await vi.waitFor(() => expect(browseDirectory).toHaveBeenCalledWith("~/Desktop"));
+		await vi.waitFor(() => expect(el.shadowRoot!.querySelector(".folder-picker-location-path")?.textContent).toBe("/home/user/Desktop"));
+		el.shadowRoot!.querySelector<HTMLButtonElement>(".folder-picker-actions button")!.click();
+
+		expect(newSession).toHaveBeenCalledWith("/home/user/Desktop");
+	});
+
 	it("creates and enters a new folder from the project explorer", async () => {
 		const agent = new MockAgent();
 		const browseDirectory = vi.spyOn(agent, "browseDirectory").mockImplementation(async (requestedPath) => ({

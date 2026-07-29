@@ -56,6 +56,14 @@ interface DirEntry {
 	path: string;
 }
 
+const FOLDER_SHORTCUTS = [
+	{ key: "home", label: "Home", path: "~" },
+	{ key: "desktop", label: "Desktop", path: "~/Desktop" },
+	{ key: "documents", label: "Documents", path: "~/Documents" },
+	{ key: "downloads", label: "Downloads", path: "~/Downloads" },
+	{ key: "root", label: "Root", path: "/" },
+] as const;
+
 const PINNED_STORAGE_KEY = "pipane-pinned-sessions";
 
 export function isPreviewHostname(hostname: string): boolean {
@@ -806,6 +814,44 @@ export class SessionPicker extends LitElement {
 			color: var(--picker-muted);
 			text-transform: uppercase;
 			letter-spacing: 0.03em;
+		}
+
+		.folder-shortcuts {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 0.3rem;
+			padding: 0.15rem 0.75rem 0.35rem;
+		}
+
+		.folder-shortcut {
+			display: flex;
+			align-items: center;
+			gap: 0.35rem;
+			min-width: 0;
+			padding: 0.35rem 0.45rem;
+			border: 1px solid var(--picker-border);
+			border-radius: 4px;
+			background: var(--picker-bg);
+			color: var(--picker-text);
+			cursor: pointer;
+			font-size: 0.72rem;
+			text-align: left;
+		}
+
+		.folder-shortcut:hover:not(:disabled) {
+			border-color: var(--picker-active);
+			background: var(--picker-hover);
+		}
+
+		.folder-shortcut:disabled {
+			cursor: default;
+			opacity: 0.5;
+		}
+
+		.folder-shortcut span {
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
 		}
 
 		.folder-picker-location {
@@ -1867,6 +1913,23 @@ export class SessionPicker extends LitElement {
 				</div>
 
 				<div class="folder-picker-list">
+					<div class="folder-picker-section">Shortcuts</div>
+					<div class="folder-shortcuts">
+						${FOLDER_SHORTCUTS.map((shortcut) => html`
+							<button
+								class="folder-shortcut"
+								data-shortcut=${shortcut.key}
+								title=${shortcut.path}
+								aria-label=${`Open ${shortcut.label} folder`}
+								?disabled=${this.folderLoading || this.folderCreating}
+								@click=${() => void this.browseTo(shortcut.path)}
+							>
+								${folderIcon}
+								<span>${shortcut.label}</span>
+							</button>
+						`)}
+					</div>
+
 					${knownCwds.length > 0 ? html`
 						<div class="folder-picker-section">Recent projects</div>
 						${knownCwds.map((cwd) => {
