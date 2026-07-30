@@ -46,7 +46,8 @@ const KEYBOARD_RESIZE_STEP = 16;
 const FRAME_LINK_BRIDGE = String.raw`<script>(() => {
 	const isLocalFile = (href) => {
 		if (!href || href.startsWith("#") || /^(?:https?|mailto|tel|data|javascript|blob|vscode):/i.test(href)) return false;
-		if (/^file:/i.test(href)) return true;
+		if (/^(?:file|sandbox):/i.test(href)) return true;
+		if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
 		const path = href.split(/[?#]/, 1)[0];
 		return path.startsWith("/") || path.startsWith("./") || path.startsWith("../") || path.includes("/") || /\.(?:md|markdown|mdown|mkd|mdx|txt|log|json|jsonl|ya?ml|toml|ini|conf|config|xml|html?|css|scss|sass|less|[cm]?[jt]sx?|vue|svelte|py|rb|php|java|kt|kts|go|rs|swift|c|cc|cpp|cxx|h|hh|hpp|hxx|sh|bash|zsh|fish|ps1|sql|graphql|gql|proto|dockerfile)$/i.test(path) || /^(?:readme|changelog|agents?)$/i.test(path);
 	};
@@ -161,6 +162,19 @@ function stripLinkSuffix(value: string): string {
 function decodePath(value: string): string | null {
 	try {
 		return decodeURIComponent(value);
+	} catch {
+		return null;
+	}
+}
+
+function decodeLocalFileUrl(value: string): string | null {
+	try {
+		const url = new URL(value);
+		const protocol = url.protocol.toLowerCase();
+		if (protocol !== "file:" && protocol !== "sandbox:") return null;
+		if (url.hostname && !(protocol === "file:" && url.hostname === "localhost")) return null;
+		if (!url.pathname.startsWith("/")) return null;
+		return decodePath(url.pathname);
 	} catch {
 		return null;
 	}
@@ -310,8 +324,8 @@ function handleFilePreviewResizeKeydown(event: KeyboardEvent): void {
 export function isPreviewableFileHref(rawHref: string): boolean {
 	const href = rawHref.trim();
 	if (!href || href.startsWith("#")) return false;
-	if (/^(?:https?|mailto|tel|data|javascript|blob|vscode):/i.test(href)) return false;
-	if (/^file:/i.test(href)) return true;
+	if (/^(?:file|sandbox):/i.test(href)) return decodeLocalFileUrl(href) !== null;
+	if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false;
 
 	const pathValue = stripLinkSuffix(href);
 	if (!pathValue) return false;
@@ -410,19 +424,12 @@ export function linkifyPreviewableInlineCode(markdown: string): string {
 
 function decodeFileHref(rawHref: string): string | null {
 	if (!isPreviewableFileHref(rawHref)) return null;
-	let href = rawHref.trim();
-	if (/^file:/i.test(href)) {
-		try {
-			const url = new URL(href);
-			if (url.hostname && url.hostname !== "localhost") return null;
-			href = url.pathname;
-		} catch {
-			return null;
-		}
-	} else {
-		href = stripLinkSuffix(href);
+	const href = rawHref.trim();
+	if (/^(?:file|sandbox):/i.test(href)) {
+		const decoded = decodeLocalFileUrl(href);
+		return decoded && !decoded.includes("\0") ? decoded : null;
 	}
-	const decoded = decodePath(href);
+	const decoded = decodePath(stripLinkSuffix(href));
 	return decoded && !decoded.includes("\0") ? decoded : null;
 }
 

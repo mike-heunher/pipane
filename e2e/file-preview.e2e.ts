@@ -7,6 +7,7 @@ const PROJECT_CWD = "/tmp/file-preview-project";
 const GUIDE_PATH = `${PROJECT_CWD}/docs/guide.md`;
 const DETAILS_PATH = `${PROJECT_CWD}/docs/details.md`;
 const HTML_PATH = `${PROJECT_CWD}/examples/demo.html`;
+const SANDBOX_HTML_PATH = "/tmp/generated-file-preview.html";
 
 async function switchSession(page: Page, sessionPath: string): Promise<void> {
 	await page.evaluate(async (path) => {
@@ -30,7 +31,7 @@ async function startServer() {
 				created: "2026-07-21T12:00:00.000Z",
 				modified: "2026-07-21T12:01:00.000Z",
 				lastUserPromptTime: "2026-07-21T12:01:00.000Z",
-				messageCount: 4,
+				messageCount: 5,
 				firstMessage: "Show the project guide",
 			},
 			{
@@ -66,6 +67,12 @@ async function startServer() {
 						timestamp: 4,
 						stopReason: "end_turn",
 					},
+					{
+						role: "assistant",
+						content: [{ type: "text", text: `Download the [generated sandbox HTML](sandbox:${SANDBOX_HTML_PATH}).` }],
+						timestamp: 5,
+						stopReason: "end_turn",
+					},
 				],
 			},
 			[OTHER_SESSION_PATH]: {
@@ -76,6 +83,7 @@ async function startServer() {
 			[GUIDE_PATH]: "# Project Guide\n\nThis is **rendered markdown** with $E = mc^2$.\n\n\\[\n\\int_0^1 x^2 \\, dx\n\\]\n\n[More details](details.md)",
 			[DETAILS_PATH]: "# Details\n\nNested file links resolve beside the open document.",
 			[HTML_PATH]: "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive HTML</h1><output id=\"script-status\"></output><a href=\"../docs/details.md\">Open details</a><script>document.getElementById('script-status').textContent = 'Scripts work';<\/script></body></html>",
+			[SANDBOX_HTML_PATH]: "<!doctype html><html><body><h1>Generated Sandbox HTML</h1></body></html>",
 		},
 	});
 }
@@ -166,6 +174,10 @@ test("renders active HTML in the isolated preview iframe", async ({ page }) => {
 		await previewFrame.getByRole("link", { name: "Open details" }).click();
 		await expect(panel.locator(".file-preview-title")).toHaveText("details.md");
 		await expect(previewFrame.getByRole("heading", { name: "Details" })).toBeVisible();
+
+		await page.getByRole("link", { name: "generated sandbox HTML" }).click();
+		await expect(panel.locator(".file-preview-path")).toHaveText(SANDBOX_HTML_PATH);
+		await expect(previewFrame.getByRole("heading", { name: "Generated Sandbox HTML" })).toBeVisible();
 	} finally {
 		await server.close();
 	}

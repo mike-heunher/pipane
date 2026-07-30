@@ -1,5 +1,6 @@
 # Unreleased
 
+- Open Pi-generated `sandbox:/...` file links from their intended absolute backend paths.
 - Add Home, Desktop, Documents, Downloads, and root shortcuts to the new-project folder selector.
 - Open linked file previews in a separate sandboxed window from visible link actions, modified links, or the preview header.
 

@@ -40,7 +40,10 @@ describe("linked file preview", () => {
 		expect(isPreviewableFileHref("README.md")).toBe(true);
 		expect(isPreviewableFileHref("docs/architecture.md#transport")).toBe(true);
 		expect(isPreviewableFileHref("file:///tmp/project/notes.md")).toBe(true);
+		expect(isPreviewableFileHref("sandbox:/tmp/generated-preview.html")).toBe(true);
+		expect(isPreviewableFileHref("sandbox://remote/tmp/generated-preview.html")).toBe(false);
 		expect(isPreviewableFileHref("https://example.com/readme.md")).toBe(false);
+		expect(isPreviewableFileHref("ssh://example.com/readme.md")).toBe(false);
 		expect(isPreviewableFileHref("#transport")).toBe(false);
 	});
 
@@ -51,6 +54,8 @@ describe("linked file preview", () => {
 			.toBe("/work/project/api.md");
 		expect(resolveFileHref("file:///work/project/README.md#top", "/ignored"))
 			.toBe("/work/project/README.md");
+		expect(resolveFileHref("sandbox:/tmp/generated%20preview.html#top", "/ignored"))
+			.toBe("/tmp/generated preview.html");
 	});
 
 	it("linkifies previewable inline-code paths without changing examples or existing links", () => {
@@ -114,6 +119,10 @@ describe("linked file preview", () => {
 		openFilePreviewLink("file:///tmp/absolute.md#top", "/repo", "/sessions/test.jsonl", undefined, api);
 		await settle();
 		expect(api.getFileContent).toHaveBeenLastCalledWith("/sessions/test.jsonl", "/tmp/absolute.md");
+
+		openFilePreviewLink("sandbox:/tmp/generated%20preview.html", "/repo", "/sessions/test.jsonl", undefined, api);
+		await settle();
+		expect(api.getFileContent).toHaveBeenLastCalledWith("/sessions/test.jsonl", "/tmp/generated preview.html");
 	});
 
 	it("renders KaTeX math with the active application theme", async () => {
