@@ -86,7 +86,7 @@ test.describe("conversation composer drafts", () => {
 		}
 	});
 
-	test("restores a disconnected prompt with every attachment", async ({ page }) => {
+	test("reconciles a disconnected prompt without restoring a duplicate draft", async ({ page }) => {
 		const mock = await startMockPipaneServer({
 			sessions: [session("a", SESSION_A, "Conversation A", "2026-07-21T12:00:00.000Z")],
 			states: { [SESSION_A]: [] },
@@ -107,10 +107,12 @@ test.describe("conversation composer drafts", () => {
 
 			await textarea.press("Enter");
 
-			await expect(page.getByText("Prompt failed: Backend transport disconnected", { exact: false })).toBeVisible();
-			await expect(textarea).toHaveValue("do not lose this prompt");
-			await expect(editor.locator("attachment-tile [title='alpha.txt']")).toBeVisible();
-			await expect(editor.locator("attachment-tile [title='beta.txt']")).toBeVisible();
+			await expect(textarea).toHaveValue("");
+			await expect(editor.locator("attachment-tile")).toHaveCount(0);
+			await expect.poll(() => mock.getReceivedCommands("prompt").length, { timeout: 12_000 }).toBe(2);
+			const prompts = mock.getReceivedCommands("prompt");
+			expect(prompts[1]).toMatchObject({ id: prompts[0].id, operationId: prompts[0].operationId });
+			await expect(page.getByText("Prompt failed: Backend transport disconnected", { exact: false })).toHaveCount(0);
 		} finally {
 			await mock.close();
 		}

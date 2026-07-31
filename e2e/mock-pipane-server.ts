@@ -68,6 +68,7 @@ export class MockPipaneServer {
 	private readonly updateRequests: UpdateTarget[] = [];
 	private readonly sessionRevisions = new Map<string, number>();
 	private readonly disconnectOnCommands: Set<string>;
+	private readonly receivedCommands: any[] = [];
 	private client: WebSocket | null = null;
 
 	private constructor(
@@ -208,6 +209,7 @@ export class MockPipaneServer {
 	private handleCommand(ws: WebSocket, raw: string): void {
 		const command = JSON.parse(raw);
 		if (!command.id) return;
+		this.receivedCommands.push(command);
 		if (this.disconnectOnCommands.delete(command.type)) {
 			ws.close(1011, `Mock disconnect during ${command.type}`);
 			return;
@@ -240,6 +242,12 @@ export class MockPipaneServer {
 				if (command.sessionPath) this.sendSessionState(command.sessionPath, undefined, ws);
 				respond();
 				break;
+			case "prompt":
+				respond({ newSessionPath: command.sessionPath });
+				break;
+			case "fork_prompt":
+				respond({ newSessionPath: command.sessionPath });
+				break;
 			default:
 				respond();
 		}
@@ -247,6 +255,12 @@ export class MockPipaneServer {
 
 	setSessions(sessions: any[]): void {
 		this.sessions = [...sessions];
+	}
+
+	getReceivedCommands(type?: string): any[] {
+		return this.receivedCommands
+			.filter((command) => !type || command.type === type)
+			.map((command) => ({ ...command }));
 	}
 
 	getUpdateNotices(): UpdateNotice[] {

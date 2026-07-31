@@ -1,5 +1,6 @@
 # Unreleased
 
+- Replay unresolved prompts, forked prompts, and steering after reconnect without executing accepted operations twice or restoring duplicate drafts.
 - Require token authentication on localhost and reject cross-origin browser WebSockets before they can control the local agent.
 - Open Pi-generated `sandbox:/...` file links from their intended absolute backend paths.
 - Add Home, Desktop, Documents, Downloads, and root shortcuts to the new-project folder selector.

@@ -14,7 +14,7 @@ The server rejects invalid JSON, unsupported versions, unknown commands, and inv
 
 The v1 command union covers installation, session subscription, prompting and steering, steering removal, abort and hard kill, compaction, model and command discovery, session statuses and authoritative session statistics, fork and fork/prompt, session naming, and process reload.
 
-`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills.
+`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Prompt, fork/prompt, and steering commands carry a browser-generated `operationId`; unresolved commands retain their exact request frame and correlation id across carrier reconnects. The backend keeps active and completed operation receipts, rejects reuse with another payload, and replays the accepted response without dispatching the operation to Pi twice. A disconnect after Pi persistence therefore reconciles the original submission instead of restoring a duplicate composer draft. Older clients without `operationId` remain compatible but do not receive reconnect idempotency. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills.
 
 ### Server messages
 
@@ -124,7 +124,7 @@ Every method has runtime-validated parameters, correlated responses, stable erro
 
 The browser's `RemoteBackendManager` maintains one client/store per authorized backend id, requests a fresh ticket whenever a WebRTC carrier reconnects, and never treats an arbitrary URL backend id as authorized until signed account discovery includes it. The account workspace opens a direct connection to each reachable authorized host so it can merge backend-scoped session metadata and live status in one sidebar; only the selected host/session drives the conversation renderer and receives a session subscription. Session metadata remains end-to-end between browser and backend and is not indexed by rendezvous. An authorized browser can invite another device from the host menu; terminal `pipane pair` remains the no-email fallback when every browser key is unavailable.
 
-Application streaming, turn control, and session snapshots remain on validated v1 frames during parity migration. Semantic v2 is deployed beside v1 rather than changing v1's renderer-state contract in place.
+Application streaming, turn control, and session snapshots remain on validated v1 frames during parity migration. Prompt and steering mutations use additive application-v1 operation identities and reconnect receipts; semantic v2 remains deployed beside v1 rather than changing v1's renderer-state contract in place.
 
 ## Pi subprocess RPC protocol
 

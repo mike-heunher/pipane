@@ -127,6 +127,36 @@ describe("WsHandler protocol boundary", () => {
 		expect(handler.clients.size).toBe(0);
 	});
 
+	it("replays an accepted prompt receipt without executing the operation twice", async () => {
+		const { handler } = makeHandler();
+		let settle!: () => void;
+		const settlement = new Promise<void>((resolve) => { settle = resolve; });
+		const execute = vi.fn(async (accept: (data: { newSessionPath: string }) => void) => {
+			accept({ newSessionPath: "/tmp/once.jsonl" });
+			await settlement;
+		});
+		const command = {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "request-one",
+			type: "prompt",
+			operationId: "operation-once",
+			sessionPath: "/tmp/once.jsonl",
+			message: "do this once",
+			model: { provider: "anthropic", modelId: "model" },
+		};
+
+		await expect(handler.runIdempotentControl(command, execute)).resolves.toEqual({
+			newSessionPath: "/tmp/once.jsonl",
+		});
+		await expect(handler.runIdempotentControl({ ...command, id: "request-replayed" }, execute)).resolves.toEqual({
+			newSessionPath: "/tmp/once.jsonl",
+		});
+		expect(execute).toHaveBeenCalledOnce();
+		await expect(handler.runIdempotentControl({ ...command, message: "different" }, execute))
+			.rejects.toThrow("reused with a different command");
+		settle();
+	});
+
 	it("returns structured errors for malformed JSON, unknown commands, and version mismatches", async () => {
 		const { handler } = makeHandler();
 		const { ws, sent } = makeWs();

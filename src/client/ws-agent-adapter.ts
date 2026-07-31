@@ -100,6 +100,10 @@ type ScopedSessionSync = SessionSyncMessage & {
 
 interface PendingRequest {
 	command: ClientCommandType;
+	encodedFrame: string;
+	resumable: boolean;
+	timeoutMs: number;
+	timer?: ReturnType<typeof setTimeout>;
 	resolve: (data: unknown) => void;
 	reject: (error: Error) => void;
 }
@@ -529,6 +533,11 @@ export class WsAgentAdapter implements BackendClient {
 	}
 
 	disconnect(): void {
+		for (const pending of this.pendingRequests.values()) {
+			if (pending.timer) clearTimeout(pending.timer);
+			pending.reject(new Error("Backend transport disconnected"));
+		}
+		this.pendingRequests.clear();
 		this.transport.close();
 	}
 
@@ -562,11 +571,15 @@ export class WsAgentAdapter implements BackendClient {
 	}
 
 	private handleTransportDisconnected(): void {
-		// Requests written to the old carrier can never receive a response.
-		for (const pending of this.pendingRequests.values()) {
+		// Idempotent turn submissions retain their exact frame and correlation id:
+		// the backend can replay the accepted result without executing them twice.
+		for (const [id, pending] of this.pendingRequests) {
+			if (pending.timer) clearTimeout(pending.timer);
+			pending.timer = undefined;
+			if (pending.resumable) continue;
 			pending.reject(new Error("Backend transport disconnected"));
+			this.pendingRequests.delete(id);
 		}
-		this.pendingRequests.clear();
 
 		// A sent edit may have failed before its acknowledgement; allow the
 		// reconnect snapshot to restore truth. Keep genuinely unsent edits.
@@ -582,6 +595,17 @@ export class WsAgentAdapter implements BackendClient {
 	 * session and refreshes session statuses so the UI is up-to-date.
 	 */
 	private async onReconnected() {
+		// Replay unresolved idempotent operations before ordinary refresh traffic.
+		// Their operationId and request id remain unchanged across carriers.
+		for (const [id, pending] of this.pendingRequests) {
+			if (!pending.resumable) continue;
+			this.armPendingRequestTimeout(id, pending);
+			try {
+				this.transport.send(pending.encodedFrame);
+			} catch {
+				// A later reconnect or the resumed timeout will settle the request.
+			}
+		}
 		void this.refreshBackendCapabilities();
 		// Re-subscribe to the current session to get fresh state
 		if (this._sessionSubscriptionActive && this._sessionPath && this._sessionStatus !== "virtual") {
@@ -730,6 +754,7 @@ export class WsAgentAdapter implements BackendClient {
 				const pending = this.pendingRequests.get(data.id);
 				if (!pending) return;
 				this.pendingRequests.delete(data.id);
+				if (pending.timer) clearTimeout(pending.timer);
 				if (data.command !== pending.command) {
 					pending.reject(new Error(
 						`Mismatched response for ${pending.command}: received ${data.command}`,
@@ -1161,28 +1186,42 @@ export class WsAgentAdapter implements BackendClient {
 		}
 
 		const id = `req_${++this.requestId}`;
+		const encodedFrame = encodeClientCommand(command, id);
+		const resumable = (command.type === "prompt" || command.type === "fork_prompt" || command.type === "steer")
+			&& typeof (command as { operationId?: unknown }).operationId === "string";
 		return new Promise<CommandResponseData<Payload["type"]>>((resolve, reject) => {
 			const timeoutMs = command.type === "compact"
 				? COMPACT_CLIENT_TIMEOUT_MS
 				: command.type === "prompt" || command.type === "fork_prompt"
 					? PROMPT_CLIENT_TIMEOUT_MS
 					: 30000;
-			const timeout = setTimeout(() => {
-				this.pendingRequests.delete(id);
-				reject(new Error(`Timeout waiting for response to ${command.type}`));
-			}, timeoutMs);
-
-			this.pendingRequests.set(id, {
+			const pending: PendingRequest = {
 				command: command.type,
-				resolve: (data) => {
-					clearTimeout(timeout);
-					resolve(data as CommandResponseData<Payload["type"]>);
-				},
-				reject: (error) => { clearTimeout(timeout); reject(error); },
-			});
+				encodedFrame,
+				resumable,
+				timeoutMs,
+				resolve: (data) => resolve(data as CommandResponseData<Payload["type"]>),
+				reject,
+			};
+			this.pendingRequests.set(id, pending);
+			this.armPendingRequestTimeout(id, pending);
 
-			this.transport.send(encodeClientCommand(command, id));
+			try {
+				this.transport.send(encodedFrame);
+			} catch (error) {
+				if (pending.timer) clearTimeout(pending.timer);
+				this.pendingRequests.delete(id);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			}
 		});
+	}
+
+	private armPendingRequestTimeout(id: string, pending: PendingRequest): void {
+		if (pending.timer) clearTimeout(pending.timer);
+		pending.timer = setTimeout(() => {
+			this.pendingRequests.delete(id);
+			pending.reject(new Error(`Timeout waiting for response to ${pending.command}`));
+		}, pending.timeoutMs);
 	}
 
 	// ── Models ─────────────────────────────────────────────────────────────
@@ -1386,7 +1425,7 @@ export class WsAgentAdapter implements BackendClient {
 			if (attachedPath && this._globalSessionStatus.get(attachedPath) === "running") {
 				this.enqueueSteering(attachedPath, text);
 				try {
-					await this.send({ type: "steer", sessionPath: attachedPath, message: text });
+					await this.send({ type: "steer", sessionPath: attachedPath, message: text, operationId: crypto.randomUUID() });
 				} catch (error) {
 					throw associatePromptFailureSession(error, attachedPath);
 				}
@@ -1413,6 +1452,7 @@ export class WsAgentAdapter implements BackendClient {
 					type: "steer",
 					sessionPath: targetSessionPath,
 					message: text,
+					operationId: crypto.randomUUID(),
 				});
 			} catch (error) {
 				throw associatePromptFailureSession(error, targetSessionPath);
@@ -1445,6 +1485,7 @@ export class WsAgentAdapter implements BackendClient {
 					cwd: this._pendingCwd,
 					message: text,
 					model: modelPayload,
+					operationId: crypto.randomUUID(),
 					thinkingLevel,
 					controlRevision,
 					images,
@@ -1486,6 +1527,7 @@ export class WsAgentAdapter implements BackendClient {
 				sessionPath: targetSessionPath,
 				message: text,
 				model: modelPayload,
+				operationId: crypto.randomUUID(),
 				thinkingLevel,
 				controlRevision,
 				images,
@@ -1749,7 +1791,7 @@ export class WsAgentAdapter implements BackendClient {
 		const isRunning = this._globalSessionStatus.get(this._sessionPath) === "running";
 		if (!isRunning) return;
 		this.enqueueSteering(this._sessionPath, text);
-		this.send({ type: "steer", sessionPath: this._sessionPath, message: text }).catch(console.error);
+		this.send({ type: "steer", sessionPath: this._sessionPath, message: text, operationId: crypto.randomUUID() }).catch(console.error);
 	}
 
 	removeSteering(index: number) {
@@ -1900,6 +1942,7 @@ export class WsAgentAdapter implements BackendClient {
 				sessionPath: this._sessionPath,
 				message: text,
 				model: modelPayload,
+				operationId: crypto.randomUUID(),
 				thinkingLevel: this._state.thinkingLevel as ThinkingLevelValue,
 				controlRevision,
 				images,

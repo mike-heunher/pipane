@@ -30,8 +30,8 @@ const sessionStats = {
 const clientCommands = [
 	{ type: "install_pi" },
 	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl", cachedStateHash, knownMessageHashes: [cachedMessageHash] },
-	{ type: "prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2, images: [{ type: "image", uploadedPath: "/tmp/pipane-upload/photo.png", mimeType: "image/png" }] },
-	{ type: "steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
+	{ type: "prompt", operationId: "operation-prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2, images: [{ type: "image", uploadedPath: "/tmp/pipane-upload/photo.png", mimeType: "image/png" }] },
+	{ type: "steer", operationId: "operation-steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
 	{ type: "remove_steering", sessionPath: "/sessions/a.jsonl", index: 0 },
 	{ type: "abort", sessionPath: "/sessions/a.jsonl" },
 	{ type: "hard_kill", sessionPath: "/sessions/a.jsonl" },
@@ -41,7 +41,7 @@ const clientCommands = [
 	{ type: "get_session_statuses" },
 	{ type: "get_session_stats", sessionPath: "/sessions/a.jsonl" },
 	{ type: "fork", sessionPath: "/sessions/a.jsonl", entryId: "entry-1" },
-	{ type: "fork_prompt", sessionPath: "/sessions/a.jsonl", message: "branch", model, images: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
+	{ type: "fork_prompt", operationId: "operation-fork", sessionPath: "/sessions/a.jsonl", message: "branch", model, images: [{ type: "image", data: "AA==", mimeType: "image/png" }] },
 	{ type: "set_session_name", sessionPath: "/sessions/a.jsonl", name: "typed-protocol" },
 	{ type: "get_commands", sessionPath: "/sessions/a.jsonl", cwd: "/project-a" },
 	{ type: "reload_processes" },
@@ -108,6 +108,17 @@ describe("WebSocket protocol contract", () => {
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("$command.model") } });
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, type: "get_session_stats" })))
 			.toMatchObject({ ok: false, error: { code: "invalid_message", message: expect.stringContaining("sessionPath") } });
+		expect(decodeClientCommand(JSON.stringify({
+			...envelope,
+			type: "prompt",
+			operationId: "not a safe id",
+			sessionPath: "/sessions/a.jsonl",
+			message: "hi",
+			model,
+		}))).toMatchObject({
+			ok: false,
+			error: { code: "invalid_message", message: expect.stringContaining("operationId") },
+		});
 		expect(decodeClientCommand(JSON.stringify({
 			...envelope,
 			type: "prompt",

@@ -11,6 +11,7 @@
 
 import type { WebSocketServer } from "ws";
 import type { IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
 import {
 	FRAME_CONNECTION_OPEN,
 	WebSocketFrameConnection,
@@ -78,11 +79,20 @@ export interface WsHandlerOptions {
 
 type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: Type }>;
 type ControlCommand = CommandOf<"prompt"> | CommandOf<"fork_prompt">;
+type IdempotentControlCommand = ControlCommand | CommandOf<"steer">;
+type IdempotentControlType = IdempotentControlCommand["type"];
+interface OperationReceipt {
+	fingerprint: string;
+	response: Promise<unknown>;
+	settled: boolean;
+}
 type ExtensionStatusPayload = Omit<ExtensionStatusMessage, "protocolVersion">;
 type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
 const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
+const MAX_COMPLETED_CONTROL_OPERATIONS = 512;
+const MAX_ACTIVE_CONTROL_OPERATIONS = 128;
 const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] as const;
 
 interface ClientState {
@@ -138,6 +148,8 @@ export class WsHandler {
 	private sessionRevisions = new Map<string, { revision: number; hash: string }>();
 	/** Per-session trailing-edge disk refreshes for detached JSONL bursts. */
 	private pendingDetachedSyncs = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Reconnect-spanning prompt/steer receipts keyed by browser operation identity. */
+	private controlOperations = new Map<string, OperationReceipt>();
 
 	private piAvailable: boolean;
 	private piInstalling = false;
@@ -474,12 +486,19 @@ export class WsHandler {
 				case "subscribe_session":
 					this.handleSubscribeSession(ws, command);
 					break;
-				case "prompt":
-					await this.handlePrompt(ws, command);
+				case "prompt": {
+					const data = await this.runIdempotentControl(command, (accept) => this.handlePrompt(ws, command, accept));
+					this.sendSuccess(ws, command.id, "prompt", data);
 					break;
-				case "steer":
-					await this.handleSteer(ws, command);
+				}
+				case "steer": {
+					const data = await this.runIdempotentControl(command, async (accept) => {
+						await this.handleSteer(command);
+						accept({});
+					});
+					this.sendSuccess(ws, command.id, "steer", data);
 					break;
+				}
 				case "remove_steering":
 					await this.handleRemoveSteering(ws, command);
 					break;
@@ -507,9 +526,11 @@ export class WsHandler {
 				case "fork":
 					await this.handleFork(ws, command);
 					break;
-				case "fork_prompt":
-					await this.handleForkPrompt(ws, command);
+				case "fork_prompt": {
+					const data = await this.runIdempotentControl(command, (accept) => this.handleForkPrompt(ws, command, accept));
+					this.sendSuccess(ws, command.id, "fork_prompt", data);
 					break;
+				}
 				case "set_session_name":
 					await this.handleSetSessionName(ws, command);
 					break;
@@ -665,7 +686,11 @@ export class WsHandler {
 			: this.materializeUploadedImage(image.uploadedPath, image.mimeType)));
 	}
 
-	private async handlePrompt(ws: ServerFrameConnection, command: CommandOf<"prompt">): Promise<void> {
+	private async handlePrompt(
+		ws: ServerFrameConnection,
+		command: CommandOf<"prompt">,
+		accept: (data: CommandResponseData<"prompt">) => void = (data) => this.sendSuccess(ws, command.id, "prompt", data),
+	): Promise<void> {
 		const requestedPath = command.sessionPath;
 		if (!requestedPath) throw new Error("Missing sessionPath");
 		let sessionPath = requestedPath === "__new__"
@@ -736,14 +761,15 @@ export class WsHandler {
 				// browser submission now, before settlement or control reconciliation can
 				// encounter a transient failure and offer the same text for retry.
 				promptAccepted = true;
-				this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
+				accept({ newSessionPath: sessionPath });
 
 				await this.reconcileEffectiveControlState(proc!, actor!);
 				return { observer, response, generation };
 			});
 
 			if (!start) {
-				this.sendSuccess(ws, command.id, "prompt", { newSessionPath: sessionPath });
+				promptAccepted = true;
+				accept({ newSessionPath: sessionPath });
 				return;
 			}
 
@@ -778,13 +804,12 @@ export class WsHandler {
 		}
 	}
 
-	private async handleSteer(ws: ServerFrameConnection, command: CommandOf<"steer">): Promise<void> {
+	private async handleSteer(command: CommandOf<"steer">): Promise<void> {
 		const sessionPath = command.sessionPath;
 		if (!sessionPath) throw new Error("Missing sessionPath");
 		const actor = this.registry.find(sessionPath);
 		if (!actor) throw new Error("Session is not attached (agent not running)");
 		await actor.enqueue("steer", () => this.sendSteering(actor, command.message));
-		this.sendSuccess(ws, command.id, "steer", {});
 	}
 
 	private async handleRemoveSteering(ws: ServerFrameConnection, command: CommandOf<"remove_steering">): Promise<void> {
@@ -972,7 +997,11 @@ export class WsHandler {
 		});
 	}
 
-	private async handleForkPrompt(ws: ServerFrameConnection, command: CommandOf<"fork_prompt">): Promise<void> {
+	private async handleForkPrompt(
+		ws: ServerFrameConnection,
+		command: CommandOf<"fork_prompt">,
+		accept: (data: CommandResponseData<"fork_prompt">) => void = (data) => this.sendSuccess(ws, command.id, "fork_prompt", data),
+	): Promise<void> {
 		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
 		const message = command.message;
 		if (!message) throw new Error("Missing message");
@@ -1021,7 +1050,7 @@ export class WsHandler {
 				});
 
 				promptAccepted = true;
-				this.sendSuccess(ws, command.id, "fork_prompt", { newSessionPath });
+				accept({ newSessionPath });
 
 				await this.reconcileEffectiveControlState(proc, actor);
 				return { observer, generation };
@@ -1074,6 +1103,61 @@ export class WsHandler {
 	}
 
 	// ── Internal helpers ─────────────────────────────────────────────────
+
+	private runIdempotentControl<Type extends IdempotentControlType>(
+		command: Extract<IdempotentControlCommand, { type: Type }>,
+		execute: (accept: (data: CommandResponseData<Type>) => void) => Promise<void>,
+	): Promise<CommandResponseData<Type>> {
+		const operationId = command.operationId;
+		const { protocolVersion: _protocolVersion, id: _requestId, ...operation } = command;
+		const fingerprint = createHash("sha256").update(JSON.stringify(operation)).digest("base64url");
+		if (operationId) {
+			const existing = this.controlOperations.get(operationId);
+			if (existing) {
+				if (existing.fingerprint !== fingerprint) {
+					return Promise.reject(new Error("Operation id was reused with a different command"));
+				}
+				return existing.response as Promise<CommandResponseData<Type>>;
+			}
+			const active = [...this.controlOperations.values()].filter((receipt) => !receipt.settled).length;
+			if (active >= MAX_ACTIVE_CONTROL_OPERATIONS) {
+				return Promise.reject(new Error("Too many control operations are active"));
+			}
+		}
+
+		let accepted = false;
+		let resolveResponse!: (data: CommandResponseData<Type>) => void;
+		let rejectResponse!: (error: Error) => void;
+		const response = new Promise<CommandResponseData<Type>>((resolve, reject) => {
+			resolveResponse = resolve;
+			rejectResponse = reject;
+		});
+		const receipt: OperationReceipt = { fingerprint, response, settled: false };
+		if (operationId) this.controlOperations.set(operationId, receipt);
+
+		void execute((data) => {
+			if (accepted) return;
+			accepted = true;
+			resolveResponse(data);
+		}).then(() => {
+			if (!accepted) rejectResponse(new Error(`${command.type} finished without accepting the operation`));
+		}, (error) => {
+			if (!accepted) rejectResponse(error instanceof Error ? error : new Error(String(error)));
+		}).finally(() => {
+			receipt.settled = true;
+			this.pruneControlOperations();
+		});
+		return response;
+	}
+
+	private pruneControlOperations(): void {
+		if (this.controlOperations.size <= MAX_COMPLETED_CONTROL_OPERATIONS) return;
+		for (const [operationId, receipt] of this.controlOperations) {
+			if (!receipt.settled) continue;
+			this.controlOperations.delete(operationId);
+			if (this.controlOperations.size <= MAX_COMPLETED_CONTROL_OPERATIONS) break;
+		}
+	}
 
 	private async replacePiSession(
 		proc: RpcProcess,

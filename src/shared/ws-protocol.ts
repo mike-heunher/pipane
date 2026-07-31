@@ -76,6 +76,11 @@ interface SessionCommand {
 	sessionPath: string;
 }
 
+interface IdempotentCommand {
+	/** Stable browser-generated identity retained across carrier reconnects. */
+	operationId?: string;
+}
+
 export type ClientCommand = CommandEnvelope & (
 	| { type: "install_pi" }
 	| ({
@@ -93,8 +98,8 @@ export type ClientCommand = CommandEnvelope & (
 		thinkingLevel?: ThinkingLevelValue;
 		controlRevision?: number;
 		images?: WireImage[];
-	} & SessionCommand)
-	| ({ type: "steer"; message: string } & SessionCommand)
+	} & SessionCommand & IdempotentCommand)
+	| ({ type: "steer"; message: string } & SessionCommand & IdempotentCommand)
 	| ({ type: "remove_steering"; index: number } & SessionCommand)
 	| ({ type: "abort" } & SessionCommand)
 	| ({ type: "hard_kill" } & SessionCommand)
@@ -111,7 +116,7 @@ export type ClientCommand = CommandEnvelope & (
 		thinkingLevel?: ThinkingLevelValue;
 		controlRevision?: number;
 		images?: WireImage[];
-	} & SessionCommand)
+	} & SessionCommand & IdempotentCommand)
 	| ({ type: "set_session_name"; name: string } & SessionCommand)
 	| { type: "get_commands"; sessionPath?: string; cwd?: string }
 	| { type: "reload_processes" }
@@ -337,6 +342,14 @@ function optionalString(value: unknown, path: string): string | undefined {
 	return value === undefined ? undefined : string(value, path);
 }
 
+function optionalOperationId(value: unknown, path: string): void {
+	if (value === undefined) return;
+	const operationId = string(value, path, false);
+	if (operationId.length > 128 || !/^[A-Za-z0-9_-]+$/u.test(operationId)) {
+		fail(path, "expected at most 128 URL-safe characters");
+	}
+}
+
 function contentHash(value: unknown, path: string): string {
 	const hash = string(value, path, false);
 	if (!/^[a-f0-9]{64}$/u.test(hash)) fail(path, "expected a lowercase SHA-256 hash");
@@ -522,10 +535,12 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 				optionalString(command.cwd, "$command.cwd");
 				compactModel(command.model, "$command.model");
 				optionalCommandFields(command, "$command");
+				optionalOperationId(command.operationId, "$command.operationId");
 				break;
 			case "steer":
 				sessionPath();
 				string(command.message, "$command.message");
+				optionalOperationId(command.operationId, "$command.operationId");
 				break;
 			case "remove_steering":
 				sessionPath();
@@ -544,6 +559,7 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 				string(command.message, "$command.message");
 				compactModel(command.model, "$command.model");
 				optionalCommandFields(command, "$command");
+				optionalOperationId(command.operationId, "$command.operationId");
 				break;
 			case "set_session_name":
 				sessionPath();
