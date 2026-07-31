@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { IncomingMessage } from "node:http";
 
@@ -5,18 +6,19 @@ const AUTH_COOKIE_NAME = "pipane_auth";
 
 export interface AuthGuardOptions {
 	token: string;
-	disableLocalBypass?: boolean;
+	/** Explicit compatibility escape hatch. Token authentication is secure-by-default. */
+	allowLocalBypass?: boolean;
 	secureCookie?: boolean;
 }
 
 export class AuthGuard {
 	private readonly token: string;
-	private readonly disableLocalBypass: boolean;
+	private readonly allowLocalBypass: boolean;
 	private readonly secureCookie: boolean;
 
 	constructor(options: AuthGuardOptions) {
 		this.token = options.token;
-		this.disableLocalBypass = options.disableLocalBypass ?? false;
+		this.allowLocalBypass = options.allowLocalBypass ?? false;
 		this.secureCookie = options.secureCookie ?? false;
 	}
 
@@ -28,15 +30,23 @@ export class AuthGuard {
 			if (separator <= 0) continue;
 			const key = part.slice(0, separator).trim();
 			const value = part.slice(separator + 1).trim();
-			cookies[key] = decodeURIComponent(value);
+			try {
+				cookies[key] = decodeURIComponent(value);
+			} catch {
+				// A malformed cookie is unauthenticated, not a server error.
+			}
 		}
 		return cookies;
 	}
 
 	private isLocalRequest(req: Pick<IncomingMessage, "socket">): boolean {
-		if (this.disableLocalBypass) return false;
+		if (!this.allowLocalBypass) return false;
 		const address = req.socket.remoteAddress;
 		return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+	}
+
+	private hasValidCookie(req: Pick<IncomingMessage, "headers">): boolean {
+		return secretsEqual(this.parseCookies(req.headers.cookie)[AUTH_COOKIE_NAME], this.token);
 	}
 
 	private setAuthCookie(res: Response): void {
@@ -44,19 +54,39 @@ export class AuthGuard {
 		const maxAgeSeconds = 60 * 60 * 24 * 30;
 		res.setHeader(
 			"Set-Cookie",
-			`${AUTH_COOKIE_NAME}=${encodeURIComponent(this.token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure}`,
+			`${AUTH_COOKIE_NAME}=${encodeURIComponent(this.token)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAgeSeconds}${secure}`,
 		);
 	}
 
 	isAuthorizedRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
-		if (this.isLocalRequest(req)) return true;
-		return this.parseCookies(req.headers.cookie)[AUTH_COOKIE_NAME] === this.token;
+		return this.hasValidCookie(req) || this.isLocalRequest(req);
+	}
+
+	/**
+	 * Browsers may open WebSockets across origins, so cookie authentication alone
+	 * does not establish that the page controlling the socket is Pipane itself.
+	 */
+	isAuthorizedWebSocketRequest(req: Pick<IncomingMessage, "socket" | "headers">): boolean {
+		const cookieAuthorized = this.hasValidCookie(req);
+		const localAuthorized = this.isLocalRequest(req);
+		if (!cookieAuthorized && !localAuthorized) return false;
+
+		const origin = req.headers.origin;
+		if (origin === undefined) return cookieAuthorized || localAuthorized;
+		if (!isSameHttpOrigin(origin, req.headers.host)) return false;
+
+		// Even when the unsafe compatibility bypass is explicitly enabled, do not
+		// let DNS rebinding turn an attacker-controlled hostname into localhost.
+		if (!cookieAuthorized && localAuthorized) {
+			return isLoopbackHostname(new URL(origin).hostname);
+		}
+		return true;
 	}
 
 	register(app: Express): void {
 		app.get("/auth", (req: Request, res: Response) => {
 			const token = typeof req.query.token === "string" ? req.query.token : undefined;
-			if (this.isLocalRequest(req) || token === this.token) {
+			if (this.isLocalRequest(req) || secretsEqual(token, this.token)) {
 				this.setAuthCookie(res);
 				res.redirect("/");
 				return;
@@ -75,4 +105,30 @@ export class AuthGuard {
 			);
 		});
 	}
+}
+
+function secretsEqual(actual: string | undefined, expected: string): boolean {
+	if (actual === undefined) return false;
+	const actualBytes = Buffer.from(actual);
+	const expectedBytes = Buffer.from(expected);
+	return actualBytes.byteLength === expectedBytes.byteLength
+		&& timingSafeEqual(actualBytes, expectedBytes);
+}
+
+function isSameHttpOrigin(origin: string, host: string | undefined): boolean {
+	if (!host) return false;
+	try {
+		const parsed = new URL(origin);
+		return (parsed.protocol === "http:" || parsed.protocol === "https:")
+			&& parsed.host.toLowerCase() === host.toLowerCase()
+			&& parsed.username === ""
+			&& parsed.password === "";
+	} catch {
+		return false;
+	}
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+	const normalized = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+	return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
 }

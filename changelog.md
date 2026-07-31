@@ -1,5 +1,6 @@
 # Unreleased
 
+- Require token authentication on localhost and reject cross-origin browser WebSockets before they can control the local agent.
 - Open Pi-generated `sandbox:/...` file links from their intended absolute backend paths.
 - Add Home, Desktop, Documents, Downloads, and root shortcuts to the new-project folder selector.
 - Open linked file previews in a separate sandboxed window from visible link actions, modified links, or the preview header.

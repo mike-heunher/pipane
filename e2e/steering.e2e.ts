@@ -19,7 +19,7 @@ test.describe("Steering queue e2e", () => {
 	test.use({ viewport: { width: 1440, height: 900 } });
 
 	async function gotoFreshSession(page: Page, harness: E2EHarness) {
-		await page.goto(`http://localhost:${harness.pipanePort}`);
+		await page.goto(harness.authUrl);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();

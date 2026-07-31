@@ -15,6 +15,7 @@ import { WS_PROTOCOL_VERSION } from "../src/shared/ws-protocol.js";
 
 export interface E2EHarness {
 	pipanePort: number;
+	authUrl: string;
 	mockLlm: MockLlmServer;
 	setScenarios(scenarios: Scenario[]): void;
 	agentDir: string;
@@ -30,6 +31,7 @@ async function waitForReportedServer(
 	getStdout: () => string,
 	getStderr: () => string,
 	instanceId: string,
+	authToken: string,
 	timeoutMs = 30_000,
 ): Promise<number> {
 	const startedAt = Date.now();
@@ -63,6 +65,7 @@ async function waitForReportedServer(
 			try {
 				const response = await fetch(`http://127.0.0.1:${port}/api/debug/health`, {
 					cache: "no-store",
+					headers: { Cookie: `pipane_auth=${encodeURIComponent(authToken)}` },
 				});
 				if (response.ok) {
 					const body = await response.json() as { ok?: boolean; instanceId?: string };
@@ -130,9 +133,11 @@ async function stopProcessGroup(child: ChildProcess, graceMs = 3_000): Promise<v
 }
 
 /** Trigger Pi process acquisition without creating a session. */
-async function warmUpPiProcess(port: number): Promise<void> {
+async function warmUpPiProcess(port: number, authToken: string): Promise<void> {
 	const { default: WebSocket } = await import("ws");
-	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+	const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+		headers: { Cookie: `pipane_auth=${encodeURIComponent(authToken)}` },
+	});
 
 	await new Promise<void>((resolve, reject) => {
 		const finish = (error?: Error) => {
@@ -179,6 +184,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	const sessionsDir = path.join(agentDir, "sessions");
 	const projectDir = path.join(tmpBase, "project");
 	const instanceId = `e2e-${crypto.randomUUID()}`;
+	const authToken = crypto.randomUUID();
 
 	mkdirSync(sessionsDir, { recursive: true });
 	mkdirSync(projectDir, { recursive: true });
@@ -247,6 +253,7 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 			...sanitizedEnv,
 			PORT: "0",
 			PIPANE_INSTANCE_ID: instanceId,
+			PIPANE_AUTH_TOKEN: authToken,
 			PIPANE_RENDEZVOUS_URL: "",
 			PIPANE_SKIP_UPDATE_CHECK: "1",
 			PI_CWD: projectDir,
@@ -282,10 +289,11 @@ export async function startHarness(scenarios?: Scenario[]): Promise<E2EHarness> 
 	};
 
 	try {
-		const pipanePort = await waitForReportedServer(child, () => stdout, () => stderr, instanceId);
-		await warmUpPiProcess(pipanePort);
+		const pipanePort = await waitForReportedServer(child, () => stdout, () => stderr, instanceId, authToken);
+		await warmUpPiProcess(pipanePort, authToken);
 		return {
 			pipanePort,
+			authUrl: `http://localhost:${pipanePort}/auth?token=${encodeURIComponent(authToken)}`,
 			mockLlm,
 			setScenarios: (next) => mockLlm.setScenarios(next),
 			agentDir,

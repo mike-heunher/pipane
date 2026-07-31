@@ -23,7 +23,7 @@ test.describe("Real stack e2e", () => {
 
 	/** Navigate to the app and start a fresh (virtual) session for a clean test. */
 	async function gotoFreshSession(page: Page, harness: E2EHarness) {
-		await page.goto(`http://localhost:${harness.pipanePort}`);
+		await page.goto(harness.authUrl);
 		const editor = page.locator("message-editor");
 		await expect(editor).toBeVisible({ timeout: 10000 });
 		const textarea = editor.locator("textarea").first();

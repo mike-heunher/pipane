@@ -166,7 +166,7 @@ const AUTH_TOKEN = process.env.PIPANE_AUTH_TOKEN || randomBytes(24).toString("ba
 const PUBLIC_HOSTNAME = process.env.PI_PUBLIC_HOSTNAME || hostname();
 const authGuard = new AuthGuard({
 	token: AUTH_TOKEN,
-	disableLocalBypass: process.env.PIPANE_DISABLE_LOCAL_BYPASS === "1",
+	allowLocalBypass: process.env.PIPANE_ALLOW_LOCAL_BYPASS === "1",
 	secureCookie: process.env.PIPANE_SECURE_COOKIE === "1",
 });
 
@@ -285,7 +285,7 @@ const wsHandler = new WsHandler({
 			pool.prewarm(PI_CWD);
 		}
 	},
-	isRequestAuthorized: (req) => authGuard.isAuthorizedRequest(req),
+	isRequestAuthorized: (req) => authGuard.isAuthorizedWebSocketRequest(req),
 	materializeUploadedImage: (uploadedPath, mimeType) => backendApi.materializeUploadedImage(uploadedPath, mimeType),
 });
 
@@ -433,7 +433,8 @@ server.listen(REQUESTED_PORT, () => {
 	});
 	const address = server.address();
 	const port = address && typeof address !== "string" ? address.port : REQUESTED_PORT;
-	const authUrl = `http://${PUBLIC_HOSTNAME}:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
+	const localAuthUrl = `http://localhost:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
+	const remoteAuthUrl = `http://${PUBLIC_HOSTNAME}:${port}/auth?token=${encodeURIComponent(AUTH_TOKEN)}`;
 	log("");
 	log("        _                        ");
 	log("  _ __ (_)_ __   __ _ _ __   ___ ");
@@ -443,8 +444,8 @@ server.listen(REQUESTED_PORT, () => {
 	log(" |_|     |_|                      ");
 	log(`  v${PKG_VERSION}`);
 	log("");
-	log(`  Local:  http://localhost:${port}`);
-	log(`  Remote: ${authUrl}`);
+	log(`  Local:  ${localAuthUrl}`);
+	log(`  Remote: ${remoteAuthUrl}`);
 	if (!process.env.PIPANE_AUTH_TOKEN) {
 		log(`\n  Auth token is random and changes on restart.`);
 		log(`  Set PIPANE_AUTH_TOKEN to use a fixed token.`);

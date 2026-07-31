@@ -130,6 +130,13 @@ if [[ ! -f "$ENV_FILE" ]]; then
 	exit 1
 fi
 
+AUTH_TOKEN="$(set -a; source "$ENV_FILE"; printf '%s' "${PIPANE_AUTH_TOKEN:-}")"
+if [[ -z "$AUTH_TOKEN" ]]; then
+	echo "❌ $ENV_FILE must define PIPANE_AUTH_TOKEN."
+	exit 1
+fi
+AUTH_COOKIE_VALUE="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$AUTH_TOKEN")"
+
 assert_clean_source() {
 	if [[ $REQUIRE_CLEAN -ne 1 ]]; then
 		return
@@ -220,7 +227,8 @@ if switch_global_module \
 	&& systemctl restart "$SERVICE_NAME"; then
 	for _ in $(seq 1 40); do
 		if systemctl is-active --quiet "$SERVICE_NAME" \
-			&& curl -fsS "http://127.0.0.1:$PORT/api/debug/health" 2>/dev/null | grep -q '"ok":true'; then
+			&& curl -fsS -H "Cookie: pipane_auth=$AUTH_COOKIE_VALUE" \
+				"http://127.0.0.1:$PORT/api/debug/health" 2>/dev/null | grep -q '"ok":true'; then
 			HEALTHY=1
 			break
 		fi
@@ -271,8 +279,8 @@ done
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo ""
 echo "✅ Pipane $DEPLOY_LABEL deployed: $GIT_REV"
-echo "📍 Local: http://127.0.0.1:$PORT"
+echo "📍 Local: http://127.0.0.1:$PORT/auth?token=$AUTH_COOKIE_VALUE"
 if [[ -n "$LAN_IP" ]]; then
-	echo "📍 LAN:   http://$LAN_IP:$PORT"
+	echo "📍 LAN:   http://$LAN_IP:$PORT/auth?token=$AUTH_COOKIE_VALUE"
 fi
 echo "📊 Logs:  journalctl -u $SERVICE_NAME -f"

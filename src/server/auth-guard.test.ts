@@ -26,7 +26,7 @@ async function startServer(options: AuthGuardOptions, instanceId: string): Promi
 	const server = createServer(app);
 	const wss = new WebSocketServer({ server, path: "/ws" });
 	wss.on("connection", (ws, req) => {
-		if (!authGuard.isAuthorizedRequest(req)) {
+		if (!authGuard.isAuthorizedWebSocketRequest(req)) {
 			ws.close(1008, "Unauthorized");
 			return;
 		}
@@ -71,7 +71,7 @@ describe("auth guard", () => {
 	let server: RunningServer | null = null;
 
 	beforeAll(async () => {
-		server = await startServer({ token: "test-auth-token", disableLocalBypass: true }, "remote-auth-test");
+		server = await startServer({ token: "test-auth-token" }, "remote-auth-test");
 	});
 
 	afterAll(async () => {
@@ -125,7 +125,10 @@ describe("auth guard", () => {
 		const cookiePair = extractCookiePair(authResponse.headers.get("set-cookie"));
 
 		await new Promise<void>((resolve, reject) => {
-			const ws = new WebSocket(server!.wsUrl, { headers: { Cookie: cookiePair } });
+			const ws = new WebSocket(server!.wsUrl, {
+				headers: { Cookie: cookiePair },
+				origin: server!.baseUrl,
+			});
 			ws.on("message", (raw) => {
 				try {
 					const message = JSON.parse(raw.toString("utf8"));
@@ -139,30 +142,73 @@ describe("auth guard", () => {
 			ws.on("error", reject);
 		});
 	});
+
+	it("rejects an authenticated websocket controlled by another browser origin", async () => {
+		const authResponse = await fetch(`${server!.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
+		const cookiePair = extractCookiePair(authResponse.headers.get("set-cookie"));
+
+		await new Promise<void>((resolve, reject) => {
+			const ws = new WebSocket(server!.wsUrl, {
+				headers: { Cookie: cookiePair },
+				origin: "https://evil.example",
+			});
+			ws.on("close", (code) => {
+				try {
+					expect(code).toBe(1008);
+					resolve();
+				} catch (error) {
+					reject(error);
+				}
+			});
+			ws.on("error", () => {
+				// Expected on some platforms when closed immediately by the server.
+			});
+		});
+	});
 });
 
-describe("localhost bypass", () => {
-	let server: RunningServer | null = null;
+describe("localhost authentication", () => {
+	it("requires the token on loopback by default", async () => {
+		const server = await startServer({ token: "test-auth-token" }, "auth-test-instance");
+		try {
+			const response = await fetch(`${server.baseUrl}/api/sessions`);
+			expect(response.status).toBe(401);
+			expect(response.headers.get("set-cookie")).toBeNull();
 
-	beforeAll(async () => {
-		server = await startServer({ token: "test-auth-token" }, "auth-test-instance");
+			const authResponse = await fetch(`${server.baseUrl}/auth?token=test-auth-token`, { redirect: "manual" });
+			const cookiePair = extractCookiePair(authResponse.headers.get("set-cookie"));
+			expect(authResponse.headers.get("set-cookie") || "").toContain("SameSite=Strict");
+
+			const health = await fetch(`${server.baseUrl}/api/debug/health`, {
+				headers: { Cookie: cookiePair },
+			});
+			expect(health.status).toBe(200);
+			expect(await health.json()).toMatchObject({
+				ok: true,
+				instanceId: "auth-test-instance",
+			});
+		} finally {
+			await stopServer(server);
+		}
 	});
 
-	afterAll(async () => {
-		await stopServer(server);
-		server = null;
-	});
-
-	it("localhost is allowed, identifies the instance, and sets auth cookie automatically", async () => {
-		const response = await fetch(`${server!.baseUrl}/api/sessions`);
-		expect(response.status).toBe(200);
-		expect(response.headers.get("set-cookie") || "").toContain("pipane_auth=");
-
-		const health = await fetch(`${server!.baseUrl}/api/debug/health`);
-		expect(health.status).toBe(200);
-		expect(await health.json()).toMatchObject({
-			ok: true,
-			instanceId: "auth-test-instance",
-		});
+	it("does not authorize a hostile browser origin through the explicit local bypass", async () => {
+		const server = await startServer({ token: "test-auth-token", allowLocalBypass: true }, "bypass-test-instance");
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const ws = new WebSocket(server.wsUrl, { origin: "https://evil.example" });
+				ws.on("close", (code) => {
+					try {
+						expect(code).toBe(1008);
+						resolve();
+					} catch (error) {
+						reject(error);
+					}
+				});
+				ws.on("error", () => {});
+			});
+		} finally {
+			await stopServer(server);
+		}
 	});
 });
