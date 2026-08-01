@@ -658,6 +658,19 @@ function openCurrentFilePreviewInNewWindow(): void {
 	closeFilePreview();
 }
 
+function downloadCurrentFilePreview(): void {
+	const state = previewStates.get(activeSessionKey);
+	if (!state || state.loading || state.error) return;
+	const url = URL.createObjectURL(new Blob([state.content], { type: "application/octet-stream" }));
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = baseName(state.path) || "download";
+	document.body.appendChild(link);
+	link.click();
+	link.remove();
+	URL.revokeObjectURL(url);
+}
+
 export function setFilePreviewSession(sessionPath: string | undefined, stateKey = sessionPath): void {
 	const nextSessionKey = stateKey ?? "";
 	if (nextSessionKey === activeSessionKey) return;
@@ -738,6 +751,14 @@ function renderPanel(): void {
 					<span class="file-preview-title">${title}</span>
 					<span class="file-preview-path" title=${state.path}>${state.path}</span>
 				</div>
+				<button
+					type="button"
+					class="file-preview-header-action file-preview-download"
+					@click=${downloadCurrentFilePreview}
+					?disabled=${state.loading || Boolean(state.error)}
+					title=${`Download ${title}`}
+					aria-label=${`Download ${title}`}
+				>↓</button>
 				<button
 					type="button"
 					class="file-preview-header-action file-preview-open-window"

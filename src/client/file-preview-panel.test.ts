@@ -242,6 +242,36 @@ describe("linked file preview", () => {
 		expect(popup.opener).toBeNull();
 	});
 
+	it("downloads the currently previewed file with its original name", async () => {
+		const container = setupPanel();
+		const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:file-preview");
+		const revokeObjectUrl = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+		let downloadLink: HTMLAnchorElement | undefined;
+		document.body.addEventListener("click", (event) => {
+			if (!(event.target instanceof HTMLAnchorElement)) return;
+			event.preventDefault();
+			downloadLink = event.target;
+		});
+		const api = {
+			getFileContent: vi.fn(async () => ({
+				path: "/work/project/models/part.step",
+				content: "ISO-10303-21;\nEND-ISO-10303-21;\n",
+			})),
+		};
+		openFilePreviewLink("models/part.step", "/work/project", "/sessions/test.jsonl", undefined, api);
+		await settle();
+
+		const button = container.querySelector<HTMLButtonElement>(".file-preview-download");
+		expect(button?.getAttribute("aria-label")).toBe("Download part.step");
+		button?.click();
+
+		expect(downloadLink?.download).toBe("part.step");
+		expect(downloadLink?.href).toBe("blob:file-preview");
+		expect(createObjectUrl).toHaveBeenCalledOnce();
+		expect(await (createObjectUrl.mock.calls[0][0] as Blob).text()).toBe("ISO-10303-21;\nEND-ISO-10303-21;\n");
+		expect(revokeObjectUrl).toHaveBeenCalledWith("blob:file-preview");
+	});
+
 	it("moves an open preview into a separate window and closes the pane", async () => {
 		const container = setupPanel();
 		const popupDocument = document.implementation.createHTMLDocument("");

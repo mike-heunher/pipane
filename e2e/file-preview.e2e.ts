@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 import { startMockPipaneServer } from "./mock-pipane-server.js";
 
@@ -5,6 +6,7 @@ const SESSION_PATH = "/tmp/mock-sessions/file-preview.jsonl";
 const OTHER_SESSION_PATH = "/tmp/mock-sessions/file-preview-other.jsonl";
 const PROJECT_CWD = "/tmp/file-preview-project";
 const GUIDE_PATH = `${PROJECT_CWD}/docs/guide.md`;
+const GUIDE_CONTENT = "# Project Guide\n\nThis is **rendered markdown** with $E = mc^2$.\n\n\\[\n\\int_0^1 x^2 \\, dx\n\\]\n\n[More details](details.md)";
 const DETAILS_PATH = `${PROJECT_CWD}/docs/details.md`;
 const HTML_PATH = `${PROJECT_CWD}/examples/demo.html`;
 const SANDBOX_HTML_PATH = "/tmp/generated-file-preview.html";
@@ -80,7 +82,7 @@ async function startServer() {
 			},
 		},
 		files: {
-			[GUIDE_PATH]: "# Project Guide\n\nThis is **rendered markdown** with $E = mc^2$.\n\n\\[\n\\int_0^1 x^2 \\, dx\n\\]\n\n[More details](details.md)",
+			[GUIDE_PATH]: GUIDE_CONTENT,
 			[DETAILS_PATH]: "# Details\n\nNested file links resolve beside the open document.",
 			[HTML_PATH]: "<!doctype html><html><head><title>Demo</title></head><body><h1>Interactive HTML</h1><output id=\"script-status\"></output><a href=\"../docs/details.md\">Open details</a><script>document.getElementById('script-status').textContent = 'Scripts work';<\/script></body></html>",
 			[SANDBOX_HTML_PATH]: "<!doctype html><html><body><h1>Generated Sandbox HTML</h1></body></html>",
@@ -116,6 +118,14 @@ test("opens linked markdown files in a right-hand pane", async ({ page }) => {
 		const panelBackground = await panel.evaluate((element) => getComputedStyle(element).backgroundColor);
 		const previewBackground = await previewFrame.locator("body").evaluate((element) => getComputedStyle(element).backgroundColor);
 		expect(previewBackground).toBe(panelBackground);
+
+		const downloadPromise = page.waitForEvent("download");
+		await panel.getByRole("button", { name: "Download guide.md" }).click();
+		const download = await downloadPromise;
+		expect(download.suggestedFilename()).toBe("guide.md");
+		const downloadedPath = await download.path();
+		if (!downloadedPath) throw new Error("Preview download did not produce a local file");
+		expect(await readFile(downloadedPath, "utf8")).toBe(GUIDE_CONTENT);
 
 		const panelContainer = page.locator(".file-preview-container");
 		const resizeHandle = page.getByRole("separator", { name: "Resize file preview" });
