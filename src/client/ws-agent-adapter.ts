@@ -1874,6 +1874,10 @@ export class WsAgentAdapter implements BackendClient {
 		return this.api.completeFileUpload(uploadId);
 	}
 
+	abortFileUpload(uploadId: string) {
+		return this.api.abortFileUpload(uploadId);
+	}
+
 	getLocalSettings() {
 		return this.api.getLocalSettings();
 	}

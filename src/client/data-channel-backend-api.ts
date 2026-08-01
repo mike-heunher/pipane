@@ -152,6 +152,10 @@ export class DataChannelBackendApi implements BackendApi {
 		return value as unknown as FileUploadResponse;
 	}
 
+	async abortFileUpload(uploadId: string): Promise<void> {
+		await this.request("files.upload.abort", { uploadId });
+	}
+
 	async getLocalSettings(): Promise<LocalSettingsReadResponse> {
 		const value = await this.request("settings.get", {});
 		if (!isRecord(value) || !isString(value.path) || typeof value.exists !== "boolean"

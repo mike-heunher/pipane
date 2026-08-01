@@ -308,6 +308,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession> { return this.requireActiveClient().createFileUpload(metadata); }
 	appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse> { return this.requireActiveClient().appendFileUpload(chunk); }
 	completeFileUpload(uploadId: string): Promise<FileUploadResponse> { return this.requireActiveClient().completeFileUpload(uploadId); }
+	abortFileUpload(uploadId: string): Promise<void> { return this.requireActiveClient().abortFileUpload(uploadId); }
 	getLocalSettings(): Promise<LocalSettingsReadResponse> { return this.requireActiveClient().getLocalSettings(); }
 	validateLocalSettings(content: string): Promise<LocalSettingsValidationResponse> { return this.requireActiveClient().validateLocalSettings(content); }
 	patchLocalSettings(patch: Record<string, unknown>): Promise<LocalSettingsValidationResponse> { return this.requireActiveClient().patchLocalSettings(patch); }

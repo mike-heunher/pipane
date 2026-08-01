@@ -121,6 +121,10 @@ export class HttpBackendApi implements BackendApi {
 		return this.requestJson(`/api/files/uploads/${encodeURIComponent(uploadId)}/complete`, { method: "POST" });
 	}
 
+	async abortFileUpload(uploadId: string): Promise<void> {
+		await this.requestJson(`/api/files/uploads/${encodeURIComponent(uploadId)}`, { method: "DELETE" });
+	}
+
 	getLocalSettings(): Promise<LocalSettingsReadResponse> {
 		return this.requestJson("/api/settings/local");
 	}

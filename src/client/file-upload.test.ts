@@ -29,6 +29,7 @@ describe("uploadAttachmentFile", () => {
 				mimeType: "application/octet-stream",
 				size: bytes.length,
 			})),
+			abortFileUpload: vi.fn(async () => undefined),
 		};
 
 		await expect(uploadAttachmentFile(api, attachment(bytes))).resolves.toMatchObject({
@@ -52,9 +53,23 @@ describe("uploadAttachmentFile", () => {
 				mimeType: "application/octet-stream",
 				size: 0,
 			})),
+			abortFileUpload: vi.fn(async () => undefined),
 		};
 
 		await uploadAttachmentFile(api, attachment(new Uint8Array()));
 		expect(api.appendFileUpload).not.toHaveBeenCalled();
+	});
+
+	it("aborts the backend upload while preserving the original failure", async () => {
+		const failure = new Error("chunk failed");
+		const api = {
+			createFileUpload: vi.fn(async () => ({ uploadId: "failed" })),
+			appendFileUpload: vi.fn(async () => { throw failure; }),
+			completeFileUpload: vi.fn(),
+			abortFileUpload: vi.fn(async () => undefined),
+		};
+
+		await expect(uploadAttachmentFile(api, attachment(Buffer.from("data")))).rejects.toBe(failure);
+		expect(api.abortFileUpload).toHaveBeenCalledWith("failed");
 	});
 });

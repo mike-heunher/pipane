@@ -127,6 +127,15 @@ export function registerRestApi(app: Express, options: RegisterRestApiOptions = 
 		}
 	});
 
+	app.delete("/api/files/uploads/:uploadId", async (req, res) => {
+		try {
+			await api.abortFileUpload(req.params.uploadId);
+			res.json({ success: true });
+		} catch (error) {
+			sendError(res, error);
+		}
+	});
+
 	app.get("/api/browse", async (req, res) => {
 		try {
 			res.json(await api.browseDirectory(typeof req.query.path === "string" ? req.query.path : ""));

@@ -1,9 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, watchFile } from "node:fs";
-import { mkdir, mkdtemp, open, readFile, rm, unlink } from "node:fs/promises";
-import os from "node:os";
+import {
+	existsSync,
+	lstatSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	watchFile,
+	writeFileSync,
+} from "node:fs";
+import { mkdir, open, readFile, rm, unlink } from "node:fs/promises";
 import path from "node:path";
-import { parseSessionEntries } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
 	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
 	MAX_UPLOAD_FILE_BYTES,
@@ -36,7 +46,10 @@ import type { UpdateApiManager } from "./update-api.js";
 const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_UPLOAD_CHUNK_BYTES = 256 * 1024;
 const MAX_ACTIVE_UPLOADS = 32;
-const MAX_COMPLETED_UPLOADS = 256;
+const ACTIVE_UPLOAD_TTL_MS = 60 * 60_000;
+const COMPLETED_UPLOAD_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const UPLOAD_MANIFEST_VERSION = 1;
+const UPLOAD_MANIFEST_FILE = "upload.json";
 const watchedSettingsPaths = new Set<string>();
 
 interface ActiveUploadChunk {
@@ -46,9 +59,23 @@ interface ActiveUploadChunk {
 }
 
 interface ActiveFileUpload extends FileUploadMetadata {
+	uploadId: string;
 	path: string;
+	directory: string;
+	manifestPath: string;
+	createdAt: number;
+	updatedAt: number;
 	received: number;
 	chunks: Map<number, ActiveUploadChunk>;
+}
+
+interface StoredUploadManifest extends FileUploadResponse {
+	version: typeof UPLOAD_MANIFEST_VERSION;
+	uploadId: string;
+	state: "active" | "completed";
+	createdAt: number;
+	updatedAt: number;
+	digest?: string;
 }
 
 export class LocalBackendApiError extends Error {
@@ -87,15 +114,14 @@ export class LocalBackendApi implements BackendApi {
 	private readonly runSessionMutation?: LocalBackendApiOptions["runSessionMutation"];
 	private readonly sessionIndex: SessionIndex;
 	private readonly uploads = new Map<string, ActiveFileUpload>();
-	/** Exact completed upload paths eligible for server-side image materialization. */
-	private readonly completedUploads = new Map<string, FileUploadResponse>();
+	private lastUploadCleanupAt = 0;
 
 	constructor(options: LocalBackendApiOptions = {}) {
 		this.localSettingsStore = options.localSettingsStore ?? new LocalSettingsStore();
 		this.sessionPaths = options.sessionPaths ?? new SessionPathGuard();
 		const configuredBackendId = options.backendId;
 		this.backendId = typeof configuredBackendId === "function" ? configuredBackendId : () => configuredBackendId;
-		this.uploadDirectory = path.resolve(options.uploadDirectory ?? os.tmpdir());
+		this.uploadDirectory = path.resolve(options.uploadDirectory ?? path.join(getAgentDir(), "pipane", "uploads"));
 		this.updateManager = options.updateManager;
 		this.onLocalSettingsReloaded = options.onLocalSettingsReloaded;
 		this.runSessionMutation = options.runSessionMutation;
@@ -254,32 +280,52 @@ export class LocalBackendApi implements BackendApi {
 				"invalid_request",
 			);
 		}
+		await this.cleanupUploads();
 		if (this.uploads.size >= MAX_ACTIVE_UPLOADS) {
 			throw new LocalBackendApiError("Too many file uploads are active", 409, "conflict");
 		}
 
 		await mkdir(this.uploadDirectory, { recursive: true, mode: 0o700 });
-		const directory = await mkdtemp(path.join(this.uploadDirectory, "pipane-upload-"));
+		const uploadId = randomUUID();
+		const directory = path.join(this.uploadDirectory, `pipane-upload-${uploadId}`);
 		const fileName = safeUploadFileName(metadata.fileName);
 		const uploadPath = path.join(directory, fileName);
+		const manifestPath = path.join(directory, UPLOAD_MANIFEST_FILE);
+		const now = Date.now();
 		try {
+			await mkdir(directory, { mode: 0o700 });
 			const file = await open(uploadPath, "wx", 0o600);
 			try {
 				await file.truncate(metadata.size);
 			} finally {
 				await file.close();
 			}
+			writeUploadManifest(manifestPath, {
+				version: UPLOAD_MANIFEST_VERSION,
+				uploadId,
+				state: "active",
+				fileName,
+				mimeType: metadata.mimeType,
+				size: metadata.size,
+				path: uploadPath,
+				createdAt: now,
+				updatedAt: now,
+			});
 		} catch (error) {
 			await rm(directory, { recursive: true, force: true });
 			throw error;
 		}
 
-		const uploadId = randomUUID();
 		this.uploads.set(uploadId, {
+			uploadId,
 			fileName,
 			mimeType: metadata.mimeType,
 			size: metadata.size,
 			path: uploadPath,
+			directory,
+			manifestPath,
+			createdAt: now,
+			updatedAt: now,
 			received: 0,
 			chunks: new Map(),
 		});
@@ -316,6 +362,8 @@ export class LocalBackendApi implements BackendApi {
 			}
 		}
 
+		upload.updatedAt = Date.now();
+		writeUploadManifest(upload.manifestPath, activeUploadManifest(upload));
 		const operation = writeUploadChunk(upload.path, chunk.offset, bytes).then(() => {
 			upload.received += bytes.length;
 		});
@@ -331,7 +379,13 @@ export class LocalBackendApi implements BackendApi {
 
 	async completeFileUpload(uploadId: string): Promise<FileUploadResponse> {
 		const upload = this.uploads.get(uploadId);
-		if (!upload) throw new LocalBackendApiError("File upload was not found", 404, "not_found");
+		if (!upload) {
+			const stored = this.readStoredUpload(uploadId);
+			if (stored?.state === "completed") {
+				return { path: stored.path, fileName: stored.fileName, mimeType: stored.mimeType, size: stored.size };
+			}
+			throw new LocalBackendApiError("File upload was not found", 404, "not_found");
+		}
 		await Promise.all([...upload.chunks.values()].map((chunk) => chunk.operation));
 		if (upload.received !== upload.size) {
 			throw new LocalBackendApiError(
@@ -340,32 +394,53 @@ export class LocalBackendApi implements BackendApi {
 				"conflict",
 			);
 		}
-		this.uploads.delete(uploadId);
-		const completed = {
+		const bytes = await readFile(upload.path);
+		const digest = createHash("sha256").update(bytes).digest("hex");
+		const completed: StoredUploadManifest = {
+			version: UPLOAD_MANIFEST_VERSION,
+			uploadId,
+			state: "completed",
 			path: upload.path,
 			fileName: upload.fileName,
 			mimeType: upload.mimeType,
 			size: upload.size,
+			createdAt: upload.createdAt,
+			updatedAt: Date.now(),
+			digest,
 		};
-		this.completedUploads.set(completed.path, completed);
-		while (this.completedUploads.size > MAX_COMPLETED_UPLOADS) {
-			const oldestPath = this.completedUploads.keys().next().value;
-			if (typeof oldestPath !== "string") break;
-			this.completedUploads.delete(oldestPath);
+		writeUploadManifest(upload.manifestPath, completed);
+		this.uploads.delete(uploadId);
+		return {
+			path: completed.path,
+			fileName: completed.fileName,
+			mimeType: completed.mimeType,
+			size: completed.size,
+		};
+	}
+
+	async abortFileUpload(uploadId: string): Promise<void> {
+		const upload = this.uploads.get(uploadId);
+		if (!upload) {
+			const stored = this.readStoredUpload(uploadId);
+			if (stored?.state === "active") await rm(path.dirname(stored.path), { recursive: true, force: true });
+			return;
 		}
-		return completed;
+		this.uploads.delete(uploadId);
+		await Promise.allSettled([...upload.chunks.values()].map((chunk) => chunk.operation));
+		await rm(upload.directory, { recursive: true, force: true });
 	}
 
 	/** Read only an exact file path produced by this server's completed upload flow. */
 	async materializeUploadedImage(uploadedPath: string, mimeType: string): Promise<InlineWireImage> {
-		const upload = this.completedUploads.get(uploadedPath);
+		const upload = this.readCompletedUpload(uploadedPath);
 		if (!upload) throw new LocalBackendApiError("Uploaded image was not found", 404, "not_found");
 		if (!mimeType.startsWith("image/") || upload.mimeType !== mimeType) {
 			throw new LocalBackendApiError("Uploaded image MIME type does not match", 400, "invalid_request");
 		}
 		const bytes = await readFile(upload.path);
-		if (bytes.length !== upload.size) {
-			throw new LocalBackendApiError("Uploaded image size changed", 409, "conflict");
+		if (bytes.length !== upload.size
+			|| createHash("sha256").update(bytes).digest("hex") !== upload.digest) {
+			throw new LocalBackendApiError("Uploaded image content changed", 409, "conflict");
 		}
 		return { type: "image", data: bytes.toString("base64"), mimeType: upload.mimeType };
 	}
@@ -399,6 +474,65 @@ export class LocalBackendApi implements BackendApi {
 		if (!this.updateManager) throw new LocalBackendApiError("Update service is unavailable", 503, "conflict");
 		const result = await this.updateManager.run(target);
 		return { result, snapshot: this.updateManager.currentSnapshot };
+	}
+
+	private async cleanupUploads(): Promise<void> {
+		const now = Date.now();
+		for (const upload of [...this.uploads.values()]) {
+			if (now - upload.updatedAt <= ACTIVE_UPLOAD_TTL_MS) continue;
+			await this.abortFileUpload(upload.uploadId);
+		}
+		if (now - this.lastUploadCleanupAt < ACTIVE_UPLOAD_TTL_MS) return;
+		for (const directory of uploadDirectories(this.uploadDirectory)) {
+			const manifest = readUploadManifest(path.join(directory, UPLOAD_MANIFEST_FILE));
+			if (!manifest || (manifest.state === "active" && now - manifest.updatedAt > ACTIVE_UPLOAD_TTL_MS)) {
+				rmSync(directory, { recursive: true, force: true });
+			}
+		}
+		this.pruneCompletedUploads(now);
+	}
+
+	private pruneCompletedUploads(now: number): void {
+		this.lastUploadCleanupAt = now;
+		for (const directory of uploadDirectories(this.uploadDirectory)) {
+			const manifest = readUploadManifest(path.join(directory, UPLOAD_MANIFEST_FILE));
+			if (!manifest || manifest.state !== "completed") continue;
+			if (now - manifest.updatedAt <= COMPLETED_UPLOAD_RETENTION_MS) continue;
+			if (this.isUploadReferenced(manifest.path)) continue;
+			rmSync(directory, { recursive: true, force: true });
+		}
+	}
+
+	private isUploadReferenced(uploadPath: string): boolean {
+		for (const sessionPath of filesUnder(this.sessionPaths.configuredRoot, ".jsonl")) {
+			try {
+				if (readFileSync(sessionPath, "utf8").includes(uploadPath)) return true;
+			} catch {
+				// A concurrently removed or unreadable session cannot retain an upload.
+			}
+		}
+		return false;
+	}
+
+	private readStoredUpload(uploadId: string): StoredUploadManifest | undefined {
+		if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(uploadId)) return undefined;
+		const directory = path.join(this.uploadDirectory, `pipane-upload-${uploadId}`);
+		const manifest = readUploadManifest(path.join(directory, UPLOAD_MANIFEST_FILE));
+		return manifest?.uploadId === uploadId && path.dirname(manifest.path) === directory ? manifest : undefined;
+	}
+
+	private readCompletedUpload(uploadedPath: string): StoredUploadManifest | undefined {
+		if (!uploadedPath || uploadedPath.includes("\0")) return undefined;
+		const candidate = path.resolve(uploadedPath);
+		if (!isPathWithin(this.uploadDirectory, candidate)) return undefined;
+		const manifest = readUploadManifest(path.join(path.dirname(candidate), UPLOAD_MANIFEST_FILE));
+		if (!manifest || manifest.state !== "completed" || manifest.path !== candidate || !manifest.digest) return undefined;
+		try {
+			if (!lstatSync(candidate).isFile()) return undefined;
+		} catch {
+			return undefined;
+		}
+		return manifest;
 	}
 
 	private resolveSession(sessionPath: string): string {
@@ -443,6 +577,87 @@ export class LocalBackendApi implements BackendApi {
 			}, 150);
 		});
 	}
+}
+
+function activeUploadManifest(upload: ActiveFileUpload): StoredUploadManifest {
+	return {
+		version: UPLOAD_MANIFEST_VERSION,
+		uploadId: upload.uploadId,
+		state: "active",
+		fileName: upload.fileName,
+		mimeType: upload.mimeType,
+		size: upload.size,
+		path: upload.path,
+		createdAt: upload.createdAt,
+		updatedAt: upload.updatedAt,
+	};
+}
+
+function writeUploadManifest(manifestPath: string, manifest: StoredUploadManifest): void {
+	const temporaryPath = `${manifestPath}.${process.pid}.${randomUUID()}.tmp`;
+	writeFileSync(temporaryPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+	renameSync(temporaryPath, manifestPath);
+}
+
+function readUploadManifest(manifestPath: string): StoredUploadManifest | undefined {
+	try {
+		const value: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+		if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+		const manifest = value as Record<string, unknown>;
+		if (manifest.version !== UPLOAD_MANIFEST_VERSION
+			|| (manifest.state !== "active" && manifest.state !== "completed")
+			|| typeof manifest.uploadId !== "string" || !manifest.uploadId
+			|| typeof manifest.fileName !== "string" || !manifest.fileName
+			|| typeof manifest.mimeType !== "string" || !manifest.mimeType
+			|| !Number.isSafeInteger(manifest.size) || (manifest.size as number) < 0
+			|| typeof manifest.path !== "string" || !manifest.path
+			|| !Number.isSafeInteger(manifest.createdAt) || (manifest.createdAt as number) < 0
+			|| !Number.isSafeInteger(manifest.updatedAt) || (manifest.updatedAt as number) < 0
+			|| (manifest.digest !== undefined && (typeof manifest.digest !== "string" || !/^[a-f0-9]{64}$/u.test(manifest.digest)))) {
+			return undefined;
+		}
+		return manifest as unknown as StoredUploadManifest;
+	} catch {
+		return undefined;
+	}
+}
+
+function uploadDirectories(root: string): string[] {
+	try {
+		return readdirSync(root, { withFileTypes: true })
+			.filter((entry) => entry.isDirectory() && entry.name.startsWith("pipane-upload-"))
+			.map((entry) => path.join(root, entry.name));
+	} catch {
+		return [];
+	}
+}
+
+function filesUnder(root: string, extension: string): string[] {
+	const files: string[] = [];
+	const pending = [root];
+	while (pending.length > 0) {
+		const directory = pending.pop()!;
+		let entries;
+		try {
+			entries = readdirSync(directory, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const candidate = path.join(directory, entry.name);
+			if (entry.isDirectory()) pending.push(candidate);
+			else if (entry.isFile() && path.extname(entry.name) === extension) files.push(candidate);
+		}
+	}
+	return files;
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative !== ""
+		&& relative !== ".."
+		&& !relative.startsWith(`..${path.sep}`)
+		&& !path.isAbsolute(relative);
 }
 
 function resolveHostPath(requestedPath: string): string {

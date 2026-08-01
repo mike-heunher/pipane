@@ -14,6 +14,7 @@ export type BackendMethod =
 	| "files.upload.create"
 	| "files.upload.append"
 	| "files.upload.complete"
+	| "files.upload.abort"
 	| "host.browse"
 	| "host.mkdir"
 	| "settings.get"
@@ -33,6 +34,7 @@ export interface BackendMethodParams {
 	"files.upload.create": { fileName: string; mimeType: string; size: number };
 	"files.upload.append": { uploadId: string; offset: number; data: string };
 	"files.upload.complete": { uploadId: string };
+	"files.upload.abort": { uploadId: string };
 	"host.browse": { path: string };
 	"host.mkdir": { parentPath: string; name: string };
 	"settings.get": Record<string, never>;
@@ -185,6 +187,7 @@ function validateParams(method: BackendMethod, params: Record<string, unknown>):
 				&& (params.offset as number) >= 0
 				&& isNonEmptyString(params.data);
 		case "files.upload.complete":
+		case "files.upload.abort":
 			return hasOnlyKeys(params, ["uploadId"]) && isNonEmptyString(params.uploadId);
 		case "host.browse":
 			return hasOnlyKeys(params, ["path"]) && typeof params.path === "string";
@@ -214,6 +217,7 @@ function isBackendMethod(value: string): value is BackendMethod {
 		"files.upload.create",
 		"files.upload.append",
 		"files.upload.complete",
+		"files.upload.abort",
 		"host.browse",
 		"host.mkdir",
 		"settings.get",

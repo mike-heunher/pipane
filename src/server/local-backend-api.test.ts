@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +53,99 @@ describe("LocalBackendApi uploaded images", () => {
 			.rejects.toThrow("not found");
 		await expect(api.materializeUploadedImage(completed.path, "image/jpeg"))
 			.rejects.toThrow("MIME type does not match");
+	});
+
+	it("recovers completed image authorization after a backend restart", async () => {
+		const { root } = fixture();
+		const uploadDirectory = path.join(root, "uploads");
+		const options = {
+			sessionPaths: new SessionPathGuard(root),
+			uploadDirectory,
+		};
+		const first = new LocalBackendApi(options);
+		const bytes = Buffer.from("durable image");
+		const { uploadId } = await first.createFileUpload({
+			fileName: "photo.png",
+			mimeType: "image/png",
+			size: bytes.length,
+		});
+		await first.appendFileUpload({ uploadId, offset: 0, data: bytes.toString("base64") });
+		const completed = await first.completeFileUpload(uploadId);
+
+		const restarted = new LocalBackendApi(options);
+		await expect(restarted.completeFileUpload(uploadId)).resolves.toEqual(completed);
+		await expect(restarted.materializeUploadedImage(completed.path, "image/png")).resolves.toMatchObject({
+			data: bytes.toString("base64"),
+		});
+	});
+
+	it("removes failed uploads through the idempotent abort operation", async () => {
+		const { root } = fixture();
+		const uploadDirectory = path.join(root, "uploads");
+		const api = new LocalBackendApi({
+			sessionPaths: new SessionPathGuard(root),
+			uploadDirectory,
+		});
+		const { uploadId } = await api.createFileUpload({
+			fileName: "partial.bin",
+			mimeType: "application/octet-stream",
+			size: 10,
+		});
+		const [directory] = readdirSync(uploadDirectory).map((name) => path.join(uploadDirectory, name));
+		expect(existsSync(directory)).toBe(true);
+
+		const restarted = new LocalBackendApi({
+			sessionPaths: new SessionPathGuard(root),
+			uploadDirectory,
+		});
+		await restarted.abortFileUpload(uploadId);
+		await restarted.abortFileUpload(uploadId);
+		expect(existsSync(directory)).toBe(false);
+	});
+
+	it("removes expired unreferenced uploads while retaining session references", async () => {
+		const { root } = fixture();
+		const uploadDirectory = path.join(root, "uploads");
+		const sessionPaths = new SessionPathGuard(root);
+		const api = new LocalBackendApi({ sessionPaths, uploadDirectory });
+		const completeEmpty = async (fileName: string) => {
+			const { uploadId } = await api.createFileUpload({ fileName, mimeType: "application/octet-stream", size: 0 });
+			return api.completeFileUpload(uploadId);
+		};
+		const expired = await completeEmpty("expired.bin");
+		const referenced = await completeEmpty("referenced.bin");
+		for (const uploadedPath of [expired.path, referenced.path]) {
+			const manifestPath = path.join(path.dirname(uploadedPath), "upload.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			writeFileSync(manifestPath, JSON.stringify({ ...manifest, updatedAt: 0 }));
+		}
+		writeFileSync(path.join(root, "session.jsonl"), JSON.stringify({ path: referenced.path }));
+
+		const restarted = new LocalBackendApi({ sessionPaths, uploadDirectory });
+		await restarted.createFileUpload({ fileName: "trigger.bin", mimeType: "application/octet-stream", size: 0 });
+
+		expect(existsSync(expired.path)).toBe(false);
+		expect(existsSync(referenced.path)).toBe(true);
+	});
+
+	it("does not forget completed images when more than 256 are uploaded", async () => {
+		const { root } = fixture();
+		const api = new LocalBackendApi({
+			sessionPaths: new SessionPathGuard(root),
+			uploadDirectory: path.join(root, "uploads"),
+		});
+		let firstPath = "";
+		for (let index = 0; index < 257; index++) {
+			const { uploadId } = await api.createFileUpload({
+				fileName: `${index}.png`,
+				mimeType: "image/png",
+				size: 0,
+			});
+			const completed = await api.completeFileUpload(uploadId);
+			if (index === 0) firstPath = completed.path;
+		}
+
+		await expect(api.materializeUploadedImage(firstPath, "image/png")).resolves.toMatchObject({ data: "" });
 	});
 });
 

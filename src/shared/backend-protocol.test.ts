@@ -18,6 +18,7 @@ describe("semantic backend protocol", () => {
 		["files.upload.create", { fileName: "archive.zip", mimeType: "application/zip", size: 3 }],
 		["files.upload.append", { uploadId: "upload-1", offset: 0, data: "eGl6" }],
 		["files.upload.complete", { uploadId: "upload-1" }],
+		["files.upload.abort", { uploadId: "upload-1" }],
 		["host.browse", { path: "/tmp" }],
 		["host.mkdir", { parentPath: "/tmp", name: "new-project" }],
 		["settings.get", {}],

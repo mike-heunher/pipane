@@ -92,6 +92,11 @@ describe("DataChannelBackendApi", () => {
 		expect(transport.sent[2]).toMatchObject({ method: "files.upload.complete", params: { uploadId: "u1" } });
 		transport.reply(2, { path: "/tmp/data.bin", fileName: "data.bin", mimeType: "application/octet-stream", size: 3 });
 		await expect(completing).resolves.toMatchObject({ path: "/tmp/data.bin", size: 3 });
+
+		const aborting = api.abortFileUpload("u2");
+		expect(transport.sent[3]).toMatchObject({ method: "files.upload.abort", params: { uploadId: "u2" } });
+		transport.reply(3, {});
+		await expect(aborting).resolves.toBeUndefined();
 	});
 
 	it("retries a pending request with the same id after carrier reconnection", async () => {

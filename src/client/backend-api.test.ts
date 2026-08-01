@@ -91,7 +91,8 @@ describe("HttpBackendApi", () => {
 		const fetchMock = vi.fn()
 			.mockResolvedValueOnce(jsonResponse({ uploadId: "upload/one" }, 201))
 			.mockResolvedValueOnce(jsonResponse({ nextOffset: 3 }))
-			.mockResolvedValueOnce(jsonResponse(uploaded));
+			.mockResolvedValueOnce(jsonResponse(uploaded))
+			.mockResolvedValueOnce(jsonResponse({ success: true }));
 		const api = new HttpBackendApi({ fetch: fetchMock });
 
 		await expect(api.createFileUpload({ fileName: "archive.zip", mimeType: "application/zip", size: 3 }))
@@ -99,6 +100,7 @@ describe("HttpBackendApi", () => {
 		await expect(api.appendFileUpload({ uploadId: "upload/one", offset: 0, data: "eGl6" }))
 			.resolves.toEqual({ nextOffset: 3 });
 		await expect(api.completeFileUpload("upload/one")).resolves.toEqual(uploaded);
+		await expect(api.abortFileUpload("upload/two")).resolves.toBeUndefined();
 
 		expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/files/uploads", expect.objectContaining({
 			method: "POST",
@@ -109,6 +111,7 @@ describe("HttpBackendApi", () => {
 			body: JSON.stringify({ offset: 0, data: "eGl6" }),
 		}));
 		expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/files/uploads/upload%2Fone/complete", { method: "POST" });
+		expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/files/uploads/upload%2Ftwo", { method: "DELETE" });
 	});
 
 	it("maps settings and update operations without exposing fetch to callers", async () => {

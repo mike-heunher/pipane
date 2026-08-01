@@ -1,6 +1,7 @@
 # Unreleased
 
 - Download any successfully loaded side-panel file preview with its original filename.
+- Persist attachment uploads across restarts, abort failed transfers, and clean up abandoned or unreferenced upload storage.
 - Replay unresolved prompts, forked prompts, and steering after reconnect without executing accepted operations twice or restoring duplicate drafts.
 - Require token authentication on localhost and reject cross-origin browser WebSockets before they can control the local agent.
 - Open Pi-generated `sandbox:/...` file links from their intended absolute backend paths.

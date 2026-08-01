@@ -29,6 +29,7 @@ function api(overrides: Partial<BackendApi> = {}): BackendApi {
 		createFileUpload: async () => ({ uploadId: "upload" }),
 		appendFileUpload: async ({ offset, data }) => ({ nextOffset: offset + Buffer.from(data, "base64").length }),
 		completeFileUpload: async () => ({ path: "/tmp/file", fileName: "file", mimeType: "application/octet-stream", size: 0 }),
+		abortFileUpload: async () => undefined,
 		getLocalSettings: async () => ({ path: "/settings", exists: false, errors: [], settings: {}, formatted: "{}" }),
 		validateLocalSettings: async () => ({ valid: true, errors: [] }),
 		patchLocalSettings: async () => ({ valid: true, errors: [] }),
@@ -81,18 +82,21 @@ describe("BackendProtocolHandler", () => {
 		});
 	});
 
-	it("dispatches chunked file upload requests", async () => {
+	it("dispatches chunked file upload and abort requests", async () => {
 		const appendFileUpload = vi.fn(async () => ({ nextOffset: 3 }));
+		const abortFileUpload = vi.fn(async () => undefined);
 		const connection = new FakeConnection();
-		new BackendProtocolHandler(api({ appendFileUpload })).accept(connection, "d_one");
+		new BackendProtocolHandler(api({ appendFileUpload, abortFileUpload })).accept(connection, "d_one");
 		connection.message(request("upload-chunk", "files.upload.append", {
 			uploadId: "u1",
 			offset: 0,
 			data: "YWJj",
 		}));
+		connection.message(request("upload-abort", "files.upload.abort", { uploadId: "u2" }));
 		await settle();
 
 		expect(appendFileUpload).toHaveBeenCalledWith({ uploadId: "u1", offset: 0, data: "YWJj" });
+		expect(abortFileUpload).toHaveBeenCalledWith("u2");
 		expect(JSON.parse(connection.sent[0])).toMatchObject({
 			method: "files.upload.append",
 			success: true,

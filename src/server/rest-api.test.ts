@@ -395,6 +395,8 @@ describe("REST session path confinement", () => {
 		});
 		expect(invalidChunk.status).toBe(400);
 		expect((await fetch(`${baseUrl}/api/files/uploads/${uploadId}/complete`, { method: "POST" })).status).toBe(409);
+		expect((await fetch(`${baseUrl}/api/files/uploads/${uploadId}`, { method: "DELETE" })).status).toBe(200);
+		expect((await fetch(`${baseUrl}/api/files/uploads/${uploadId}`, { method: "DELETE" })).status).toBe(200);
 	});
 
 	it("keeps project directory browsing independently unrestricted", async () => {

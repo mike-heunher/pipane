@@ -100,6 +100,7 @@ export interface BackendApi {
 	createFileUpload(metadata: FileUploadMetadata): Promise<FileUploadSession>;
 	appendFileUpload(chunk: FileUploadChunk): Promise<FileUploadChunkResponse>;
 	completeFileUpload(uploadId: string): Promise<FileUploadResponse>;
+	abortFileUpload(uploadId: string): Promise<void>;
 	getLocalSettings(): Promise<LocalSettingsReadResponse>;
 	validateLocalSettings(content: string): Promise<LocalSettingsValidationResponse>;
 	patchLocalSettings(patch: Record<string, unknown>): Promise<LocalSettingsValidationResponse>;
