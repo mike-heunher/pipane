@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.16 - 2026-08-01
+
 - Rediscover and reconnect restarted remote backends without reloading pipane.dev.
 - Download any successfully loaded side-panel file preview with its original filename.
 - Persist attachment uploads across restarts, abort failed transfers, and clean up abandoned or unreferenced upload storage.
