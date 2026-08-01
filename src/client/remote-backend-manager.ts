@@ -37,6 +37,11 @@ export class RemoteBackendManager {
 	async initialize(): Promise<readonly AuthorizedBackendDescriptor[]> {
 		this.identity ??= await this.dependencies.loadIdentity();
 		this.trustApi ??= this.dependencies.createTrustApi();
+		return this.refreshAuthorizedBackends();
+	}
+
+	async refreshAuthorizedBackends(): Promise<readonly AuthorizedBackendDescriptor[]> {
+		if (!this.identity || !this.trustApi) throw new Error("Remote backend manager is not initialized");
 		this.descriptors = await this.trustApi.listAuthorizedBackends(this.identity);
 		return this.authorizedBackends;
 	}

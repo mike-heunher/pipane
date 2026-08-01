@@ -45,6 +45,31 @@ describe("RemoteBackendManager", () => {
 		expect(manager.authorizedBackends.map((backend) => backend.backendId)).toEqual(["b_two"]);
 	});
 
+	it("refreshes backend presence without recreating cached clients", async () => {
+		const client = fakeClient();
+		const listAuthorizedBackends = vi.fn()
+			.mockResolvedValueOnce([{ backendId: "b_one", protocolVersions: [2], online: false }])
+			.mockResolvedValueOnce([{ backendId: "b_one", name: "Restarted", protocolVersions: [2], online: true }]);
+		const createClient = vi.fn(() => client);
+		const manager = new RemoteBackendManager("https://app.example", {
+			loadIdentity: async () => identity,
+			createTrustApi: () => ({
+				listAuthorizedBackends,
+				createConnectionTicket: vi.fn(),
+				revokeBackend: vi.fn(),
+			}),
+			createClient,
+		});
+
+		await manager.initialize();
+		expect(manager.getClient("b_one")).toBe(client);
+		await expect(manager.refreshAuthorizedBackends()).resolves.toEqual([
+			expect.objectContaining({ backendId: "b_one", name: "Restarted", online: true }),
+		]);
+		expect(manager.getClient("b_one")).toBe(client);
+		expect(createClient).toHaveBeenCalledOnce();
+	});
+
 	it("refuses arbitrary backend IDs that are not in the signed account discovery result", async () => {
 		const manager = new RemoteBackendManager("https://app.example", {
 			loadIdentity: async () => identity,

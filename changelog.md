@@ -1,5 +1,6 @@
 # Unreleased
 
+- Rediscover and reconnect restarted remote backends without reloading pipane.dev.
 - Download any successfully loaded side-panel file preview with its original filename.
 - Persist attachment uploads across restarts, abort failed transfers, and clean up abandoned or unreferenced upload storage.
 - Replay unresolved prompts, forked prompts, and steering after reconnect without executing accepted operations twice or restoring duplicate drafts.

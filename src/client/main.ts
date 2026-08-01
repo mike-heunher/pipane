@@ -1103,6 +1103,12 @@ async function initApp() {
 			`,
 			app,
 		);
+		let stopWaitingForBackend: (() => void) | undefined;
+		stopWaitingForBackend = agent.onWorkspaceChange?.(() => {
+			if (!agent.workspaceBackends?.some((backend) => backend.connected)) return;
+			stopWaitingForBackend?.();
+			void initApp();
+		});
 		return;
 	}
 

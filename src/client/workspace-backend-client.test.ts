@@ -148,6 +148,42 @@ describe("WorkspaceBackendClient", () => {
 		]);
 	});
 
+	it("rediscovers and connects a backend that restarts after the workspace loaded", async () => {
+		vi.useFakeTimers();
+		try {
+			const available = fakeClient([session("one", "/sessions/one.jsonl", "/work/one")]);
+			const restarted = fakeClient([session("two", "/sessions/two.jsonl", "/work/two")]);
+			const clients = new Map([["b_one", available.client], ["b_two", restarted.client]]);
+			const refreshAuthorizedBackends = vi.fn(async () => [
+				{ backendId: "b_one", name: "One", online: true, protocolVersions: [1, 2] },
+				{ backendId: "b_two", name: "Two", online: true, protocolVersions: [1, 2] },
+			]);
+			const workspace = new WorkspaceBackendClient([
+				{ backendId: "b_one", name: "One", online: true, protocolVersions: [1, 2] },
+				{ backendId: "b_two", name: "Two", online: false, protocolVersions: [1, 2] },
+			], { getClient: (id) => clients.get(id)!, refreshAuthorizedBackends, revokeBackend: vi.fn() });
+			const changed = vi.fn();
+			workspace.onWorkspaceChange(changed);
+
+			await workspace.connect("webrtc");
+			expect(restarted.client.connect).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(5_000);
+
+			expect(refreshAuthorizedBackends).toHaveBeenCalledOnce();
+			expect(restarted.client.connect).toHaveBeenCalledWith("webrtc");
+			expect(workspace.workspaceBackends.find((backend) => backend.backendId === "b_two")).toEqual(
+				expect.objectContaining({ online: true, connected: true }),
+			);
+			expect(await workspace.listSessions()).toContainEqual(
+				expect.objectContaining({ backendId: "b_two", path: "/sessions/two.jsonl" }),
+			);
+			expect(changed).toHaveBeenCalled();
+			workspace.disconnect();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps the workspace available when one online host cannot connect", async () => {
 		const available = fakeClient([session("ok", "/sessions/ok.jsonl", "/work/ok")]);
 		const failed = fakeClient([], new Error("host failed"));

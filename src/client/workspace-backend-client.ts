@@ -33,6 +33,7 @@ import type { UpdateRunResponse, UpdateSnapshot } from "../shared/updates.js";
 
 interface WorkspaceBackendManager {
 	getClient(backendId: string): BackendClient;
+	refreshAuthorizedBackends?(): Promise<readonly AuthorizedBackendDescriptor[]>;
 	revokeBackend(backendId: string): Promise<void>;
 }
 
@@ -42,6 +43,7 @@ interface BackendContext {
 	sessions: SessionInfoDTO[];
 	error?: string;
 	connectionFailure?: ConnectionFailureDetails;
+	connecting?: Promise<void>;
 	initializing?: Promise<void>;
 	initialized: boolean;
 	unsubscribers: Array<() => void>;
@@ -53,6 +55,7 @@ const EMPTY_STATE: BackendClientState = {
 	messages: [],
 	isStreaming: false,
 };
+const BACKEND_DISCOVERY_REFRESH_MS = 5_000;
 
 /**
  * Account-wide browser workspace.
@@ -66,6 +69,8 @@ export class WorkspaceBackendClient implements BackendClient {
 	private activeId: string;
 	private endpoint = "webrtc";
 	private connectedOnce = false;
+	private discoveryTimer: ReturnType<typeof setTimeout> | undefined;
+	private discoveryStopped = false;
 
 	private readonly connectionListeners = new Set<(connected: boolean) => void>();
 	private readonly extensionStatusListeners = new Set<() => void>();
@@ -136,25 +141,15 @@ export class WorkspaceBackendClient implements BackendClient {
 
 	async connect(endpoint: string): Promise<void> {
 		this.endpoint = endpoint;
+		this.startDiscoveryRefresh();
 		const candidates = [...this.contexts.values()].filter((context) => context.descriptor.online && this.isCompatible(context.descriptor));
 		if (candidates.length === 0) {
 			this.emitWorkspaceChange();
 			throw new Error("All authorized backends are offline");
 		}
 		const attempts = candidates.map(async (context) => {
-			const client = this.ensureClient(context);
-			try {
-				await client.connect(endpoint);
-				context.error = undefined;
-				context.connectionFailure = undefined;
-				await this.refreshContextSessions(context);
-				return context;
-			} catch (error) {
-				context.error = errorMessage(error);
-				context.connectionFailure = connectionFailureDetails(error);
-				this.emitWorkspaceChange();
-				throw error;
-			}
+			await this.connectContext(context);
+			return context;
 		});
 		let firstConnected: BackendContext;
 		try {
@@ -172,6 +167,9 @@ export class WorkspaceBackendClient implements BackendClient {
 	}
 
 	disconnect(): void {
+		this.discoveryStopped = true;
+		if (this.discoveryTimer) clearTimeout(this.discoveryTimer);
+		this.discoveryTimer = undefined;
 		for (const context of this.contexts.values()) context.client?.disconnect();
 	}
 
@@ -412,18 +410,22 @@ export class WorkspaceBackendClient implements BackendClient {
 	}
 
 	private async connectContext(context: BackendContext): Promise<void> {
+		if (context.connecting) return context.connecting;
 		const client = this.ensureClient(context);
-		try {
-			await client.connect(this.endpoint);
-			context.error = undefined;
-			context.connectionFailure = undefined;
-			await this.refreshContextSessions(context);
-		} catch (error) {
-			context.error = errorMessage(error);
-			context.connectionFailure = connectionFailureDetails(error);
-			this.emitWorkspaceChange();
-			throw error;
-		}
+		context.connecting = (async () => {
+			try {
+				await client.connect(this.endpoint);
+				context.error = undefined;
+				context.connectionFailure = undefined;
+				await this.refreshContextSessions(context);
+			} catch (error) {
+				context.error = errorMessage(error);
+				context.connectionFailure = connectionFailureDetails(error);
+				this.emitWorkspaceChange();
+				throw error;
+			}
+		})().finally(() => { context.connecting = undefined; });
+		return context.connecting;
 	}
 
 	private async connectedClient(backendId: string): Promise<BackendClient> {
@@ -431,6 +433,74 @@ export class WorkspaceBackendClient implements BackendClient {
 		const client = this.ensureClient(context);
 		if (!client.isConnected) await this.connectContext(context);
 		return client;
+	}
+
+	private startDiscoveryRefresh(): void {
+		if (!this.manager.refreshAuthorizedBackends || this.discoveryTimer) return;
+		this.discoveryStopped = false;
+		this.discoveryTimer = setTimeout(() => {
+			this.discoveryTimer = undefined;
+			void this.refreshAuthorizedBackends().finally(() => {
+				if (!this.discoveryStopped) this.startDiscoveryRefresh();
+			});
+		}, BACKEND_DISCOVERY_REFRESH_MS);
+	}
+
+	private async refreshAuthorizedBackends(): Promise<void> {
+		if (!this.manager.refreshAuthorizedBackends) return;
+		let descriptors: readonly AuthorizedBackendDescriptor[];
+		try {
+			descriptors = await this.manager.refreshAuthorizedBackends();
+		} catch {
+			// A transient discovery failure must not disturb established backend connections.
+			return;
+		}
+
+		const discoveredIds = new Set(descriptors.map((descriptor) => descriptor.backendId));
+		for (const [backendId, context] of this.contexts) {
+			if (discoveredIds.has(backendId)) continue;
+			for (const unsubscribe of context.unsubscribers) unsubscribe();
+			context.client?.disconnect();
+			this.contexts.delete(backendId);
+		}
+		for (const descriptor of descriptors) {
+			const copy = { ...descriptor, protocolVersions: [...descriptor.protocolVersions] };
+			const context = this.contexts.get(descriptor.backendId);
+			if (context) {
+				context.descriptor = copy;
+				if (!this.isCompatible(copy)) context.error = `Update required for semantic protocol v${BACKEND_PROTOCOL_VERSION}`;
+				else if (context.error?.startsWith("Update required for semantic protocol")) context.error = undefined;
+				continue;
+			}
+			this.contexts.set(descriptor.backendId, {
+				descriptor: copy,
+				sessions: [],
+				...(!this.isCompatible(copy) ? { error: `Update required for semantic protocol v${BACKEND_PROTOCOL_VERSION}` } : {}),
+				initialized: false,
+				unsubscribers: [],
+			});
+		}
+
+		if (this.contexts.size === 0) {
+			this.emitWorkspaceChange();
+			this.emit(this.connectionListeners, false);
+			return;
+		}
+		if (!this.contexts.has(this.activeId)) this.setActiveBackend(this.chooseInitialBackend());
+		this.emitWorkspaceChange();
+
+		const candidates = [...this.contexts.values()].filter((context) =>
+			context.descriptor.online
+			&& this.isCompatible(context.descriptor)
+			&& !context.client?.isConnected
+			&& !context.client?.isReconnecting,
+		);
+		await Promise.allSettled(candidates.map(async (context) => {
+			await this.connectContext(context);
+			this.connectedOnce = true;
+			if (!this.activeClient?.isConnected) this.setActiveBackend(context.descriptor.backendId);
+			this.emitWorkspaceChange();
+		}));
 	}
 
 	private async ensureConversationInitialized(context: BackendContext): Promise<void> {
