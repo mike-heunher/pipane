@@ -153,6 +153,7 @@ describe("deployment scripts", () => {
 
 		expect(pkg.scripts["deploy:preview"]).toBe("./deploy-preview.sh");
 		expect(previewScript).toContain('deploy-local-release.sh" dev');
+		expect(previewScript).toContain("VITE_PIPANE_BOOTSTRAP_DIAGNOSTICS=1");
 		expect(previewScript).toContain("dist/server/rendezvous/server.js");
 		expect(previewScript).toContain("npm ci --omit=dev");
 		expect(previewScript).toContain("systemd-run --quiet --no-block --collect");

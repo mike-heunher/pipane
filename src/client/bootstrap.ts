@@ -1,4 +1,5 @@
 import "./app.css";
+import { bootstrapDiagnostics } from "./bootstrap-diagnostics.js";
 import { isSettingsPath } from "./settings-route.js";
 
 // Unregister stale service workers before either the local workspace or pairing flow starts.
@@ -11,14 +12,19 @@ if ("serviceWorker" in navigator) {
 void bootstrap();
 
 async function bootstrap(): Promise<void> {
+	bootstrapDiagnostics.mark("Checking deployment");
 	if (isDeviceInvitePath(window.location.pathname)) {
+		bootstrapDiagnostics.mark("Loading device invitation");
 		const { initializeDeviceInvitePage } = await import("./device-invite-page.js");
 		await initializeDeviceInvitePage();
+		bootstrapDiagnostics.complete();
 		return;
 	}
 	if (isPairingPath(window.location.pathname)) {
+		bootstrapDiagnostics.mark("Loading device pairing");
 		const { initializePairingPage } = await import("./pairing-page.js");
 		await initializePairingPage();
+		bootstrapDiagnostics.complete();
 		return;
 	}
 	const backendId = backendIdFromPath(window.location.pathname);
@@ -26,6 +32,7 @@ async function bootstrap(): Promise<void> {
 		|| ((window.location.pathname === "/" || isSettingsPath(window.location.pathname)) && await isRendezvousHost());
 	if (rendezvousWorkspace) {
 		try {
+			bootstrapDiagnostics.mark("Loading remote workspace");
 			const [
 				{ configureAppRuntime },
 				{ RemoteBackendManager },
@@ -37,22 +44,31 @@ async function bootstrap(): Promise<void> {
 				import("./workspace-backend-client.js"),
 				import("./device-identity.js"),
 			]);
+			bootstrapDiagnostics.mark("Loading browser identity");
 			if (!await loadBrowserDeviceIdentity()) {
 				await renderBackendLandingPage();
+				bootstrapDiagnostics.complete();
 				return;
 			}
+			bootstrapDiagnostics.mark("Discovering authorized backends");
 			const manager = new RemoteBackendManager(window.location.origin);
 			const backends = await manager.initialize();
 			if (backends.length === 0) {
 				await renderBackendLandingPage();
+				bootstrapDiagnostics.complete();
 				return;
 			}
-			configureAppRuntime({ client: new WorkspaceBackendClient(backends, manager, backendId) });
+			bootstrapDiagnostics.event("Backend discovery complete", `${backends.length} authorized backend${backends.length === 1 ? "" : "s"}`);
+			const client = new WorkspaceBackendClient(backends, manager, backendId);
+			bootstrapDiagnostics.attachClient(client);
+			configureAppRuntime({ client });
 		} catch (error) {
 			renderBootstrapError(error);
+			bootstrapDiagnostics.fail(error);
 			return;
 		}
 	}
+	bootstrapDiagnostics.mark("Loading application");
 	await import("./main.js");
 }
 

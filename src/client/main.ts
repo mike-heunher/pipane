@@ -6,6 +6,7 @@ import { ConversationScrollController } from "./conversation-scroll.js";
 import { conversationDraftKey, ConversationDraftStore } from "./conversation-drafts.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { consumeAppRuntime } from "./app-runtime.js";
+import { bootstrapDiagnostics } from "./bootstrap-diagnostics.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import { LOCAL_BACKEND_UPDATE_KEY } from "./session-picker.js";
 import "./ui/index.js";
@@ -52,6 +53,7 @@ import {
 
 const appRuntime = consumeAppRuntime(() => new WsAgentAdapter());
 const agent: BackendClient = appRuntime.client;
+bootstrapDiagnostics.attachClient(agent);
 initThemes(agent);
 document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
 document.addEventListener("keydown", handleConversationKeyDown);
@@ -95,6 +97,10 @@ let deviceInviteOpen = false;
 let chatJsonlJumpListenerInstalled = false;
 let filePreviewLinkListenerInstalled = false;
 let prefetchedSessions: SessionInfoDTO[] | undefined;
+let startupExpectedSessionPath: string | undefined;
+let startupExpectedBackendId: string | undefined;
+let startupHistoryReceived = false;
+let startupWorkspaceRendered = false;
 const conversationScroll = new ConversationScrollController();
 let conversationTouchY: number | undefined;
 let canvasFeatureEnabled = false;
@@ -1041,6 +1047,11 @@ async function initApp() {
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
+	startupExpectedSessionPath = undefined;
+	startupExpectedBackendId = undefined;
+	startupHistoryReceived = false;
+	startupWorkspaceRendered = false;
+
 	let connectingOverlayTimer: ReturnType<typeof setTimeout> | undefined;
 	const skeletonShell = document.getElementById("skeleton-shell");
 	connectingOverlayTimer = setTimeout(() => {
@@ -1058,10 +1069,14 @@ async function initApp() {
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
 
+	bootstrapDiagnostics.mark("Connecting to backend");
 	try {
 		await agent.connect(wsUrl);
+		bootstrapDiagnostics.event("Initial backend connection complete");
 	} catch (err) {
 		clearTimeout(connectingOverlayTimer);
+		bootstrapDiagnostics.fail(err);
+		skeletonShell?.remove();
 		const backends = agent.workspaceBackends ?? [];
 		const relayCandidate = backends.find((backend) => backend.connectionFailure?.turnRecommended
 			|| backend.connectionFailure?.code === "relay_configuration");
@@ -1114,6 +1129,7 @@ async function initApp() {
 
 	clearTimeout(connectingOverlayTimer);
 
+	bootstrapDiagnostics.mark("Loading workspace settings");
 	try {
 		applyBackendSettings(await agent.getLocalSettings());
 		await resyncAppearanceFromServer();
@@ -1121,8 +1137,13 @@ async function initApp() {
 		// Backend settings are optional; cached UI defaults remain usable.
 	}
 
-	const sessionsPrefetch = agent.listSessions().catch((err) => {
+	bootstrapDiagnostics.event("Conversation catalog requested");
+	const sessionsPrefetch = agent.listSessions().then((sessions) => {
+		bootstrapDiagnostics.event("Conversation catalog loaded", `${sessions.length} conversation${sessions.length === 1 ? "" : "s"}`);
+		return sessions;
+	}).catch((err) => {
 		console.error("Failed to prefetch sessions:", err);
+		bootstrapDiagnostics.event("Conversation catalog failed", err instanceof Error ? err.message : String(err));
 		return undefined;
 	});
 
@@ -1169,6 +1190,17 @@ async function initApp() {
 
 	// Content change — just re-render
 	agent.onContentChange(() => {
+		if (startupExpectedSessionPath
+			&& !startupHistoryReceived
+			&& agent.sessionFile === startupExpectedSessionPath
+			&& (!startupExpectedBackendId || agent.activeBackendId === startupExpectedBackendId)) {
+			startupHistoryReceived = true;
+			bootstrapDiagnostics.event("Conversation history received", `${agent.state.messages.length} materialized messages`);
+			if (startupWorkspaceRendered) {
+				startupExpectedSessionPath = undefined;
+				bootstrapDiagnostics.complete();
+			}
+		}
 		if (canvasFeatureEnabled) restoreCanvasFromMessages(agent.state.messages, agent.sessionFile, currentCanvasTrackingScope());
 		refreshJsonlPanel();
 		renderApp();
@@ -1260,13 +1292,16 @@ async function initApp() {
 
 	// Load the full model catalog before restoring a session. Persisted sessions
 	// contain only provider/modelId refs, so restoration needs this metadata.
+	bootstrapDiagnostics.mark("Loading model catalog");
 	try {
 		await agent.fetchAvailableModels();
 	} catch (err) {
 		console.warn("Failed to preload available models; using compact session metadata", err);
 	}
+	bootstrapDiagnostics.mark("Loading default model");
 	await agent.loadDefaultModel();
 
+	bootstrapDiagnostics.mark("Waiting for conversation catalog");
 	prefetchedSessions = (await sessionsPrefetch) ?? undefined;
 
 	if (prefetchedSessions && prefetchedSessions.length > 0) {
@@ -1275,12 +1310,24 @@ async function initApp() {
 			const sTime = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
 			return sTime > bestTime ? s : best;
 		});
+		startupExpectedSessionPath = mostRecent.path;
+		startupExpectedBackendId = mostRecent.backendId;
+		bootstrapDiagnostics.mark("Loading latest conversation", `${prefetchedSessions.length} conversations available`);
 		await agent.switchSession(mostRecent.path, mostRecent.cwd, mostRecent.backendId);
 	} else {
+		bootstrapDiagnostics.mark("Creating empty conversation");
 		await agent.newSession();
 	}
 
+	bootstrapDiagnostics.mark("Rendering workspace");
 	renderApp();
+	startupWorkspaceRendered = true;
+	if (!startupExpectedSessionPath || startupHistoryReceived) {
+		startupExpectedSessionPath = undefined;
+		bootstrapDiagnostics.complete();
+	} else {
+		bootstrapDiagnostics.mark("Waiting for conversation history");
+	}
 	void refreshUpdateNotices();
 	syncSettingsRoute();
 
@@ -1288,4 +1335,7 @@ async function initApp() {
 
 }
 
-initApp();
+void initApp().catch((error) => {
+	console.error("Failed to initialize Pipane:", error);
+	bootstrapDiagnostics.fail(error);
+});

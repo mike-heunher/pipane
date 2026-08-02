@@ -85,7 +85,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "🚀 Deploying the preview backend locally..."
-"$SOURCE_DIR/scripts/deploy-local-release.sh" dev
+VITE_PIPANE_BOOTSTRAP_DIAGNOSTICS=1 "$SOURCE_DIR/scripts/deploy-local-release.sh" dev
 
 for required_file in dist/client/index.html dist/server/rendezvous/server.js bin/pipane-rendezvous.js; do
 	if [[ ! -f "$SOURCE_DIR/$required_file" ]]; then

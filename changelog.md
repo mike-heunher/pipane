@@ -1,5 +1,6 @@
 # Unreleased
 
+- Add preview-only startup diagnostics for mobile WebRTC, ICE, TURN, and bootstrap failures, and reveal connection recovery instead of leaving the wireframe visible.
 - Show collapsed tool calls without output with the correct closed chevron.
 - Run extension commands such as `/usage` in fresh conversations without ghost sessions and show their full notifications.
 - Detect stale laptop rendezvous connections after sleep or network changes and reconnect them automatically.
