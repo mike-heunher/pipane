@@ -439,6 +439,37 @@ describe("pipane rendezvous trust and signaling", () => {
 		expect(deniedChallenge.status).toBe(400);
 	});
 
+	it("replaces a half-open backend registration when its heartbeat stops", async () => {
+		const { baseUrl } = await startServer();
+		const identity = createIdentity();
+		const sockets: WebSocket[] = [];
+		const errors: string[] = [];
+		const client = new BackendRendezvousClient({
+			url: baseUrl,
+			identity,
+			metadata: { softwareVersion: "0.1.16", protocolVersions: [1] },
+			heartbeatIntervalMs: 20,
+			maxReconnectDelayMs: 20,
+			createWebSocket: (url) => {
+				const socket = new WebSocket(url);
+				sockets.push(socket);
+				return socket;
+			},
+		});
+		client.onError((error) => errors.push(error.message));
+		cleanupClients.push(client);
+		await client.start();
+
+		const disconnected = eventPromise<boolean>((resolve) => client.onStatus((connected) => { if (!connected) resolve(false); }));
+		const reconnected = eventPromise<boolean>((resolve) => client.onStatus((connected) => { if (connected) resolve(true); }));
+		sockets[0].removeAllListeners("pong");
+
+		expect(await disconnected).toBe(false);
+		expect(await reconnected).toBe(true);
+		expect(sockets).toHaveLength(2);
+		expect(errors).toContain("Rendezvous heartbeat timed out");
+	});
+
 	it("reconnects backend registration and rejects invalid signatures or offline targets", async () => {
 		const { baseUrl } = await startServer();
 		const identity = createIdentity();

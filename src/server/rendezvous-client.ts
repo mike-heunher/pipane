@@ -41,6 +41,8 @@ export interface BackendRendezvousClientOptions {
 	schedule?: typeof globalThis.setTimeout;
 	cancelSchedule?: typeof globalThis.clearTimeout;
 	maxReconnectDelayMs?: number;
+	registrationTimeoutMs?: number;
+	heartbeatIntervalMs?: number;
 }
 
 export class BackendRendezvousClient {
@@ -51,6 +53,8 @@ export class BackendRendezvousClient {
 	private readonly schedule: typeof globalThis.setTimeout;
 	private readonly cancelSchedule: typeof globalThis.clearTimeout;
 	private readonly maxReconnectDelayMs: number;
+	private readonly registrationTimeoutMs: number;
+	private readonly heartbeatIntervalMs: number;
 	private readonly statusListeners = new Set<(connected: boolean) => void>();
 	private readonly connectionListeners = new Set<(request: BackendConnectionRequest) => void>();
 	private readonly signalListeners = new Set<(connectionId: string, signal: IceSignal) => void>();
@@ -65,7 +69,10 @@ export class BackendRendezvousClient {
 	}>();
 	private socket: WebSocket | null = null;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	private registrationTimer: ReturnType<typeof setTimeout> | undefined;
+	private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
 	private reconnectAttempt = 0;
+	private heartbeatAlive = false;
 	private stopped = true;
 	private registered = false;
 	private firstRegistrationSettled = false;
@@ -83,6 +90,8 @@ export class BackendRendezvousClient {
 		this.schedule = options.schedule ?? globalThis.setTimeout.bind(globalThis);
 		this.cancelSchedule = options.cancelSchedule ?? globalThis.clearTimeout.bind(globalThis);
 		this.maxReconnectDelayMs = options.maxReconnectDelayMs ?? 10_000;
+		this.registrationTimeoutMs = options.registrationTimeoutMs ?? 15_000;
+		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
 		this.firstRegistration = new Promise<string>((resolve, reject) => {
 			this.resolveFirstRegistration = resolve;
 			this.rejectFirstRegistration = reject;
@@ -121,6 +130,7 @@ export class BackendRendezvousClient {
 			this.cancelSchedule(this.reconnectTimer);
 			this.reconnectTimer = undefined;
 		}
+		this.clearConnectionTimers();
 		const error = new Error("Rendezvous client stopped");
 		if (!this.firstRegistrationSettled) {
 			this.firstRegistrationSettled = true;
@@ -196,13 +206,35 @@ export class BackendRendezvousClient {
 
 	private open(): void {
 		if (this.stopped) return;
-		const socket = this.createWebSocket(this.endpoint);
+		let socket: WebSocket;
+		try {
+			socket = this.createWebSocket(this.endpoint);
+		} catch (error) {
+			this.emitError(toError(error));
+			this.scheduleReconnect();
+			return;
+		}
 		this.socket = socket;
+		this.registrationTimer = this.schedule(() => {
+			if (this.socket !== socket || this.registered) return;
+			this.registrationTimer = undefined;
+			this.emitError(new Error("Rendezvous registration timed out"));
+			socket.terminate();
+		}, this.registrationTimeoutMs);
 
-		socket.on("message", (raw) => this.handleMessage(socket, raw.toString()));
+		socket.on("message", (raw) => {
+			if (this.socket === socket) this.heartbeatAlive = true;
+			this.handleMessage(socket, raw.toString());
+		});
+		for (const event of ["ping", "pong"] as const) {
+			socket.on(event, () => {
+				if (this.socket === socket) this.heartbeatAlive = true;
+			});
+		}
 		socket.on("error", (error) => this.emitError(error));
 		socket.on("close", () => {
 			if (this.socket !== socket) return;
+			this.clearConnectionTimers();
 			this.socket = null;
 			const interruption = new Error("Rendezvous disconnected during pairing confirmation");
 			for (const pending of this.confirmationResolvers.values()) pending.reject(interruption);
@@ -242,6 +274,8 @@ export class BackendRendezvousClient {
 				this._iceServers = message.iceServers;
 				this.registered = true;
 				this.reconnectAttempt = 0;
+				this.clearRegistrationTimer();
+				this.startHeartbeat(socket);
 				this.emitStatus(true);
 				if (!this.firstRegistrationSettled) {
 					this.firstRegistrationSettled = true;
@@ -317,6 +351,45 @@ export class BackendRendezvousClient {
 		}, delay);
 	}
 
+	private startHeartbeat(socket: WebSocket): void {
+		if (this.heartbeatTimer) this.cancelSchedule(this.heartbeatTimer);
+		this.heartbeatAlive = true;
+		const heartbeat = (): void => {
+			this.heartbeatTimer = undefined;
+			if (this.stopped || this.socket !== socket || !this.registered) return;
+			if (!this.heartbeatAlive) {
+				this.emitError(new Error("Rendezvous heartbeat timed out"));
+				socket.terminate();
+				return;
+			}
+			this.heartbeatAlive = false;
+			try {
+				socket.ping();
+			} catch (error) {
+				this.emitError(toError(error));
+				socket.terminate();
+				return;
+			}
+			this.heartbeatTimer = this.schedule(heartbeat, this.heartbeatIntervalMs);
+		};
+		this.heartbeatTimer = this.schedule(heartbeat, this.heartbeatIntervalMs);
+	}
+
+	private clearRegistrationTimer(): void {
+		if (!this.registrationTimer) return;
+		this.cancelSchedule(this.registrationTimer);
+		this.registrationTimer = undefined;
+	}
+
+	private clearConnectionTimers(): void {
+		this.clearRegistrationTimer();
+		if (this.heartbeatTimer) {
+			this.cancelSchedule(this.heartbeatTimer);
+			this.heartbeatTimer = undefined;
+		}
+		this.heartbeatAlive = false;
+	}
+
 	private emitStatus(connected: boolean): void {
 		for (const listener of this.statusListeners) listener(connected);
 	}
@@ -324,4 +397,8 @@ export class BackendRendezvousClient {
 	private emitError(error: RendezvousErrorMessage | Error): void {
 		for (const listener of this.errorListeners) listener(error);
 	}
+}
+
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }

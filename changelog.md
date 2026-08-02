@@ -1,5 +1,7 @@
 # Unreleased
 
+- Detect stale laptop rendezvous connections after sleep or network changes and reconnect them automatically.
+
 # 0.1.16 - 2026-08-01
 
 - Rediscover and reconnect restarted remote backends without reloading pipane.dev.

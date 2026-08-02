@@ -113,6 +113,15 @@ async function startRendezvousRegistration(): Promise<void> {
 	client.onError((error) => {
 		console.warn("[rendezvous]", error instanceof Error ? error.message : error.message);
 	});
+	let registeredOnce = false;
+	client.onStatus((connected) => {
+		if (connected) {
+			if (registeredOnce) log("[rendezvous] backend registration reconnected");
+			registeredOnce = true;
+		} else if (registeredOnce) {
+			console.warn("[rendezvous] backend registration disconnected; retrying");
+		}
+	});
 	let peers: BackendWebRtcManager | undefined;
 	client.onAuthorizationRevoked(({ accountId, deviceId }) => {
 		trustStore.applyRevocation(accountId, deviceId);
