@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setAutoCollapseKeepOpen, resetAutoCollapse, runAutoCollapse, notifyToolToggled } from "./auto-collapse.js";
 
-function createToolMessage(id: string, completed: boolean): HTMLElement {
+function createToolMessage(id: string, completed: boolean, hasBody: boolean = true): HTMLElement {
 	const tm = document.createElement("tool-message");
 	tm.setAttribute("data-tool-call-id", id);
 
@@ -15,9 +15,11 @@ function createToolMessage(id: string, completed: boolean): HTMLElement {
 	chevron.style.transform = "rotate(90deg)";
 	wrap.appendChild(chevron);
 
-	const threadLine = document.createElement("div");
-	threadLine.className = "tool-thread-line";
-	wrap.appendChild(threadLine);
+	if (hasBody) {
+		const threadLine = document.createElement("div");
+		threadLine.className = "tool-thread-line";
+		wrap.appendChild(threadLine);
+	}
 
 	if (!completed) {
 		const spinner = document.createElement("span");
@@ -25,10 +27,12 @@ function createToolMessage(id: string, completed: boolean): HTMLElement {
 		wrap.appendChild(spinner);
 	}
 
-	const body = document.createElement("div");
-	body.className = "tool-body-collapsible";
-	body.textContent = "tool output";
-	wrap.appendChild(body);
+	if (hasBody) {
+		const body = document.createElement("div");
+		body.className = "tool-body-collapsible";
+		body.textContent = "tool output";
+		wrap.appendChild(body);
+	}
 
 	tm.appendChild(wrap);
 	return tm;
@@ -150,6 +154,15 @@ describe("auto-collapse", () => {
 
 		expect(threadLine.style.display).toBe("none");
 		expect(chevron.style.transform).toBe("");
+	});
+
+	it("shows a collapsed chevron for a tool without an output body", () => {
+		setAutoCollapseKeepOpen(0);
+		container.appendChild(createToolMessage("t0", true, false));
+		runAutoCollapse();
+
+		expect(container.querySelector(".tool-body-collapsible")).toBeNull();
+		expect((container.querySelector(".tool-chevron") as HTMLElement).style.transform).toBe("");
 	});
 
 	it("re-collapses an older tool when a render recreates its open body", () => {

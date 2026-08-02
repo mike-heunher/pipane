@@ -75,15 +75,9 @@ export function runAutoCollapse() {
 
 	for (const { id, wrap } of toCollapse) {
 		const body = wrap.querySelector(".tool-body-collapsible") as HTMLElement | null;
-		if (!body || body.style.display === "none") {
-			// Already collapsed (e.g. no body), just track it
-			autoCollapsed.add(id);
-			continue;
-		}
-
-		body.style.display = "none";
 		const threadLine = wrap.querySelector(".tool-thread-line") as HTMLElement | null;
 		const chevron = wrap.querySelector(".tool-chevron") as HTMLElement | null;
+		if (body) body.style.display = "none";
 		if (threadLine) threadLine.style.display = "none";
 		if (chevron) chevron.style.transform = "";
 		autoCollapsed.add(id);
