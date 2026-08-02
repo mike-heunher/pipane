@@ -6,6 +6,7 @@ export type ProviderUsageProvider = "anthropic" | "codex";
 
 const MAX_STATUS_KEY_LENGTH = 128;
 const MAX_STATUS_TEXT_LENGTH = 512;
+const MAX_NOTIFICATION_TEXT_LENGTH = 12_000;
 const KEY_CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
 const CONTROL_CHARACTERS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 
@@ -23,6 +24,15 @@ export function normalizeExtensionStatusText(value: string): string {
 		.replace(/\s{2,}/g, " ")
 		.trim()
 		.slice(0, MAX_STATUS_TEXT_LENGTH);
+}
+
+/** Preserve multiline extension output while removing terminal/control sequences. */
+export function normalizeExtensionNotificationText(value: string): string {
+	return stripVTControlCharacters(value)
+		.replace(/\r\n?/g, "\n")
+		.replace(CONTROL_CHARACTERS, "")
+		.trimEnd()
+		.slice(0, MAX_NOTIFICATION_TEXT_LENGTH);
 }
 
 export function extensionStatusSnapshot(statuses: ReadonlyMap<string, string> | undefined): ExtensionStatuses {

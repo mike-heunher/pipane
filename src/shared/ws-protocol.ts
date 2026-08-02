@@ -132,7 +132,11 @@ export type ClientCommandPayload = ClientCommand extends infer Command
 export interface CommandResponseDataMap {
 	install_pi: Record<string, never>;
 	subscribe_session: Record<string, never>;
-	prompt: { newSessionPath: string };
+	prompt: {
+		newSessionPath: string;
+		/** False when Pi handled an extension command without persisting a session. */
+		sessionCreated?: boolean;
+	};
 	steer: Record<string, never>;
 	remove_steering: Record<string, never>;
 	abort: Record<string, never>;
@@ -256,6 +260,14 @@ export type ExtensionStatusMessage = ServerEnvelope & {
 	statuses: ExtensionStatuses;
 };
 
+export type ExtensionNotificationMessage = ServerEnvelope & {
+	type: "extension_notification";
+	sessionPath: string;
+	operationId?: string;
+	message: string;
+	notifyType: "info" | "warning" | "error";
+};
+
 export type ControlStateMessage = ServerEnvelope & {
 	type: "control_state";
 	sessionPath: string;
@@ -283,6 +295,7 @@ export type ServerMessage =
 	| SessionStatusChangeMessage
 	| ProviderUsageMessage
 	| ExtensionStatusMessage
+	| ExtensionNotificationMessage
 	| SessionSyncMessage
 	| ControlStateMessage
 	| SessionAttachedMessage
@@ -621,6 +634,9 @@ function validateSuccessData(command: ClientCommandType, value: unknown, path: s
 		case "set_session_name":
 			break;
 		case "prompt":
+			string(data.newSessionPath, `${path}.newSessionPath`, false);
+			if (data.sessionCreated !== undefined) boolean(data.sessionCreated, `${path}.sessionCreated`);
+			break;
 		case "fork_prompt":
 			string(data.newSessionPath, `${path}.newSessionPath`, false);
 			break;
@@ -757,6 +773,14 @@ export function decodeServerMessage(raw: string): ProtocolDecodeResult<ServerMes
 			case "extension_status":
 				string(message.sessionPath, "$message.sessionPath", false);
 				stringRecord(message.statuses, "$message.statuses");
+				break;
+			case "extension_notification":
+				string(message.sessionPath, "$message.sessionPath", false);
+				optionalString(message.operationId, "$message.operationId");
+				string(message.message, "$message.message");
+				if (!["info", "warning", "error"].includes(String(message.notifyType))) {
+					fail("$message.notifyType", "expected info, warning, or error");
+				}
 				break;
 			case "session_sync":
 				string(message.sessionPath, "$message.sessionPath", false);

@@ -14,7 +14,7 @@ The server rejects invalid JSON, unsupported versions, unknown commands, and inv
 
 The v1 command union covers installation, session subscription, prompting and steering, steering removal, abort and hard kill, compaction, model and command discovery, session statuses and authoritative session statistics, fork and fork/prompt, session naming, and process reload.
 
-`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Prompt, fork/prompt, and steering commands carry a browser-generated `operationId`; unresolved commands retain their exact request frame and correlation id across carrier reconnects. The backend keeps active and completed operation receipts, rejects reuse with another payload, and replays the accepted response without dispatching the operation to Pi twice. A disconnect after Pi persistence therefore reconciles the original submission instead of restoring a duplicate composer draft. Older clients without `operationId` remain compatible but do not receive reconnect idempotency. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills.
+`WsAgentAdapter.send()` is generic over this union. Its result type is selected from `CommandResponseDataMap`, so a response for one command cannot be consumed as another command's data. The browser also checks that the response command matches the pending request before resolving it. Prompt, fork/prompt, and steering commands carry a browser-generated `operationId`; unresolved commands retain their exact request frame and correlation id across carrier reconnects. The backend keeps active and completed operation receipts, rejects reuse with another payload, and replays the accepted response without dispatching the operation to Pi twice. A disconnect after Pi persistence therefore reconciles the original submission instead of restoring a duplicate composer draft. Older clients without `operationId` remain compatible but do not receive reconnect idempotency. A fresh prompt response may add `sessionCreated: false` when Pi handled the text entirely as an extension command; the browser then remains virtual instead of adopting Pi's unpersisted allocated path. Command discovery may include an active `sessionPath` or virtual-session `cwd`; the server uses that context so Pi returns the correct project-scoped prompts and skills, including actor-owned first-turn paths that Pi has not flushed yet.
 
 ### Server messages
 
@@ -24,6 +24,7 @@ The v1 server union covers:
 - initialization and Pi-install status
 - global session status changes
 - account and session extension statuses
+- scoped extension notifications, including asynchronous output from extension-only commands
 - session synchronization
 - effective model/thinking controls
 - newly attached sessions

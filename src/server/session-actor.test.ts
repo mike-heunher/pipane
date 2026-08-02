@@ -126,6 +126,30 @@ describe("SessionRegistry", () => {
 		});
 	});
 
+	it("hides pending actors until promotion and discards unpersisted ones on detach", () => {
+		const registry = new SessionRegistry();
+		const events: any[] = [];
+		registry.subscribe((event) => events.push(event));
+		const session = () => new SessionJsonl({ messages: [], model: null, thinkingLevel: "off" });
+
+		const discardedPath = "/sessions/discarded.jsonl";
+		const discarded = registry.getPending(discardedPath);
+		discarded.attach({ process: { id: 11 }, release: vi.fn() } as any, session());
+		expect(registry.getAllStatuses()).toEqual({});
+		discarded.detach();
+		expect(registry.find(discardedPath)).toBeUndefined();
+		expect(events.some((event) => event.sessionPath === discardedPath && event.type === "session_attached")).toBe(false);
+
+		const promotedPath = "/sessions/promoted.jsonl";
+		const promoted = registry.getPending(promotedPath);
+		promoted.attach({ process: { id: 12 }, release: vi.fn() } as any, session());
+		registry.promotePending(promotedPath);
+		expect(registry.getAllStatuses()).toEqual({ [promotedPath]: "running" });
+		promoted.detach();
+		expect(registry.find(promotedPath)).toBe(promoted);
+		expect(registry.getAllStatuses()).toEqual({ [promotedPath]: "done" });
+	});
+
 	it("returns actor-owned steering queues for reconnect snapshots", () => {
 		const registry = new SessionRegistry();
 		const actor = registry.get("/sessions/a.jsonl");

@@ -1,5 +1,6 @@
 # Unreleased
 
+- Run extension commands such as `/usage` in fresh conversations without ghost sessions and show their full notifications.
 - Detect stale laptop rendezvous connections after sleep or network changes and reconnect them automatically.
 
 # 0.1.16 - 2026-08-01

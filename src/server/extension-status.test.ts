@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	extensionStatusSnapshot,
 	isValidExtensionStatusKey,
+	normalizeExtensionNotificationText,
 	normalizeExtensionStatusText,
 	providerForUsageStatus,
 } from "./extension-status.js";
@@ -14,6 +15,11 @@ describe("extension status normalization", () => {
 
 	it("limits untrusted status text", () => {
 		expect(normalizeExtensionStatusText("x".repeat(600))).toHaveLength(512);
+	});
+
+	it("preserves safe notification line breaks while stripping terminal controls", () => {
+		expect(normalizeExtensionNotificationText("\u001b[39mUsage\r\n  5h: 20%\u0000"))
+			.toBe("Usage\n  5h: 20%");
 	});
 
 	it("validates stable non-control keys", () => {

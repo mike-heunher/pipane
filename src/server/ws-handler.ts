@@ -60,6 +60,7 @@ import { SessionPathError, SessionPathGuard } from "./session-path.js";
 import {
 	extensionStatusSnapshot,
 	isValidExtensionStatusKey,
+	normalizeExtensionNotificationText,
 	normalizeExtensionStatusText,
 	providerForUsageStatus,
 	PROVIDER_USAGE_STATUS_KEY,
@@ -113,6 +114,13 @@ interface TurnEventObserver {
 	hasSettled: () => boolean;
 }
 
+interface ExtensionUiRoute {
+	sessionPath: string;
+	operationId?: string;
+	requester: ServerFrameConnection;
+	persistent: boolean;
+}
+
 let nextTurnId = 0;
 function makeTurnId(): string {
 	return `turn_${Date.now()}_${++nextTurnId}`;
@@ -139,6 +147,8 @@ export class WsHandler {
 	private providerUsageStatuses = new Map<ProviderUsageProvider, string>();
 	/** Statuses emitted while a process is switching to a not-yet-attached session. */
 	private pendingExtensionStatuses = new WeakMap<RpcProcess, Map<string, string>>();
+	/** Route asynchronous extension UI output to its conversation/requester. */
+	private extensionUiRoutes = new WeakMap<RpcProcess, ExtensionUiRoute>();
 	/**
 	 * Track file sizes for detached sessions that clients are subscribed to.
 	 * Used for change detection when the file watcher fires.
@@ -201,6 +211,7 @@ export class WsHandler {
 	/** Idempotently clean up the owning actor after an RPC process exits. */
 	handleProcessExit(proc: RpcProcess): void {
 		this.pendingExtensionStatuses.delete(proc);
+		this.extensionUiRoutes.delete(proc);
 		const actor = this.registry.getActorForProcess(proc);
 		if (!actor) return;
 		console.log(`[pool] pi#${proc.id} crashed while attached to ${path.basename(actor.sessionPath)} — marking done`);
@@ -214,8 +225,12 @@ export class WsHandler {
 	}
 
 	private handleProcessEvent(proc: RpcProcess, event: RpcProcessEvent): void {
-		if (event.type !== "extension_ui_request" || event.method !== "setStatus") return;
-		if (!isValidExtensionStatusKey(event.statusKey)) return;
+		if (event.type !== "extension_ui_request") return;
+		if (event.method === "notify") {
+			this.forwardExtensionNotification(proc, event);
+			return;
+		}
+		if (event.method !== "setStatus" || !isValidExtensionStatusKey(event.statusKey)) return;
 
 		const normalizedStatusText = typeof event.statusText === "string"
 			? normalizeExtensionStatusText(event.statusText)
@@ -232,7 +247,9 @@ export class WsHandler {
 			}
 		}
 
-		const sessionPath = this.registry.getActorForProcess(proc)?.sessionPath;
+		const route = this.extensionUiRoutes.get(proc);
+		const actorSessionPath = this.registry.getActorForProcess(proc)?.sessionPath;
+		const sessionPath = actorSessionPath ?? (route?.persistent ? route.sessionPath : undefined);
 		const statuses = sessionPath
 			? (this.extensionStatusesBySession.get(sessionPath) ?? new Map<string, string>())
 			: this.pendingExtensionStatuses.get(proc);
@@ -253,6 +270,32 @@ export class WsHandler {
 
 		if (sessionPath && previous !== statuses.get(event.statusKey)) {
 			this.pushExtensionStatusesToSubscribers(sessionPath);
+		}
+	}
+
+	private forwardExtensionNotification(
+		proc: RpcProcess,
+		event: Extract<RpcProcessEvent, { type: "extension_ui_request"; method: "notify" }>,
+	): void {
+		const route = this.extensionUiRoutes.get(proc);
+		const sessionPath = this.registry.getActorForProcess(proc)?.sessionPath ?? route?.sessionPath;
+		if (!sessionPath) return;
+		const message = normalizeExtensionNotificationText(event.message);
+		if (!message) return;
+
+		const targets = new Set<ServerFrameConnection>();
+		if (route?.requester.readyState === FRAME_CONNECTION_OPEN) targets.add(route.requester);
+		for (const [ws, client] of this.clients) {
+			if (client.subscribedSession === sessionPath && ws.readyState === FRAME_CONNECTION_OPEN) targets.add(ws);
+		}
+		for (const ws of targets) {
+			this.sendMessage(ws, {
+				type: "extension_notification",
+				sessionPath,
+				...(route?.operationId ? { operationId: route.operationId } : {}),
+				message,
+				notifyType: event.notifyType ?? "info",
+			});
 		}
 	}
 
@@ -693,7 +736,8 @@ export class WsHandler {
 	): Promise<void> {
 		const requestedPath = command.sessionPath;
 		if (!requestedPath) throw new Error("Missing sessionPath");
-		let sessionPath = requestedPath === "__new__"
+		const isNewSession = requestedPath === "__new__";
+		let sessionPath = isNewSession
 			? requestedPath
 			: this.sessionPaths.resolveExisting(requestedPath);
 
@@ -705,9 +749,10 @@ export class WsHandler {
 		let unownedLease: RpcProcessLease | undefined;
 		let generation: number | undefined;
 		let promptAccepted = false;
+		let sessionCreated = !isNewSession;
 		try {
 			let newSessionCwd: string | undefined;
-			if (sessionPath === "__new__") {
+			if (isNewSession) {
 				newSessionCwd = command.cwd as string || this.defaultCwd;
 				unownedLease = await this.acquireProcess(newSessionCwd);
 				proc = unownedLease.process;
@@ -720,7 +765,9 @@ export class WsHandler {
 				sessionPath = this.sessionPaths.resolvePending(createdPath);
 			}
 
-			actor = this.registry.get(sessionPath);
+			actor = isNewSession
+				? this.registry.getPending(sessionPath)
+				: this.registry.get(sessionPath);
 			const start = await actor.enqueue("prompt start", async () => {
 				// A second prompt that arrived during startup observes the committed
 				// actor phase and becomes steering rather than a second turn owner.
@@ -735,15 +782,17 @@ export class WsHandler {
 					actor!.attach(unownedLease, this.createSessionState(sessionPath));
 					unownedLease = undefined;
 					this.commitPendingExtensionStatuses(proc, sessionPath);
-					this.sendMessage(ws, {
-						type: "session_attached",
-						sessionPath,
-						cwd: newSessionCwd,
-						firstMessage: command.message,
-					});
 				} else {
 					proc = await this.acquireForActor(actor!);
 				}
+
+				const extensionUiRoute: ExtensionUiRoute = {
+					sessionPath,
+					...(command.operationId ? { operationId: command.operationId } : {}),
+					requester: ws,
+					persistent: !isNewSession,
+				};
+				this.extensionUiRoutes.set(proc!, extensionUiRoute);
 
 				generation = actor!.beginTurn();
 				const observer = this.setupTurnEventForwarding(actor!, proc!, generation, turnId);
@@ -757,14 +806,33 @@ export class WsHandler {
 				});
 				if (!response.success) throw new Error(response.error);
 
-				// Pi has accepted the prompt and persisted its user entry. Resolve the
-				// browser submission now, before settlement or control reconciliation can
-				// encounter a transient failure and offer the same text for retry.
+				const promptStarted = await this.didPromptStart(proc!, observer);
+				if (isNewSession) {
+					// Extension commands can intentionally append custom entries without an
+					// agent turn; retain those sessions if Pi actually wrote their JSONL.
+					sessionCreated = promptStarted || existsSync(sessionPath);
+					extensionUiRoute.persistent = sessionCreated;
+					if (sessionCreated) {
+						this.registry.promotePending(sessionPath);
+						this.sendMessage(ws, {
+							type: "session_attached",
+							sessionPath,
+							cwd: newSessionCwd,
+							firstMessage: command.message,
+						});
+					}
+				}
+
+				// Resolve once Pi has accepted and classified the prompt. Later settlement
+				// failures must not offer an already accepted model turn for retry.
 				promptAccepted = true;
-				accept({ newSessionPath: sessionPath });
+				accept({
+					newSessionPath: sessionPath,
+					...(isNewSession ? { sessionCreated } : {}),
+				});
 
 				await this.reconcileEffectiveControlState(proc!, actor!);
-				return { observer, response, generation };
+				return { observer, response, generation, promptStarted };
 			});
 
 			if (!start) {
@@ -773,16 +841,18 @@ export class WsHandler {
 				return;
 			}
 
-			await this.waitForPromptSettlement(proc!, start.observer);
+			await this.waitForPromptSettlement(proc!, start.observer, start.promptStarted);
 			await actor.enqueue("prompt settlement", async () => {
 				if (!actor!.owns(proc!, start.generation)) return;
 				await this.reconcileEffectiveControlState(proc!, actor!);
 				this.releaseActor(actor!);
+				if (isNewSession && !sessionCreated) this.extensionStatusesBySession.delete(sessionPath);
 			});
 
 		} catch (error) {
 			if (proc) this.pendingExtensionStatuses.delete(proc);
 			unownedLease?.release();
+			if (isNewSession && actor && !actor.isAttached) this.registry.discardPending(sessionPath);
 			if (actor && proc && actor.process === proc) {
 				let detailed = this.buildPromptFailureMessage(error, proc, actor);
 				await actor.enqueue("prompt failure", () => {
@@ -903,9 +973,19 @@ export class WsHandler {
 	private async handleGetCommands(ws: ServerFrameConnection, command: CommandOf<"get_commands">): Promise<void> {
 		let cwd = command.cwd || this.defaultCwd;
 		if (command.sessionPath) {
-			const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
-			const sessionCwd = getSessionCwd(sessionPath);
-			cwd = sessionCwd && existsSync(sessionCwd) ? sessionCwd : this.defaultCwd;
+			try {
+				const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
+				const sessionCwd = getSessionCwd(sessionPath);
+				cwd = sessionCwd && existsSync(sessionCwd) ? sessionCwd : this.defaultCwd;
+			} catch (error) {
+				// A normal first prompt may be streaming before Pi flushes the JSONL.
+				// Only an attached actor can authorize and provide cwd for that path.
+				if (!(error instanceof SessionPathError) || error.code !== "not_found") throw error;
+				const pendingPath = this.sessionPaths.resolvePending(command.sessionPath);
+				const pendingActor = this.registry.find(pendingPath);
+				if (!pendingActor?.isAttached || !pendingActor.process) throw error;
+				cwd = pendingActor.process.cwd;
+			}
 		}
 
 		// Project prompts and skills are loaded when Pi starts, so command discovery
@@ -1037,6 +1117,12 @@ export class WsHandler {
 				actor.attach(unownedLease, this.createSessionState(newSessionPath));
 				unownedLease = undefined;
 				this.commitPendingExtensionStatuses(proc, newSessionPath);
+				this.extensionUiRoutes.set(proc, {
+					sessionPath: newSessionPath,
+					...(command.operationId ? { operationId: command.operationId } : {}),
+					requester: ws,
+					persistent: true,
+				});
 				this.sendMessage(ws, { type: "session_attached", sessionPath: newSessionPath, cwd, firstMessage: message });
 
 				const generation = actor.beginTurn();
@@ -1164,6 +1250,8 @@ export class WsHandler {
 		command: { type: "new_session" } | { type: "switch_session"; sessionPath: string },
 		operation: string,
 	): Promise<void> {
+		// Any asynchronous UI output from the replaced Pi context is now stale.
+		this.extensionUiRoutes.delete(proc);
 		const response = await this.pool.sendRpcChecked(proc, command);
 		if (response.data?.cancelled) {
 			throw new Error(`Pi ${operation} was cancelled`);
@@ -1245,13 +1333,28 @@ export class WsHandler {
 		throw lastError;
 	}
 
-	private async waitForPromptSettlement(proc: RpcProcess, observer: TurnEventObserver): Promise<void> {
-		const state = await this.pool.sendRpcChecked(proc, { type: "get_state" });
-		// Pi >= 0.80 acknowledges a prompt only after preflight. Before that
-		// acknowledgement is written, a real agent run synchronously marks the
-		// session streaming; an extension-handled input remains idle and emits no
-		// agent lifecycle. This authoritative state check avoids timing guesses.
-		if (!state.data?.isStreaming && !observer.hasStarted()) return;
+	private async didPromptStart(proc: RpcProcess, observer: TurnEventObserver): Promise<boolean> {
+		if (observer.hasStarted()) return true;
+		try {
+			const state = await this.pool.sendRpcChecked(proc, { type: "get_state" });
+			// Pi acknowledges prompt preflight before its asynchronous model turn. The
+			// synchronous streaming flag distinguishes that turn from a command handled
+			// entirely by an extension, which remains idle and emits no lifecycle.
+			return !!state.data?.isStreaming || observer.hasStarted();
+		} catch {
+			// Pi already accepted the prompt. Conservatively retain a session if the
+			// follow-up state probe fails so the browser cannot retry a real model turn.
+			return true;
+		}
+	}
+
+	private async waitForPromptSettlement(
+		proc: RpcProcess,
+		observer: TurnEventObserver,
+		promptStarted?: boolean,
+	): Promise<void> {
+		const didStart = promptStarted ?? await this.didPromptStart(proc, observer);
+		if (!didStart) return;
 
 		let removeExitListener = () => {};
 		const exited = new Promise<never>((_resolve, reject) => {

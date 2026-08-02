@@ -50,7 +50,7 @@ const clientCommands = [
 const successResponses: ServerMessagePayload[] = [
 	{ type: "response", id: "req-1", command: "install_pi", success: true, data: {} },
 	{ type: "response", id: "req-1", command: "subscribe_session", success: true, data: {} },
-	{ type: "response", id: "req-1", command: "prompt", success: true, data: { newSessionPath: "/sessions/a.jsonl" } },
+	{ type: "response", id: "req-1", command: "prompt", success: true, data: { newSessionPath: "/sessions/a.jsonl", sessionCreated: false } },
 	{ type: "response", id: "req-1", command: "steer", success: true, data: {} },
 	{ type: "response", id: "req-1", command: "remove_steering", success: true, data: {} },
 	{ type: "response", id: "req-1", command: "abort", success: true, data: {} },
@@ -73,6 +73,7 @@ const serverEvents: ServerMessagePayload[] = [
 	{ type: "session_status_change", sessionPath: "/sessions/a.jsonl", status: "running" },
 	{ type: "provider_usage", statuses: { codex: "codex 20% 5h" } },
 	{ type: "extension_status", sessionPath: "/sessions/a.jsonl", statuses: { build: "ready" } },
+	{ type: "extension_notification", sessionPath: "/sessions/a.jsonl", operationId: "operation-prompt", message: "Done", notifyType: "info" },
 	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 3, op: "full", data: "{}", hash: "abc" },
 	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 4, op: "delta", patches: [{ offset: 1, deleteCount: 0, insert: "x" }], baseHash: "abc", hash: "def" },
 	{

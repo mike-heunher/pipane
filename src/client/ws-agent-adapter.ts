@@ -232,6 +232,8 @@ export class WsAgentAdapter implements BackendClient {
 	 * distinguish a valid virtual→attached transition from a stale message.
 	 */
 	private _pendingNewPrompt = false;
+	/** Extension-only operations whose asynchronous notifications still belong to this virtual view. */
+	private _virtualPromptOperationIds = new Set<string>();
 	/** Coordinate rapid sends while a session's first turn is still attaching. */
 	private _startingPrompts = new Map<string, StartingPrompt>();
 
@@ -798,6 +800,16 @@ export class WsAgentAdapter implements BackendClient {
 			case "extension_status":
 				if (data.sessionPath === this._sessionPath) this.replaceExtensionStatuses(data.statuses);
 				return;
+			case "extension_notification": {
+				const appliesToSession = data.sessionPath === this._sessionPath;
+				const appliesToVirtual = this._sessionStatus === "virtual"
+					&& !!data.operationId
+					&& this._virtualPromptOperationIds.has(data.operationId);
+				if (appliesToSession || appliesToVirtual) {
+					this.appendLocalAssistantMessage(this.formatExtensionNotification(data.message, data.notifyType));
+				}
+				return;
+			}
 			case "session_sync":
 				if (data.sessionPath !== this._sessionPath) return;
 				this.enqueueSessionSync({
@@ -824,6 +836,7 @@ export class WsAgentAdapter implements BackendClient {
 				if (shouldAdopt) {
 					const adoptedVirtualSession = this._sessionStatus === "virtual";
 					if (adoptedVirtualSession) {
+						this._virtualPromptOperationIds.clear();
 						this._sessionPath = data.sessionPath;
 						const filename = path.basename(data.sessionPath, ".jsonl");
 						const parts = filename.split("_");
@@ -1477,6 +1490,12 @@ export class WsAgentAdapter implements BackendClient {
 			// open until the accepted turn settles, so the user may navigate away
 			// while it is running. Ignore the eventual response after navigation.
 			const nonce = this._sessionNonce;
+			const operationId = crypto.randomUUID();
+			if (this._virtualPromptOperationIds.size >= 32) {
+				const oldest = this._virtualPromptOperationIds.values().next().value;
+				if (oldest) this._virtualPromptOperationIds.delete(oldest);
+			}
+			this._virtualPromptOperationIds.add(operationId);
 			this._pendingNewPrompt = true;
 			try {
 				const res = await this.send({
@@ -1485,7 +1504,7 @@ export class WsAgentAdapter implements BackendClient {
 					cwd: this._pendingCwd,
 					message: text,
 					model: modelPayload,
-					operationId: crypto.randomUUID(),
+					operationId,
 					thinkingLevel,
 					controlRevision,
 					images,
@@ -1495,7 +1514,8 @@ export class WsAgentAdapter implements BackendClient {
 					return;
 				}
 				const newSessionPath = res?.newSessionPath;
-				if (newSessionPath && !this._sessionPath) {
+				if (res?.sessionCreated !== false && newSessionPath && !this._sessionPath) {
+					this._virtualPromptOperationIds.clear();
 					this._sessionPath = newSessionPath;
 					const filename = path.basename(newSessionPath, ".jsonl");
 					const parts = filename.split("_");
@@ -1506,6 +1526,7 @@ export class WsAgentAdapter implements BackendClient {
 					this.emitStatusChange();
 				}
 			} catch (err) {
+				this._virtualPromptOperationIds.delete(operationId);
 				this.rollbackSentControl(controlRevision);
 				const attachedPath = startingEntry.attachedPath
 					?? (this._sessionNonce === nonce ? this._sessionPath : undefined);
@@ -1579,6 +1600,18 @@ export class WsAgentAdapter implements BackendClient {
 		this._localAssistantMessages.push(message);
 		this._state.messages = [...this._state.messages, message];
 		this.emitContentChange();
+	}
+
+	private formatExtensionNotification(message: string, notifyType: "info" | "warning" | "error"): string {
+		const prefix = notifyType === "warning"
+			? "**Warning:**\n\n"
+			: notifyType === "error"
+				? "**Error:**\n\n"
+				: "";
+		if (!message.includes("\n")) return `${prefix}${message}`;
+		const longestFence = Math.max(0, ...[...message.matchAll(/`+/g)].map((match) => match[0].length));
+		const fence = "`".repeat(Math.max(3, longestFence + 1));
+		return `${prefix}${fence}text\n${message}\n${fence}`;
 	}
 
 	private formatSessionStats(stats: SessionStats): string {
@@ -2030,6 +2063,7 @@ export class WsAgentAdapter implements BackendClient {
 		const nonce = ++this._sessionNonce;
 		if (cwd !== undefined) this._pendingCwd = cwd;
 		this._pendingNewPrompt = false;
+		this._virtualPromptOperationIds.clear();
 		this._pendingControl = undefined;
 		this._lastAuthoritativeControl = undefined;
 		this._sessionPath = sessionPath;
@@ -2085,6 +2119,7 @@ export class WsAgentAdapter implements BackendClient {
 		this._sessionSubscriptionActive = true;
 		this._sessionNonce++;
 		this._pendingNewPrompt = false;
+		this._virtualPromptOperationIds.clear();
 		this._pendingControl = undefined;
 		this._sessionId = typeof crypto.randomUUID === "function"
 			? crypto.randomUUID()

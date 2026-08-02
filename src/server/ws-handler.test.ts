@@ -36,6 +36,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		acquire: vi.fn(() => null),
 		evictIdleDifferentCwd: vi.fn(() => null),
 		getRecentStderr: vi.fn(() => []),
+		waitForReady: vi.fn(async () => true),
 		subscribeEvents: vi.fn((listener: (proc: any, event: any) => void) => {
 			poolEventListeners.add(listener);
 			return () => poolEventListeners.delete(listener);
@@ -525,6 +526,85 @@ describe("WsHandler actor orchestration", () => {
 			{ type: "image", data: "aW5saW5l", mimeType: "image/jpeg" },
 		]);
 		expect(materializeUploadedImage).toHaveBeenCalledWith("/tmp/upload/photo.png", "image/png");
+	});
+
+	it("keeps extension-only fresh prompts virtual and forwards their asynchronous notifications", async () => {
+		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-extension-command-"));
+		try {
+			const sessionsRoot = path.join(tmpDir, "sessions");
+			const sessionDir = path.join(sessionsRoot, "--project--");
+			const projectDir = path.join(tmpDir, "project");
+			const pendingPath = path.join(sessionDir, "pending.jsonl");
+			mkdirSync(sessionDir, { recursive: true });
+			mkdirSync(projectDir);
+
+			const release = vi.fn();
+			const proc = { id: 53, cwd: projectDir, process: new EventEmitter() as any };
+			proc.process.exitCode = null;
+			proc.process.kill = vi.fn();
+			const sendRpcChecked = vi.fn(async (_proc: any, command: any) => {
+				if (command.type === "new_session") return { success: true, data: { cancelled: false } };
+				if (command.type === "get_state") {
+					return {
+						success: true,
+						data: {
+							sessionFile: pendingPath,
+							model: { provider: "anthropic", id: "old-model" },
+							thinkingLevel: "off",
+							isStreaming: false,
+						},
+					};
+				}
+				return { success: true, data: {} };
+			});
+			const { handler, registry, emitProcessEvent } = makeHandler({
+				sessionPaths: new SessionPathGuard(sessionsRoot),
+				acquire: vi.fn(() => ({ process: proc, release })),
+				sendRpcChecked,
+				sendRpc: vi.fn(async () => ({ success: true, data: {} })),
+			});
+			const { ws, sent } = makeWs();
+
+			await handler.handlePrompt(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "fresh-usage",
+				type: "prompt",
+				operationId: "fresh-usage-operation",
+				sessionPath: "__new__",
+				cwd: projectDir,
+				message: "/usage --refresh",
+				model: { provider: "anthropic", modelId: "old-model" },
+				thinkingLevel: "off",
+			});
+
+			expect(sent).toContainEqual(expect.objectContaining({
+				id: "fresh-usage",
+				command: "prompt",
+				success: true,
+				data: { newSessionPath: pendingPath, sessionCreated: false },
+			}));
+			expect(sent.some((message) => message.type === "session_attached")).toBe(false);
+			expect(registry.find(pendingPath)).toBeUndefined();
+			expect(registry.getAllStatuses()).toEqual({});
+			expect(release).toHaveBeenCalledOnce();
+
+			emitProcessEvent(proc, {
+				type: "extension_ui_request",
+				id: "usage-notification",
+				method: "notify",
+				message: "\u001b[39mCodex usage\r\n  5h: 20%",
+				notifyType: "info",
+			});
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "extension_notification",
+				sessionPath: pendingPath,
+				operationId: "fresh-usage-operation",
+				message: "Codex usage\n  5h: 20%",
+				notifyType: "info",
+			}));
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 
 	it("acknowledges an accepted prompt before settlement and does not reject it afterward", async () => {
@@ -1091,6 +1171,48 @@ describe("WsHandler slash command discovery", () => {
 
 		expect(acquire).toHaveBeenCalledWith("/tmp/project-a");
 		expect(release).toHaveBeenCalledOnce();
+	});
+
+	it("uses an attached actor cwd while its first session file is still pending", async () => {
+		const tmpDir = mkdtempSync(path.join(os.tmpdir(), "pipane-pending-commands-"));
+		try {
+			const sessionsRoot = path.join(tmpDir, "sessions");
+			const pendingDir = path.join(sessionsRoot, "--project--");
+			const pendingPath = path.join(pendingDir, "pending.jsonl");
+			const projectDir = path.join(tmpDir, "project");
+			mkdirSync(pendingDir, { recursive: true });
+			mkdirSync(projectDir);
+
+			const discoveryRelease = vi.fn();
+			const discoveryProc = { id: 55, cwd: projectDir };
+			const acquire = vi.fn(() => ({ process: discoveryProc, release: discoveryRelease }));
+			const { handler, registry } = makeHandler({
+				sessionPaths: new SessionPathGuard(sessionsRoot),
+				acquire,
+				sendRpcChecked: vi.fn(async () => ({ success: true, data: { commands: [] } })),
+			});
+			const pendingProc = { id: 54, cwd: projectDir };
+			const actor = registry.getPending(pendingPath);
+			actor.attach({ process: pendingProc, release: vi.fn() } as any, new SessionJsonl({
+				messages: [],
+				model: { provider: "anthropic", modelId: "old-model" },
+				thinkingLevel: "off",
+			}));
+			const { ws } = makeWs();
+
+			await handler.handleGetCommands(ws, {
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "pending-commands",
+				type: "get_commands",
+				sessionPath: pendingPath,
+			});
+
+			expect(acquire).toHaveBeenCalledWith(projectDir);
+			expect(discoveryRelease).toHaveBeenCalledOnce();
+			actor.detach();
+		} finally {
+			rmSync(tmpDir, { recursive: true, force: true });
+		}
 	});
 });
 

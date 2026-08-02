@@ -1721,6 +1721,44 @@ describe("WsAgentAdapter prompt routing", () => {
 				.toContain("No active session yet");
 		});
 
+		it("keeps a fresh extension-only command virtual and renders its later notification", async () => {
+			const { adapter, sent, mockWs, simulateServerMessage } = createTestAdapter();
+			(adapter as any)._state.model = { provider: "openai-codex", id: "gpt-5.6-sol" };
+			let operationId = "";
+			(mockWs.send as any).mockImplementation((raw: string) => {
+				const command = JSON.parse(raw);
+				sent.push(command);
+				if (command.type !== "prompt") return;
+				operationId = command.operationId;
+				simulateServerMessage({
+					type: "response",
+					id: command.id,
+					command: "prompt",
+					success: true,
+					data: {
+						newSessionPath: "/tmp/sessions/transient-usage.jsonl",
+						sessionCreated: false,
+					},
+				});
+			});
+
+			await adapter.prompt("/usage --refresh");
+
+			expect(adapter.sessionFile).toBeUndefined();
+			expect(operationId).not.toBe("");
+			simulateServerMessage({
+				type: "extension_notification",
+				sessionPath: "/tmp/sessions/transient-usage.jsonl",
+				operationId,
+				message: "Codex usage\n  5h: 20%",
+				notifyType: "info",
+			});
+
+			const text = (adapter.state.messages.at(-1) as any)?.content?.[0]?.text ?? "";
+			expect(text).toContain("```text\nCodex usage\n  5h: 20%\n```");
+			expect(sent.filter((message) => message.type === "get_commands")).toHaveLength(0);
+		});
+
 		it("keeps /compact pending beyond the generic 30-second command timeout", async () => {
 			vi.useFakeTimers();
 			try {
