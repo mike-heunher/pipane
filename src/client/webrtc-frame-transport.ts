@@ -1,6 +1,7 @@
 import { ConnectionAttemptError, connectionFailureDetails } from "./frame-transport.js";
 import type {
 	ConnectionDiagnostics,
+	ConnectionDisconnectDiagnostics,
 	ConnectionFailureCode,
 	ConnectionFailureDetails,
 	FrameTransport,
@@ -80,6 +81,8 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private iceServerUrls: string[] = [];
 	private lastDiagnostics: ConnectionDiagnostics | undefined;
 	private lastFailure: ConnectionFailureDetails | undefined;
+	private lastDisconnect: ConnectionDisconnectDiagnostics | undefined;
+	private disconnectSequence = 0;
 
 	constructor(options: WebRtcFrameTransportOptions) {
 		this.rendezvousUrl = options.rendezvousUrl;
@@ -132,7 +135,10 @@ export class WebRtcFrameTransport implements FrameTransport {
 				? error
 				: new ConnectionAttemptError("rendezvous", details.message, false);
 			this.lastFailure = connectionFailureDetails(failure);
-			this.lastDiagnostics = await this.getConnectionDiagnostics();
+			this.lastDiagnostics = {
+				...await this.collectConnectionDiagnostics(),
+				failure: { ...this.lastFailure },
+			};
 			throw failure;
 		}
 		let claims: ConnectionTicketClaims;
@@ -179,9 +185,10 @@ export class WebRtcFrameTransport implements FrameTransport {
 				const failure = error instanceof ConnectionAttemptError
 					? error
 					: new ConnectionAttemptError(code, error instanceof Error ? error.message : String(error), code === "ice");
-				this.lastFailure = { code: failure.code, message: failure.message, turnRecommended: failure.turnRecommended };
-				void this.getConnectionDiagnostics().then((diagnostics) => {
-					this.lastDiagnostics = { ...diagnostics, failure: this.lastFailure };
+				const failureDetails = { code: failure.code, message: failure.message, turnRecommended: failure.turnRecommended };
+				this.lastFailure = failureDetails;
+				void this.collectConnectionDiagnostics().then((diagnostics) => {
+					this.lastDiagnostics = { ...diagnostics, failure: { ...failureDetails } };
 				}).catch(() => undefined).finally(() => {
 					this.closeInternal();
 					reject(failure);
@@ -217,23 +224,30 @@ export class WebRtcFrameTransport implements FrameTransport {
 			peer.oniceconnectionstatechange = () => {
 				if (peer.iceConnectionState === "failed") {
 					if (!settled) fail(new Error("WebRTC ICE could not establish a network path"), "ice");
-					else this.handleDisconnected();
+					else this.handleDisconnected(new Error("Established WebRTC ICE path failed"), "ice");
 				}
 			};
 			peer.onconnectionstatechange = () => {
 				if (peer.connectionState === "failed" || peer.connectionState === "closed") {
-					if (!settled) {
-						const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
-						fail(new Error(`WebRTC connection ${peer.connectionState}`), code);
-					} else this.handleDisconnected();
+					const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
+					const error = new Error(`WebRTC connection ${peer.connectionState}`);
+					if (!settled) fail(error, code);
+					else this.handleDisconnected(error, code);
 				}
 			};
-			channel.onerror = () => fail(new Error("WebRTC DataChannel failed"),
-				peer.iceConnectionState === "failed" ? "ice" : "datachannel");
+			channel.onerror = () => {
+				const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
+				const error = new Error("WebRTC DataChannel failed");
+				if (!settled) fail(error, code);
+				else this.handleDisconnected(error, code);
+			};
 			channel.onclose = () => {
-				if (!settled) fail(new Error("WebRTC DataChannel closed before authentication"),
-					peer.iceConnectionState === "failed" ? "ice" : "datachannel");
-				else this.handleDisconnected();
+				const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
+				const error = new Error(settled
+					? "Established WebRTC DataChannel closed"
+					: "WebRTC DataChannel closed before authentication");
+				if (!settled) fail(error, code);
+				else this.handleDisconnected(error, code);
 			};
 			channel.onopen = () => {
 				void signDeviceConnection(this.deviceIdentity, authorization.ticket, binding?.signature ?? "").then((deviceSignature) => {
@@ -281,8 +295,10 @@ export class WebRtcFrameTransport implements FrameTransport {
 					const decoded = this.decoder.accept(frame);
 					if (decoded === undefined) return;
 					for (const listener of this.frameListeners) listener(decoded);
-				} catch {
-					this.handleDisconnected();
+				} catch (error) {
+					this.handleDisconnected(new Error(
+						`DataChannel framing failed: ${error instanceof Error ? error.message : String(error)}`,
+					), "datachannel");
 				}
 			};
 
@@ -307,7 +323,11 @@ export class WebRtcFrameTransport implements FrameTransport {
 				binding = received;
 				void applyAnswer().catch((error) => fail(error, "authorization"));
 			});
-			rendezvous.onConnectionClosed((reason) => fail(new Error(reason), "unknown"));
+			rendezvous.onConnectionClosed((reason) => {
+				const error = new Error(`Rendezvous closed the backend route: ${reason}`);
+				if (!settled) fail(error, "rendezvous");
+				else this.handleDisconnected(error, "rendezvous");
+			});
 			rendezvous.onError((error) => {
 				if (error instanceof Error) {
 					fail(error, "rendezvous");
@@ -358,9 +378,30 @@ export class WebRtcFrameTransport implements FrameTransport {
 	}
 
 	async getConnectionDiagnostics(): Promise<ConnectionDiagnostics> {
+		const diagnostics = !this.peer && this.lastDiagnostics
+			? structuredClone(this.lastDiagnostics)
+			: await this.collectConnectionDiagnostics();
+		if (this.lastFailure) diagnostics.failure = { ...this.lastFailure };
+		if (this.lastDisconnect) diagnostics.lastDisconnect = structuredClone(this.lastDisconnect);
+		return diagnostics;
+	}
+
+	private async collectConnectionDiagnostics(): Promise<ConnectionDiagnostics> {
 		const peer = this.peer;
 		const channel = this.channel;
-		if (!peer && this.lastDiagnostics) return structuredClone(this.lastDiagnostics);
+		const collectedAt = new Date().toISOString();
+		const iceServerUrls = [...this.iceServerUrls];
+		const connectionState = peer?.connectionState;
+		const iceConnectionState = peer?.iceConnectionState;
+		const iceGatheringState = peer?.iceGatheringState;
+		const signalingState = peer?.signalingState;
+		const dtlsState = peer?.sctp?.transport.state;
+		const dataChannelState = channel?.readyState;
+		const dataChannelLabel = channel?.label;
+		const dataChannelProtocol = channel?.protocol;
+		const dataChannelOrdered = channel?.ordered;
+		const dataChannelBufferedAmount = channel?.bufferedAmount;
+		const maxMessageSize = peer?.sctp?.maxMessageSize;
 		let entries: any[] = [];
 		if (peer) {
 			try {
@@ -386,28 +427,27 @@ export class WebRtcFrameTransport implements FrameTransport {
 		const dataChannelStat = entries.find((entry) => entry.type === "data-channel");
 
 		return {
-			collectedAt: new Date().toISOString(),
+			collectedAt,
 			carrier: "webrtc",
 			backendId: this.backendId,
 			rendezvousUrl: this.rendezvousUrl,
 			signalingUrl: rendezvousWebSocketUrl(this.rendezvousUrl, "browser"),
-			connectionState: peer?.connectionState,
-			iceConnectionState: peer?.iceConnectionState,
-			iceGatheringState: peer?.iceGatheringState,
-			signalingState: peer?.signalingState,
-			dtlsState: peer?.sctp?.transport.state ?? stringValue(transportStat?.dtlsState),
+			connectionState,
+			iceConnectionState,
+			iceGatheringState,
+			signalingState,
+			dtlsState: dtlsState ?? stringValue(transportStat?.dtlsState),
 			icePath: classifyIcePath(local, remote),
-			iceServerUrls: [...this.iceServerUrls],
-			...(this.lastFailure ? { failure: { ...this.lastFailure } } : {}),
+			iceServerUrls,
 			...(selectedPair ? { selectedPair } : {}),
 			candidates,
 			dataChannel: {
-				state: channel?.readyState,
-				label: channel?.label,
-				protocol: channel?.protocol,
-				ordered: channel?.ordered,
-				bufferedAmount: channel?.bufferedAmount,
-				maxMessageSize: peer?.sctp?.maxMessageSize,
+				state: dataChannelState,
+				label: dataChannelLabel,
+				protocol: dataChannelProtocol,
+				ordered: dataChannelOrdered,
+				bufferedAmount: dataChannelBufferedAmount,
+				maxMessageSize,
 				messagesSent: numberValue(dataChannelStat?.messagesSent),
 				messagesReceived: numberValue(dataChannelStat?.messagesReceived),
 				bytesSent: numberValue(dataChannelStat?.bytesSent),
@@ -450,16 +490,37 @@ export class WebRtcFrameTransport implements FrameTransport {
 				this.outgoing.shift();
 				this.queuedBytes -= next.byteLength;
 			}
-		} catch {
-			this.handleDisconnected();
+		} catch (error) {
+			this.handleDisconnected(new Error(
+				`DataChannel send failed: ${error instanceof Error ? error.message : String(error)}`,
+			), "datachannel");
 		} finally {
 			this.flushing = false;
 		}
 	}
 
-	private handleDisconnected(): void {
+	private handleDisconnected(error: unknown, code: ConnectionFailureCode): void {
 		if (this.manuallyClosed || !this.connected) return;
+		const failure = error instanceof ConnectionAttemptError
+			? connectionFailureDetails(error)
+			: connectionFailureDetails(new ConnectionAttemptError(
+				code,
+				error instanceof Error ? error.message : String(error),
+				code === "ice",
+			));
+		const occurredAt = new Date().toISOString();
+		const sequence = ++this.disconnectSequence;
+		const snapshot = this.collectConnectionDiagnostics();
 		this.closeInternal();
+		void snapshot.then((diagnostics) => {
+			if (sequence !== this.disconnectSequence) return;
+			const { failure: _failure, lastDisconnect: _lastDisconnect, ...sanitizedSnapshot } = diagnostics;
+			this.lastDisconnect = {
+				occurredAt,
+				failure,
+				snapshot: sanitizedSnapshot,
+			};
+		}).catch(() => undefined);
 		this.scheduleReconnect();
 	}
 

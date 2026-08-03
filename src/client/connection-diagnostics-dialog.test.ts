@@ -91,6 +91,38 @@ describe("connection diagnostics dialog", () => {
 		expect(document.querySelector("[data-testid='connection-diagnostics']")).toBeNull();
 	});
 
+	it("shows the retained cause and path of a recovered interruption", async () => {
+		const { failure: _failure, lastDisconnect: _lastDisconnect, ...snapshot } = diagnostics;
+		const recovered: ConnectionDiagnostics = {
+			...diagnostics,
+			lastDisconnect: {
+				occurredAt: "2026-08-02T16:32:03.000Z",
+				failure: {
+					code: "datachannel",
+					message: "Established WebRTC DataChannel closed",
+					turnRecommended: false,
+				},
+				snapshot,
+			},
+		};
+		const closed = openConnectionDiagnosticsDialog({
+			backendName: "piweb",
+			backendId: "b_backend",
+			getDiagnostics: async () => recovered,
+			refreshIntervalMs: 60_000,
+		});
+
+		await vi.waitFor(() => expect(document.body.textContent).toContain("Last connection interruption"));
+		const text = document.body.textContent ?? "";
+		expect(text).toContain("Established WebRTC DataChannel closed");
+		expect(text).toContain("2026-08-02T16:32:03.000Z");
+		expect(text).toContain("datachannel");
+		expect(text).toContain("Direct via STUN");
+
+		(document.querySelector("[aria-label='Close connection diagnostics']") as HTMLButtonElement).click();
+		await closed;
+	});
+
 	it("offers TURN recovery for a retained ICE path failure", async () => {
 		const configure = vi.fn();
 		const failed: ConnectionDiagnostics = {

@@ -124,6 +124,24 @@ function renderDiagnostics(diagnostics: ConnectionDiagnostics, onConfigureRelay?
 	]));
 	fragment.append(overview);
 
+	if (diagnostics.lastDisconnect) {
+		const interruption = diagnostics.lastDisconnect;
+		const previousPath = pathDescription(interruption.snapshot.icePath);
+		const history = section("Last connection interruption");
+		history.append(
+			statusMessage(interruption.failure.message, true),
+			factGrid([
+				["Time", interruption.occurredAt],
+				["Cause", interruption.failure.code],
+				["Previous path", previousPath.label, previousPath.detail],
+				["WebRTC", interruption.snapshot.connectionState ?? "unknown"],
+				["ICE", interruption.snapshot.iceConnectionState ?? "unknown"],
+				["DataChannel", interruption.snapshot.dataChannel.state ?? "unknown"],
+			]),
+		);
+		fragment.append(history);
+	}
+
 	if (diagnostics.failure) {
 		const recovery = section("Connection recovery");
 		recovery.append(statusMessage(diagnostics.failure.message, true));

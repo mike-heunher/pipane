@@ -278,8 +278,18 @@ describe("WebRtcFrameTransport", () => {
 
 		peer.channel.remoteClose();
 		expect(transport.isReconnecting).toBe(true);
+		await vi.waitFor(async () => expect((await transport.getConnectionDiagnostics()).lastDisconnect)
+			.toEqual(expect.objectContaining({
+				occurredAt: expect.any(String),
+				failure: expect.objectContaining({
+					code: "datachannel",
+					message: "Established WebRTC DataChannel closed",
+				}),
+				snapshot: expect.objectContaining({ icePath: "direct-stun" }),
+			})));
 		reconnect?.();
 		await vi.waitFor(() => expect(authorize).toHaveBeenCalledTimes(2));
+		expect((await transport.getConnectionDiagnostics()).lastDisconnect?.failure.code).toBe("datachannel");
 		transport.close();
 	});
 

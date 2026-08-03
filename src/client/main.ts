@@ -33,6 +33,7 @@ import {
 import { enterSettingsRoute, isSettingsPath, leaveSettingsRoute } from "./settings-route.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
+import { ReconnectWarningVisibility } from "./reconnect-warning.js";
 import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
 import {
 	UpdateNoticeSnoozeStore,
@@ -105,6 +106,7 @@ let updateSnoozeRefreshTimer: number | undefined;
 let slashCommands: SlashCommandSuggestion[] = mergeSlashCommands([]);
 let slashCommandRequest = 0;
 const conversationDrafts = new ConversationDraftStore<Attachment>();
+const reconnectWarning = new ReconnectWarningVisibility(() => renderApp());
 
 function openMobileSidebar(): void {
 	// Mobile Safari does not reliably move focus from a textarea to a tapped
@@ -900,7 +902,7 @@ const renderApp = () => {
 							</button>
 						`
 						: ""}
-					${agent && !agent.isConnected
+					${reconnectWarning.visible
 						? html`
 							<div class="flex items-center justify-center gap-2 px-4 py-1.5 bg-yellow-500/15 border-b border-yellow-500/30 text-sm text-yellow-700 dark:text-yellow-400">
 								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 animate-spin" style="animation-duration: 1.5s;">
@@ -1257,9 +1259,10 @@ async function initApp(appRuntime: AppRuntime) {
 		renderApp();
 	});
 
-	// Connection change — show/hide reconnection banner
-	agent.onConnectionChange(() => {
-		renderApp();
+	// Brief carrier blips recover transparently; only show connection chrome
+	// when the outage survives the grace period.
+	agent.onConnectionChange((connected) => {
+		reconnectWarning.update(connected);
 	});
 
 	agent.onWorkspaceChange?.(() => {

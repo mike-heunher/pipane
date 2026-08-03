@@ -97,6 +97,8 @@ export interface ConnectionDiagnostics {
 	icePath: IceConnectionPath;
 	iceServerUrls: string[];
 	failure?: ConnectionFailureDetails;
+	/** Most recent established carrier interruption, retained after recovery. */
+	lastDisconnect?: ConnectionDisconnectDiagnostics;
 	selectedPair?: SelectedIcePairDiagnostics;
 	candidates: IceCandidateDiagnostics[];
 	dataChannel: {
@@ -111,6 +113,13 @@ export interface ConnectionDiagnostics {
 		bytesSent?: number;
 		bytesReceived?: number;
 	};
+}
+
+export interface ConnectionDisconnectDiagnostics {
+	occurredAt: string;
+	failure: ConnectionFailureDetails;
+	/** Browser-local snapshot captured immediately before the failed peer closed. */
+	snapshot: Omit<ConnectionDiagnostics, "failure" | "lastDisconnect">;
 }
 
 export interface FrameTransportConnectionEvent {
