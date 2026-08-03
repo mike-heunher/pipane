@@ -1,5 +1,6 @@
 # Unreleased
 
+- Keep TURN settings reachable from the backend-unavailable screen even when a connection failure cannot be classified.
 - Allow preview startup diagnostics to be dismissed so they do not obstruct backend or TURN configuration.
 - Verify preview deployments against the runtime-tagged browser shell instead of rolling back healthy releases for an expected HTML rewrite.
 - Add preview-only startup diagnostics for mobile WebRTC, ICE, TURN, and bootstrap failures, and reveal connection recovery instead of leaving the wireframe visible.

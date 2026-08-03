@@ -7,6 +7,7 @@ import { conversationDraftKey, ConversationDraftStore } from "./conversation-dra
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { consumeAppRuntime, type AppRuntime } from "./app-runtime.js";
 import { bootstrapDiagnostics } from "./bootstrap-diagnostics.js";
+import { renderBackendUnavailableRecovery } from "./backend-unavailable-recovery.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import { LOCAL_BACKEND_UPDATE_KEY } from "./session-picker.js";
 import "./ui/index.js";
@@ -1104,46 +1105,15 @@ async function initApp(appRuntime: AppRuntime) {
 		document.documentElement.classList.remove("pipane-startup-pending");
 		bootstrapDiagnostics.fail(err);
 		const backends = agent.workspaceBackends ?? [];
-		const relayCandidate = backends.find((backend) => backend.connectionFailure?.turnRecommended
-			|| backend.connectionFailure?.code === "relay_configuration");
-		render(
-			html`
-				<div class="w-full h-screen flex items-center justify-center bg-background text-foreground p-6">
-					<div class="max-w-lg rounded-lg border border-border p-6" data-testid="backend-unavailable-recovery">
-						<h1 class="text-lg font-semibold mb-2">Backends unavailable</h1>
-						<p class="text-destructive mb-4">${err instanceof Error ? err.message : "No authorized backend could be reached."}</p>
-						${relayCandidate ? html`
-							<div class="rounded border border-border bg-muted/30 p-4 mb-4">
-								<h2 class="font-semibold mb-2">${relayCandidate.connectionFailure?.code === "relay_configuration" ? "TURN relay settings need attention" : "No direct network path was found"}</h2>
-								<p class="text-sm text-muted-foreground mb-3">
-									${relayCandidate.connectionFailure?.code === "relay_configuration"
-										? "Pipane could not obtain valid temporary credentials from the configured relay. Check its API key, URLs, credentials, or usage quota."
-										: "Pipane reached the rendezvous service and the backend, but WebRTC could not establish a direct route. A TURN relay can carry the encrypted connection through restrictive NATs and firewalls. The relay operator can observe IP addresses, timing, and traffic volume, but not the encrypted conversation."}
-								</p>
-								<div class="flex flex-wrap gap-2">
-									<button class="rounded bg-primary text-primary-foreground px-3 py-2 text-sm" type="button" @click=${() => { void openTurnRelaySettings(true); }}>Set up a relay</button>
-									<button class="rounded border border-border px-3 py-2 text-sm" type="button" @click=${() => window.location.reload()}>Try again</button>
-									<button class="rounded border border-border px-3 py-2 text-sm" type="button" @click=${() => { void openConnectionDiagnosticsModal(relayCandidate.backendId); }}>Connection details</button>
-								</div>
-							</div>
-						` : ""}
-						${backends.length > 0 ? html`
-							<div class="grid gap-2 mb-4">
-								${backends.map((backend) => html`
-									<div class="flex items-center gap-3 rounded border border-border px-3 py-2">
-										<span class="flex-1">${backendDisplayName(backend.backendId)}</span>
-										<span class="text-sm text-muted-foreground">${backend.error || (backend.online ? "Unavailable" : "Offline")}</span>
-										<button class="text-red-600 text-sm" type="button" @click=${() => { void removeBackend(backend.backendId); }}>Remove</button>
-									</div>
-								`)}
-							</div>
-						` : ""}
-						${!relayCandidate ? html`<p class="text-sm text-muted-foreground">Run <code>pipane pair</code> on an owned backend to add or recover access. TURN cannot help when a backend is offline or authorization fails.</p>` : ""}
-					</div>
-				</div>
-			`,
-			app,
-		);
+		render(renderBackendUnavailableRecovery({
+			errorMessage: err instanceof Error ? err.message : "No authorized backend could be reached.",
+			backends,
+			backendDisplayName,
+			onConfigureRelay: () => { void openTurnRelaySettings(true); },
+			onRetry: () => window.location.reload(),
+			onConnectionDetails: (backendId) => { void openConnectionDiagnosticsModal(backendId); },
+			onRemoveBackend: (backendId) => { void removeBackend(backendId); },
+		}), app);
 		let stopWaitingForBackend: (() => void) | undefined;
 		stopWaitingForBackend = agent.onWorkspaceChange?.(() => {
 			if (!agent.workspaceBackends?.some((backend) => backend.connected)) return;
