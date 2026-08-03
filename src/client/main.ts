@@ -5,7 +5,7 @@ import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
 import { ConversationScrollController } from "./conversation-scroll.js";
 import { conversationDraftKey, ConversationDraftStore } from "./conversation-drafts.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
-import { consumeAppRuntime } from "./app-runtime.js";
+import { consumeAppRuntime, type AppRuntime } from "./app-runtime.js";
 import { bootstrapDiagnostics } from "./bootstrap-diagnostics.js";
 import { computeTokenUsageSummary, type TokenUsageSummary } from "./token-usage.js";
 import { LOCAL_BACKEND_UPDATE_KEY } from "./session-picker.js";
@@ -16,7 +16,6 @@ import { buildAttachmentPromptPayload } from "./attachment-prompt.js";
 import { uploadAttachmentFile } from "./file-upload.js";
 import { getPromptFailureSession } from "./prompt-failure.js";
 import { mergeSlashCommands, type SlashCommandSuggestion } from "./slash-commands.js";
-import "./fork-modal.js";
 import type { ForkModal } from "./fork-modal.js";
 import "./app.css";
 import { closeCanvas, initCanvas, isCanvasVisible, restoreCanvasFromMessages } from "./canvas-panel.js";
@@ -31,12 +30,7 @@ import {
 	openFilePreviewLinkInNewWindow,
 	setFilePreviewSession,
 } from "./file-preview-panel.js";
-import { openModelPickerDialog } from "./model-picker-dialog.js";
-import { openLocalSettingsDialog } from "./local-settings-modal.js";
 import { enterSettingsRoute, isSettingsPath, leaveSettingsRoute } from "./settings-route.js";
-import { openConnectionDiagnosticsDialog } from "./connection-diagnostics-dialog.js";
-import { openTurnRelayDialog } from "./turn-relay-dialog.js";
-import { openDeviceInviteDialog } from "./device-invite-dialog.js";
 import { loadAutoCollapseSettings, resetAutoCollapse, runAutoCollapse } from "./auto-collapse.js";
 import { contextUsageTone, dismissStatusDetailsOnOutsideClick } from "./status-usage.js";
 import type { UpdateNotice, UpdateTarget } from "../shared/updates.js";
@@ -50,13 +44,12 @@ import {
 	getSupportedThinkingLevels,
 	type ThinkingLevelValue,
 } from "../shared/thinking-levels.js";
+import { loadStartupSession, saveStartupSession } from "./startup-session.js";
+import { markStartup, STARTUP_MARK } from "./startup-performance.js";
+import { SYNTAX_HIGHLIGHTER_READY_EVENT } from "./ui/tool-renderers.js";
 
-const appRuntime = consumeAppRuntime(() => new WsAgentAdapter());
-const agent: BackendClient = appRuntime.client;
-bootstrapDiagnostics.attachClient(agent);
-initThemes(agent);
-document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
-document.addEventListener("keydown", handleConversationKeyDown);
+let agent!: BackendClient;
+let mainInitialized = false;
 
 function syncAppViewport(): void {
 	const viewport = window.visualViewport;
@@ -67,11 +60,6 @@ function syncAppViewport(): void {
 	rootStyle.setProperty("--app-viewport-height", `${viewport?.height ?? window.innerHeight}px`);
 }
 
-syncAppViewport();
-window.visualViewport?.addEventListener("resize", syncAppViewport);
-window.visualViewport?.addEventListener("scroll", syncAppViewport);
-window.addEventListener("resize", syncAppViewport);
-
 const isMobile = () => window.innerWidth <= 768;
 let wasMobile = isMobile();
 let mobileSidebarOpen = false;
@@ -79,7 +67,7 @@ let steeringQueue: readonly string[] = [];
 
 // Re-render when crossing the mobile/desktop breakpoint so the sidebar
 // instantly switches between inline (desktop) and overlay (mobile).
-window.addEventListener("resize", () => {
+function handleResponsiveResize(): void {
 	const nowMobile = isMobile();
 	if (nowMobile !== wasMobile) {
 		wasMobile = nowMobile;
@@ -87,7 +75,7 @@ window.addEventListener("resize", () => {
 		if (!nowMobile) mobileSidebarOpen = false;
 		renderApp();
 	}
-});
+}
 let piInstallPromptOpen = false;
 let localSettingsModalOpen = false;
 let routedSettingsAbort: AbortController | undefined;
@@ -206,7 +194,10 @@ function handleEditorKeyDown(event: KeyboardEvent): boolean {
 
 async function handleModelSelect(): Promise<void> {
 	try {
-		const models = await agent.fetchAvailableModels();
+		const [{ openModelPickerDialog }, models] = await Promise.all([
+			import("./model-picker-dialog.js"),
+			agent.fetchAvailableModels(),
+		]);
 		const selected = await openModelPickerDialog(models as any, agent.state.model as any);
 		if (selected) agent.setModel(selected as any);
 	} catch (err) {
@@ -567,6 +558,7 @@ async function openLocalSettingsModal(backendId?: string, routed = false) {
 	if (routeAbort) routedSettingsAbort = routeAbort;
 	try {
 		if (backendId && backendId !== agent.activeBackendId) await agent.activateBackend?.(backendId);
+		const { openLocalSettingsDialog } = await import("./local-settings-modal.js");
 		await openLocalSettingsDialog({
 			api: agent,
 			isJsonlVisible: isJsonlPanelVisible(),
@@ -612,12 +604,11 @@ function syncSettingsRoute(): void {
 	routedSettingsAbort?.abort();
 }
 
-window.addEventListener("popstate", syncSettingsRoute);
-
 async function openTurnRelaySettings(reconnectAfterSave = false): Promise<void> {
 	if (turnRelaySettingsOpen) return;
 	turnRelaySettingsOpen = true;
 	try {
+		const { openTurnRelayDialog } = await import("./turn-relay-dialog.js");
 		await openTurnRelayDialog({
 			saveLabel: reconnectAfterSave ? "Save and reconnect" : "Save",
 			onSaved: () => {
@@ -633,6 +624,7 @@ async function openConnectionDiagnosticsModal(backendId = agent.activeBackendId)
 	if (!backendId || connectionDiagnosticsOpen) return;
 	connectionDiagnosticsOpen = true;
 	try {
+		const { openConnectionDiagnosticsDialog } = await import("./connection-diagnostics-dialog.js");
 		await openConnectionDiagnosticsDialog({
 			backendName: backendDisplayName(backendId),
 			backendId,
@@ -822,6 +814,7 @@ async function openDeviceInviteModal(): Promise<void> {
 	if (deviceInviteOpen) return;
 	deviceInviteOpen = true;
 	try {
+		const { openDeviceInviteDialog } = await import("./device-invite-dialog.js");
 		await openDeviceInviteDialog();
 	} finally {
 		deviceInviteOpen = false;
@@ -1043,7 +1036,31 @@ function handleForkAndPrompt(input: string, attachments?: Attachment[]): void {
 	submitPrompt(input, attachments, "fork");
 }
 
-async function initApp() {
+export function initializeMain(): void {
+	if (mainInitialized) return;
+	mainInitialized = true;
+	const appRuntime = consumeAppRuntime(() => new WsAgentAdapter());
+	agent = appRuntime.client;
+	bootstrapDiagnostics.attachClient(agent);
+	initThemes(agent);
+	document.addEventListener("click", dismissStatusDetailsOnOutsideClick);
+	document.addEventListener("keydown", handleConversationKeyDown);
+	window.addEventListener("popstate", syncSettingsRoute);
+	window.addEventListener("resize", handleResponsiveResize);
+	window.addEventListener(SYNTAX_HIGHLIGHTER_READY_EVENT, renderApp, { once: true });
+	syncAppViewport();
+	window.visualViewport?.addEventListener("resize", syncAppViewport);
+	window.visualViewport?.addEventListener("scroll", syncAppViewport);
+	window.addEventListener("resize", syncAppViewport);
+	markStartup(STARTUP_MARK.mainInitialized);
+	void initApp(appRuntime).catch((error) => {
+		document.documentElement.classList.remove("pipane-startup-pending");
+		console.error("Failed to initialize Pipane:", error);
+		bootstrapDiagnostics.fail(error);
+	});
+}
+
+async function initApp(appRuntime: AppRuntime) {
 	const app = document.getElementById("app");
 	if (!app) throw new Error("App container not found");
 
@@ -1052,31 +1069,38 @@ async function initApp() {
 	startupHistoryReceived = false;
 	startupWorkspaceRendered = false;
 
-	let connectingOverlayTimer: ReturnType<typeof setTimeout> | undefined;
-	const skeletonShell = document.getElementById("skeleton-shell");
-	connectingOverlayTimer = setTimeout(() => {
-		if (skeletonShell?.parentElement === app) {
-			const overlay = document.createElement("div");
-			overlay.id = "connecting-overlay";
-			overlay.style.cssText = "position:absolute;bottom:2rem;left:50%;transform:translateX(-50%);color:var(--muted-foreground,#6b7280);font-size:0.8rem;z-index:10;";
-			overlay.textContent = "Connecting…";
-			skeletonShell.style.position = "relative";
-			skeletonShell.appendChild(overlay);
+	// Replace the static skeleton immediately, but keep the composer hidden until
+	// automatic restoration settles. Cached content may paint underneath without
+	// accepting a prompt that a late startup selection could redirect.
+	document.documentElement.classList.add("pipane-startup-pending");
+	renderApp();
+	requestAnimationFrame(() => markStartup(STARTUP_MARK.shellPainted));
+	const startupPreviewPromise = (appRuntime.startupPreview ?? Promise.resolve(false)).catch(() => false);
+	void startupPreviewPromise.then((restored) => {
+		if (restored) {
+			bootstrapDiagnostics.event("Cached conversation painted");
+			renderApp();
 		}
-	}, 300);
+	});
 
-	// Connect the selected carrier before making backend requests.
+	// Remote bootstrap may already be negotiating transport while this module
+	// downloads. Local workspaces start their WebSocket here.
 	const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 	const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
 
-	bootstrapDiagnostics.mark("Connecting to backend");
+	const prestartedConnection = appRuntime.connection;
+	appRuntime.connection = undefined;
 	try {
-		await agent.connect(wsUrl);
+		if (!prestartedConnection) {
+			bootstrapDiagnostics.mark("Connecting to backend");
+			markStartup(STARTUP_MARK.transportStarted);
+		}
+		await (prestartedConnection ?? agent.connect(wsUrl));
 		bootstrapDiagnostics.event("Initial backend connection complete");
+		markStartup(STARTUP_MARK.transportConnected);
 	} catch (err) {
-		clearTimeout(connectingOverlayTimer);
+		document.documentElement.classList.remove("pipane-startup-pending");
 		bootstrapDiagnostics.fail(err);
-		skeletonShell?.remove();
 		const backends = agent.workspaceBackends ?? [];
 		const relayCandidate = backends.find((backend) => backend.connectionFailure?.turnRecommended
 			|| backend.connectionFailure?.code === "relay_configuration");
@@ -1122,20 +1146,27 @@ async function initApp() {
 		stopWaitingForBackend = agent.onWorkspaceChange?.(() => {
 			if (!agent.workspaceBackends?.some((backend) => backend.connected)) return;
 			stopWaitingForBackend?.();
-			void initApp();
+			void initApp(appRuntime).catch((error) => {
+				document.documentElement.classList.remove("pipane-startup-pending");
+				console.error("Failed to initialize Pipane:", error);
+				bootstrapDiagnostics.fail(error);
+			});
 		});
 		return;
 	}
 
-	clearTimeout(connectingOverlayTimer);
-
-	bootstrapDiagnostics.mark("Loading workspace settings");
-	try {
-		applyBackendSettings(await agent.getLocalSettings());
-		await resyncAppearanceFromServer();
-	} catch {
-		// Backend settings are optional; cached UI defaults remain usable.
-	}
+	bootstrapDiagnostics.event("Workspace settings requested");
+	void (async () => {
+		try {
+			applyBackendSettings(await agent.getLocalSettings());
+			await resyncAppearanceFromServer();
+			bootstrapDiagnostics.event("Workspace settings loaded");
+			renderApp();
+		} catch {
+			// Backend settings are optional; cached UI defaults remain usable.
+			bootstrapDiagnostics.event("Workspace settings unavailable");
+		}
+	})();
 
 	bootstrapDiagnostics.event("Conversation catalog requested");
 	const sessionsPrefetch = agent.listSessions().then((sessions) => {
@@ -1169,6 +1200,13 @@ async function initApp() {
 	agent.onSessionChange(async () => {
 		if (observedBackendId !== agent.activeBackendId) {
 			observedBackendId = agent.activeBackendId;
+		}
+		if (agent.sessionFile) {
+			saveStartupSession({
+				path: agent.sessionFile,
+				...(agent.activeBackendId ? { backendId: agent.activeBackendId } : {}),
+				...(agent.cwd ? { cwd: agent.cwd } : {}),
+			});
 		}
 		clearPendingHardKillOffer();
 		setFilePreviewSession(agent.sessionFile, currentSessionScopeKey());
@@ -1261,6 +1299,7 @@ async function initApp() {
 	const handleForkRequest = async () => {
 		if (!agent.sessionFile || agent.sessionStatus === "virtual") return;
 
+		await import("./fork-modal.js");
 		const modal = document.createElement("fork-modal") as ForkModal;
 		document.body.appendChild(modal);
 
@@ -1290,35 +1329,77 @@ async function initApp() {
 	// Load auto-collapse settings
 	loadAutoCollapseSettings(agent);
 
-	// Load the full model catalog before restoring a session. Persisted sessions
-	// contain only provider/modelId refs, so restoration needs this metadata.
-	bootstrapDiagnostics.mark("Loading model catalog");
-	try {
-		await agent.fetchAvailableModels();
-	} catch (err) {
+	// Model metadata can travel alongside cached/session synchronization. Compact
+	// model refs remain renderable until the catalog arrives.
+	bootstrapDiagnostics.event("Model catalog requested");
+	const modelsReady = agent.fetchAvailableModels().then((models) => {
+		bootstrapDiagnostics.event("Model catalog loaded", `${models.length} models`);
+		return models;
+	}).catch((err) => {
 		console.warn("Failed to preload available models; using compact session metadata", err);
-	}
-	bootstrapDiagnostics.mark("Loading default model");
-	await agent.loadDefaultModel();
-
+		bootstrapDiagnostics.event("Model catalog unavailable", err instanceof Error ? err.message : String(err));
+		return [];
+	});
 	bootstrapDiagnostics.mark("Waiting for conversation catalog");
 	prefetchedSessions = (await sessionsPrefetch) ?? undefined;
-
-	if (prefetchedSessions && prefetchedSessions.length > 0) {
-		const mostRecent = prefetchedSessions.reduce((best, s) => {
-			const bestTime = best.lastUserPromptTime ? new Date(best.lastUserPromptTime).getTime() : new Date(best.modified).getTime();
-			const sTime = s.lastUserPromptTime ? new Date(s.lastUserPromptTime).getTime() : new Date(s.modified).getTime();
-			return sTime > bestTime ? s : best;
-		});
-		startupExpectedSessionPath = mostRecent.path;
-		startupExpectedBackendId = mostRecent.backendId;
-		bootstrapDiagnostics.mark("Loading latest conversation", `${prefetchedSessions.length} conversations available`);
-		await agent.switchSession(mostRecent.path, mostRecent.cwd, mostRecent.backendId);
-	} else {
-		bootstrapDiagnostics.mark("Creating empty conversation");
-		await agent.newSession();
+	const stored = loadStartupSession();
+	const startupSelectionSuperseded = (agent.sessionStatus === "virtual" && agent.sessionId.length > 0)
+		|| Boolean(agent.sessionFile && (
+			agent.sessionFile !== stored?.path
+			|| (stored?.backendId && agent.activeBackendId !== stored.backendId)
+		));
+	if (startupSelectionSuperseded) {
+		// A sidebar action can still select a conversation while startup I/O is in
+		// flight. Never let late automatic selection overwrite that explicit view.
+		bootstrapDiagnostics.event("Automatic conversation selection superseded");
+		void modelsReady.then(() => agent.loadDefaultModel()).catch(() => {});
+		markStartup(STARTUP_MARK.sessionSelected);
+		markStartup(STARTUP_MARK.sessionSynchronized);
+		document.documentElement.classList.remove("pipane-startup-pending");
+		bootstrapDiagnostics.mark("Rendering workspace");
+		renderApp();
+		bootstrapDiagnostics.complete();
+		void refreshUpdateNotices();
+		syncSettingsRoute();
+		prefetchedSessions = undefined;
+		return;
 	}
 
+	if (prefetchedSessions && prefetchedSessions.length > 0) {
+		const preferred = stored && prefetchedSessions.find((session) =>
+			session.path === stored.path
+			&& (!stored.backendId || session.backendId === stored.backendId),
+		);
+		const selected = preferred ?? prefetchedSessions.reduce((best, session) => {
+			const bestTime = best.lastUserPromptTime ? new Date(best.lastUserPromptTime).getTime() : new Date(best.modified).getTime();
+			const sessionTime = session.lastUserPromptTime ? new Date(session.lastUserPromptTime).getTime() : new Date(session.modified).getTime();
+			return sessionTime > bestTime ? session : best;
+		});
+		startupExpectedSessionPath = selected.path;
+		startupExpectedBackendId = selected.backendId;
+		bootstrapDiagnostics.mark("Loading last conversation", `${prefetchedSessions.length} conversations available`);
+		markStartup(STARTUP_MARK.sessionSelected);
+		const startupPreviewRestored = await startupPreviewPromise;
+		if (startupPreviewRestored
+			&& agent.sessionFile === selected.path
+			&& (!selected.backendId || agent.activeBackendId === selected.backendId)) {
+			startupHistoryReceived = true;
+			bootstrapDiagnostics.event("Cached conversation ready", `${agent.state.messages.length} materialized messages`);
+		}
+		await agent.switchSession(selected.path, selected.cwd, selected.backendId);
+		markStartup(STARTUP_MARK.sessionSynchronized);
+		void modelsReady.then(() => agent.loadDefaultModel()).catch(() => {});
+	} else {
+		bootstrapDiagnostics.mark("Loading default model");
+		await modelsReady;
+		await agent.loadDefaultModel();
+		bootstrapDiagnostics.mark("Creating empty conversation");
+		await agent.newSession();
+		markStartup(STARTUP_MARK.sessionSelected);
+		markStartup(STARTUP_MARK.sessionSynchronized);
+	}
+
+	document.documentElement.classList.remove("pipane-startup-pending");
 	bootstrapDiagnostics.mark("Rendering workspace");
 	renderApp();
 	startupWorkspaceRendered = true;
@@ -1330,12 +1411,5 @@ async function initApp() {
 	}
 	void refreshUpdateNotices();
 	syncSettingsRoute();
-
 	prefetchedSessions = undefined;
-
 }
-
-void initApp().catch((error) => {
-	console.error("Failed to initialize Pipane:", error);
-	bootstrapDiagnostics.fail(error);
-});

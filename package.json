@@ -48,7 +48,7 @@
 		"dev:server": "tsx watch src/server/server.ts",
 		"dev:client": "vite",
 		"dev:rendezvous": "tsx watch src/rendezvous/server.ts",
-		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && concurrently --raw --kill-others-on-fail \"vite build\" \"tsc -p tsconfig.server.json\" && node scripts/write-build-info.js",
+		"build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && concurrently --raw --kill-others-on-fail \"vite build\" \"tsc -p tsconfig.server.json\" && node scripts/check-client-bundle.js && node scripts/compress-client-assets.js && node scripts/write-build-info.js",
 		"start": "NODE_ENV=production node dist/server/server/server.js",
 		"start:rendezvous": "NODE_ENV=production node dist/server/rendezvous/server.js",
 		"prod": "./prod.sh",

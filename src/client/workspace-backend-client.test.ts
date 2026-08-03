@@ -68,6 +68,7 @@ function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 		getSessionStatus: vi.fn((path: string) => path === sessions[0]?.path ? "running" : undefined),
 		fetchAvailableModels: vi.fn(async () => []),
 		loadDefaultModel: vi.fn(async () => undefined),
+		restoreCachedSessionPreview: vi.fn(async () => true),
 		switchSession: vi.fn(async (path: string) => {
 			current = sessions.find((candidate) => candidate.path === path);
 			for (const listener of events.session) listener();
@@ -123,12 +124,24 @@ describe("WorkspaceBackendClient", () => {
 		await workspace.switchSession("/sessions/shared.jsonl", "/work/two", "b_two");
 
 		expect(workspace.activeBackendId).toBe("b_two");
-		expect(two.client.fetchAvailableModels).toHaveBeenCalledOnce();
+		expect(two.client.fetchAvailableModels).not.toHaveBeenCalled();
 		expect(two.client.switchSession).toHaveBeenCalledWith("/sessions/shared.jsonl", "/work/two");
 		expect(one.client.setSessionSubscriptionActive).toHaveBeenCalledWith(false);
 		expect(one.client.switchSession).not.toHaveBeenCalled();
 		expect(changed).toHaveBeenCalled();
 		expect(window.location.pathname).toBe("/");
+	});
+
+	it("restores a backend-scoped cache before opening transport", async () => {
+		const one = fakeClient([session("one", "/sessions/one.jsonl", "/work/one")]);
+		const workspace = new WorkspaceBackendClient([
+			{ backendId: "b_one", name: "One", online: true, protocolVersions: [1, 2] },
+		], { getClient: () => one.client, revokeBackend: vi.fn() }, "b_one");
+
+		await expect(workspace.restoreCachedSessionPreview("/sessions/one.jsonl", "/work/one", "b_one"))
+			.resolves.toBe(true);
+		expect(one.client.restoreCachedSessionPreview).toHaveBeenCalledWith("/sessions/one.jsonl", "/work/one");
+		expect(one.client.connect).not.toHaveBeenCalled();
 	});
 
 	it("renders after the first reachable host without waiting for another ICE attempt", async () => {

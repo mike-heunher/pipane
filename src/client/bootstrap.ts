@@ -1,6 +1,10 @@
 import "./app.css";
 import { bootstrapDiagnostics } from "./bootstrap-diagnostics.js";
 import { isSettingsPath } from "./settings-route.js";
+import { loadStartupSession } from "./startup-session.js";
+import { markStartup, STARTUP_MARK } from "./startup-performance.js";
+
+markStartup(STARTUP_MARK.bootstrapStarted);
 
 // Unregister stale service workers before either the local workspace or pairing flow starts.
 if ("serviceWorker" in navigator) {
@@ -27,9 +31,15 @@ async function bootstrap(): Promise<void> {
 		bootstrapDiagnostics.complete();
 		return;
 	}
-	const backendId = backendIdFromPath(window.location.pathname);
-	const rendezvousWorkspace = backendId !== undefined
-		|| ((window.location.pathname === "/" || isSettingsPath(window.location.pathname)) && await isRendezvousHost());
+
+	bootstrapDiagnostics.mark("Loading application");
+	markStartup(STARTUP_MARK.mainImportStarted);
+	// Evaluation is side-effect free until initializeMain(), so the browser can
+	// fetch and parse the UI while identity, discovery, and transport start.
+	const mainModulePromise = import("./main.js");
+	const backendIdFromRoute = backendIdFromPath(window.location.pathname);
+	const rendezvousWorkspace = backendIdFromRoute !== undefined
+		|| ((window.location.pathname === "/" || isSettingsPath(window.location.pathname)) && runtimeMode() === "rendezvous");
 	if (rendezvousWorkspace) {
 		try {
 			bootstrapDiagnostics.mark("Loading remote workspace");
@@ -59,33 +69,50 @@ async function bootstrap(): Promise<void> {
 				return;
 			}
 			bootstrapDiagnostics.event("Backend discovery complete", `${backends.length} authorized backend${backends.length === 1 ? "" : "s"}`);
-			const client = new WorkspaceBackendClient(backends, manager, backendId);
+
+			const stored = loadStartupSession();
+			const storedBackendId = stored?.backendId
+				&& backends.some((backend) => backend.backendId === stored.backendId)
+				? stored.backendId
+				: undefined;
+			const initialBackendId = backendIdFromRoute ?? storedBackendId;
+			const client = new WorkspaceBackendClient(backends, manager, initialBackendId);
 			bootstrapDiagnostics.attachClient(client);
-			configureAppRuntime({ client });
+			const canRestoreStoredSession = stored
+				&& storedBackendId
+				&& (!backendIdFromRoute || backendIdFromRoute === storedBackendId);
+			const startupPreview = canRestoreStoredSession
+				? client.restoreCachedSessionPreview?.(stored.path, stored.cwd, storedBackendId) ?? Promise.resolve(false)
+				: Promise.resolve(false);
+			const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+			const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+			bootstrapDiagnostics.mark("Connecting to backend");
+			markStartup(STARTUP_MARK.transportStarted);
+			const connection = client.connect(wsUrl);
+			// initializeMain awaits and handles this exact promise; attach a handler
+			// now so a very fast rejection is never reported as unhandled.
+			void connection.catch(() => {});
+			configureAppRuntime({ client, connection, startupPreview });
+			markStartup(STARTUP_MARK.runtimeConfigured);
 		} catch (error) {
 			renderBootstrapError(error);
 			bootstrapDiagnostics.fail(error);
 			return;
 		}
 	}
-	bootstrapDiagnostics.mark("Loading application");
-	await import("./main.js");
+	const { initializeMain } = await mainModulePromise;
+	initializeMain();
+}
+
+function runtimeMode(): "local" | "rendezvous" {
+	return document.querySelector<HTMLMetaElement>('meta[name="pipane-runtime"]')?.content === "rendezvous"
+		? "rendezvous"
+		: "local";
 }
 
 async function renderBackendLandingPage(): Promise<void> {
 	const { initializeBackendLandingPage } = await import("./backend-landing-page.js");
 	await initializeBackendLandingPage();
-}
-
-async function isRendezvousHost(): Promise<boolean> {
-	try {
-		const response = await fetch("/health", { cache: "no-store" });
-		if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) return false;
-		const value: unknown = await response.json();
-		return !!value && typeof value === "object" && (value as Record<string, unknown>).ok === true;
-	} catch {
-		return false;
-	}
 }
 
 function renderBootstrapError(error: unknown): void {

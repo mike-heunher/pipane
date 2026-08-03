@@ -97,6 +97,6 @@ export class RemoteBackendManager {
 			},
 		});
 		const api = new DataChannelBackendApi(transport, backendId);
-		return new WsAgentAdapter({ transport, api });
+		return new WsAgentAdapter({ transport, api, cacheBackendId: backendId });
 	}
 }

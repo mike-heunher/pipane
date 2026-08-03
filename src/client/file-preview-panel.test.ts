@@ -14,7 +14,11 @@ import {
 } from "./file-preview-panel.js";
 
 async function settle(): Promise<void> {
-	await new Promise((resolve) => setTimeout(resolve, 0));
+	// Markdown/KaTeX lives behind a dynamic import so opening a preview does not
+	// put that parser on the application startup path.
+	for (let attempt = 0; attempt < 4; attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	}
 }
 
 function setupPanel(): HTMLElement {
@@ -81,7 +85,7 @@ describe("linked file preview", () => {
 		expect(openFilePreviewLink("docs/guide.md", "/work/project", "/sessions/test.jsonl", undefined, new HttpBackendApi({ fetch: fetchMock as typeof fetch }))).toBe(true);
 		expect(isFilePreviewVisible()).toBe(true);
 		expect(container.textContent).toContain("Loading file");
-		await settle();
+		await vi.waitFor(() => expect(container.querySelector(".file-preview-frame")).not.toBeNull());
 
 		expect(fetchMock).toHaveBeenCalledWith(
 			"/api/files/content?sessionPath=%2Fsessions%2Ftest.jsonl&path=docs%2Fguide.md",
@@ -286,7 +290,9 @@ describe("linked file preview", () => {
 
 		expect(isFilePreviewVisible()).toBe(false);
 		expect(container.querySelector(".file-preview-panel")).toBeNull();
-		expect(popupDocument.querySelector<HTMLIFrameElement>(".file-preview-window-frame")?.srcdoc).toContain("<h1>Guide</h1>");
+		await vi.waitFor(() => expect(
+			popupDocument.querySelector<HTMLIFrameElement>(".file-preview-window-frame")?.srcdoc,
+		).toContain("<h1>Guide</h1>"));
 	});
 
 	it("renders HTML with active scripts in an isolated iframe", async () => {

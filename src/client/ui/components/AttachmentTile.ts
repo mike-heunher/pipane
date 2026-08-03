@@ -3,7 +3,6 @@ import { LitElement } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { html } from "lit/html.js";
 import { FileSpreadsheet, FileText, X } from "lucide";
-import { AttachmentOverlay } from "../dialogs/AttachmentOverlay.js";
 import type { Attachment } from "../utils/attachment-utils.js";
 import { i18n } from "../utils/i18n.js";
 
@@ -23,7 +22,8 @@ export class AttachmentTile extends LitElement {
 		this.classList.add("max-h-16");
 	}
 
-	private handleClick = () => {
+	private handleClick = async () => {
+		const { AttachmentOverlay } = await import("../dialogs/AttachmentOverlay.js");
 		AttachmentOverlay.open(this.attachment);
 	};
 

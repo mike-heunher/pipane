@@ -1,12 +1,11 @@
-import { parseAsync } from "docx-preview";
-import JSZip from "jszip";
 import type { PDFDocumentProxy } from "pdfjs-dist";
-import * as pdfjsLib from "pdfjs-dist";
-import * as XLSX from "xlsx";
 import { i18n } from "./i18n.js";
-
-// Configure PDF.js worker - we'll need to bundle this
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
+import {
+	loadDocxModule,
+	loadPdfModule,
+	loadSpreadsheetModule,
+	loadZipModule,
+} from "./document-modules.js";
 
 export interface Attachment {
 	id: string;
@@ -217,6 +216,7 @@ async function processPdf(
 ): Promise<{ extractedText: string; preview?: string }> {
 	let pdf: PDFDocumentProxy | null = null;
 	try {
+		const pdfjsLib = await loadPdfModule();
 		pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
 		// Extract text with page structure
@@ -282,6 +282,7 @@ async function generatePdfPreview(pdf: PDFDocumentProxy): Promise<string | undef
 
 async function processDocx(arrayBuffer: ArrayBuffer, fileName: string): Promise<{ extractedText: string }> {
 	try {
+		const { parseAsync } = await loadDocxModule();
 		// Parse document structure
 		const wordDoc = await parseAsync(arrayBuffer);
 
@@ -373,6 +374,7 @@ function extractTextFromElement(element: any): string {
 
 async function processPptx(arrayBuffer: ArrayBuffer, fileName: string): Promise<{ extractedText: string }> {
 	try {
+		const JSZip = await loadZipModule();
 		// Load the PPTX file as a ZIP
 		const zip = await JSZip.loadAsync(arrayBuffer);
 
@@ -459,6 +461,7 @@ async function processPptx(arrayBuffer: ArrayBuffer, fileName: string): Promise<
 
 async function processExcel(arrayBuffer: ArrayBuffer, fileName: string): Promise<{ extractedText: string }> {
 	try {
+		const XLSX = await loadSpreadsheetModule();
 		// Read the workbook
 		const workbook = XLSX.read(arrayBuffer, { type: "array" });
 

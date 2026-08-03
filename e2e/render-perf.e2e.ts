@@ -107,6 +107,35 @@ test.describe("Render performance", () => {
 		await revealSession(page, mock);
 	});
 
+	test("startup paints the shell without optional feature bundles", async ({ page }) => {
+		const metrics = await page.evaluate(() => {
+			const mark = (name: string) => performance.getEntriesByName(name, "mark")[0]?.startTime;
+			const scripts = performance.getEntriesByType("resource")
+				.filter((entry): entry is PerformanceResourceTiming => entry instanceof PerformanceResourceTiming)
+				.filter((entry) => /\/assets\/.*\.(?:js|mjs)(?:$|\?)/u.test(entry.name));
+			return {
+				bootstrapStarted: mark("pipane:bootstrap-started"),
+				mainInitialized: mark("pipane:main-initialized"),
+				shellPainted: mark("pipane:shell-painted"),
+				transportConnected: mark("pipane:transport-connected"),
+				sessionSynchronized: mark("pipane:session-synchronized"),
+				mainBytes: scripts.find((entry) => /\/main-[\w-]+\.js/u.test(entry.name))?.decodedBodySize,
+				optionalScripts: scripts.map((entry) => entry.name).filter((name) =>
+					/file-preview-markdown|syntax-highlighter|math-renderer|katex|AttachmentOverlay/u.test(name),
+				),
+			};
+		});
+
+		expect(metrics.bootstrapStarted).toEqual(expect.any(Number));
+		expect(metrics.mainInitialized).toEqual(expect.any(Number));
+		expect(metrics.shellPainted).toEqual(expect.any(Number));
+		expect(metrics.transportConnected).toEqual(expect.any(Number));
+		expect(metrics.sessionSynchronized).toEqual(expect.any(Number));
+		expect(metrics.mainBytes).toBeGreaterThan(0);
+		expect(metrics.mainBytes).toBeLessThanOrEqual(450 * 1024);
+		expect(metrics.optionalScripts).toEqual([]);
+	});
+
 	test("large session render time", async ({ page }) => {
 		await clickMeasuredSession(page);
 		await waitForExactFixture(page);

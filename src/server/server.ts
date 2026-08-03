@@ -49,6 +49,7 @@ import { BackendProtocolHandler } from "./backend-protocol-handler.js";
 import { LocalBackendApi } from "./local-backend-api.js";
 import { resolveBackendName, resolveRendezvousUrl } from "./backend-registration-config.js";
 import qrcode from "qrcode-terminal";
+import { mountClientApp } from "./client-assets.js";
 
 const DEFAULT_PORT = process.env.NODE_ENV === "production" ? "8222" : "18111";
 const REQUESTED_PORT = parseInt(process.env.PORT || DEFAULT_PORT, 10);
@@ -240,11 +241,13 @@ const registry = new SessionRegistry();
 const SESSIONS_DIR = path.join(getAgentDir(), "sessions");
 const sessionPaths = new SessionPathGuard(SESSIONS_DIR);
 
-// Serve static files in production
+// Serve the browser shell with long-lived compressed hashed assets. The HTML
+// itself remains revalidated so deployments can immediately point at new hashes.
 const clientDist = path.resolve(__dirname, "../../client");
-app.use(express.static(clientDist));
-app.get(["/settings", "/settings/"], (_request, response) => {
-	response.sendFile(path.join(clientDist, "index.html"));
+mountClientApp(app, {
+	clientDist,
+	runtimeMode: "local",
+	isAppPath: (pathname) => pathname === "/" || /^\/settings\/?$/u.test(pathname),
 });
 
 // ============================================================================

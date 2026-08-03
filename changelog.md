@@ -4,6 +4,7 @@
 - Show collapsed tool calls without output with the correct closed chevron.
 - Run extension commands such as `/usage` in fresh conversations without ghost sessions and show their full notifications.
 - Detect stale laptop rendezvous connections after sleep or network changes and reconnect them automatically.
+- Load conversations faster with compressed immutable assets, lazy optional feature bundles, overlapped transport startup, cached last-session restoration, and deferred highlighting.
 
 # 0.1.16 - 2026-08-01
 

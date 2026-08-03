@@ -12,54 +12,10 @@ import { icon } from "@mariozechner/mini-lit/dist/icons.js";
 import { html, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { ref } from "lit/directives/ref.js";
-import hljs from "highlight.js/lib/core";
-import bash from "highlight.js/lib/languages/bash";
-import css from "highlight.js/lib/languages/css";
-import javascript from "highlight.js/lib/languages/javascript";
-import json from "highlight.js/lib/languages/json";
-import python from "highlight.js/lib/languages/python";
-import sql from "highlight.js/lib/languages/sql";
-import typescript from "highlight.js/lib/languages/typescript";
-import xmlLang from "highlight.js/lib/languages/xml";
-import markdown from "highlight.js/lib/languages/markdown";
-import yaml from "highlight.js/lib/languages/yaml";
-import go from "highlight.js/lib/languages/go";
-import rust from "highlight.js/lib/languages/rust";
-import java from "highlight.js/lib/languages/java";
-import cpp from "highlight.js/lib/languages/cpp";
-import c from "highlight.js/lib/languages/c";
-import ruby from "highlight.js/lib/languages/ruby";
-import php from "highlight.js/lib/languages/php";
-import swift from "highlight.js/lib/languages/swift";
-import kotlin from "highlight.js/lib/languages/kotlin";
-import scss from "highlight.js/lib/languages/scss";
 import { FileText, FilePen, FilePlus, SquareTerminal, Loader, PanelRight, ChevronRight, Puzzle } from "lucide";
 import { showCanvas } from "../canvas-panel.js";
 import { notifyToolToggled } from "../auto-collapse.js";
 import { streamingScrollPin } from "./streaming-scroll-pin.js";
-
-// Register highlight.js languages
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("html", xmlLang);
-hljs.registerLanguage("xml", xmlLang);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("go", go);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("java", java);
-hljs.registerLanguage("cpp", cpp);
-hljs.registerLanguage("c", c);
-hljs.registerLanguage("ruby", ruby);
-hljs.registerLanguage("php", php);
-hljs.registerLanguage("swift", swift);
-hljs.registerLanguage("kotlin", kotlin);
-hljs.registerLanguage("scss", scss);
 
 /** Strip `cd /some/path && ` prefix that pi injects for cwd. */
 export function stripCdPrefix(command: string): string {
@@ -102,55 +58,35 @@ function getLanguageFromPath(path: string): string {
 }
 
 const MAX_HIGHLIGHT_INPUT_CHARS = 100_000;
-const MAX_HIGHLIGHT_CACHE_CHARS = 4_000_000;
-const MAX_HIGHLIGHT_CACHE_ENTRIES = 256;
+export const SYNTAX_HIGHLIGHTER_READY_EVENT = "pipane:syntax-highlighter-ready";
+let syntaxHighlighter: typeof import("./syntax-highlighter.js") | undefined;
+let syntaxHighlighterPromise: Promise<typeof import("./syntax-highlighter.js")> | undefined;
+let syntaxHighlighterScheduled = false;
 
-type HighlightCacheEntry = {
-	language: string;
-	code: string;
-	html: string;
-	size: number;
-};
+export function loadSyntaxHighlighter(): Promise<typeof import("./syntax-highlighter.js")> {
+	syntaxHighlighterPromise ??= import("./syntax-highlighter.js").then((module) => {
+		syntaxHighlighter = module;
+		window.dispatchEvent(new Event(SYNTAX_HIGHLIGHTER_READY_EVENT));
+		return module;
+	});
+	return syntaxHighlighterPromise;
+}
 
-const highlightCacheByLanguage = new Map<string, Map<string, HighlightCacheEntry>>();
-const highlightCacheLru = new Set<HighlightCacheEntry>();
-let highlightCacheChars = 0;
+function scheduleSyntaxHighlighter(): void {
+	if (syntaxHighlighter || syntaxHighlighterScheduled) return;
+	syntaxHighlighterScheduled = true;
+	const load = () => { void loadSyntaxHighlighter(); };
+	if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(load, { timeout: 1_000 });
+	else window.setTimeout(load, 0);
+}
 
 function highlightCode(code: string, language: string): string {
-	if (!language || !hljs.getLanguage(language) || code.length > MAX_HIGHLIGHT_INPUT_CHARS) return "";
-
-	const languageCache = highlightCacheByLanguage.get(language);
-	const cached = languageCache?.get(code);
-	if (cached) {
-		highlightCacheLru.delete(cached);
-		highlightCacheLru.add(cached);
-		return cached.html;
+	if (!language || code.length > MAX_HIGHLIGHT_INPUT_CHARS) return "";
+	if (!syntaxHighlighter) {
+		scheduleSyntaxHighlighter();
+		return "";
 	}
-
-	const highlighted = hljs.highlight(code, { language, ignoreIllegals: true }).value;
-	const entry: HighlightCacheEntry = {
-		language,
-		code,
-		html: highlighted,
-		size: code.length + highlighted.length,
-	};
-	if (entry.size > MAX_HIGHLIGHT_CACHE_CHARS) return highlighted;
-
-	const cache = languageCache ?? new Map<string, HighlightCacheEntry>();
-	if (!languageCache) highlightCacheByLanguage.set(language, cache);
-	cache.set(code, entry);
-	highlightCacheLru.add(entry);
-	highlightCacheChars += entry.size;
-
-	while (highlightCacheLru.size > MAX_HIGHLIGHT_CACHE_ENTRIES || highlightCacheChars > MAX_HIGHLIGHT_CACHE_CHARS) {
-		const oldest = highlightCacheLru.values().next().value as HighlightCacheEntry | undefined;
-		if (!oldest) break;
-		highlightCacheLru.delete(oldest);
-		highlightCacheByLanguage.get(oldest.language)?.delete(oldest.code);
-		highlightCacheChars -= oldest.size;
-	}
-
-	return highlighted;
+	return syntaxHighlighter.highlightCode(code, language);
 }
 
 function resultText(result: ToolResultMessage | undefined): string {

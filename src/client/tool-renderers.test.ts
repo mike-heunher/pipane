@@ -10,7 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { html, render as renderTemplate } from "lit";
 import hljs from "highlight.js/lib/core";
 import { getToolRenderer, renderTool } from "./ui/tool-registry.js";
-import { formatBashMainText, stripCdPrefix, registerCodingAgentRenderers } from "./ui/tool-renderers.js";
+import {
+	formatBashMainText,
+	loadSyntaxHighlighter,
+	stripCdPrefix,
+	registerCodingAgentRenderers,
+} from "./ui/tool-renderers.js";
 
 // Ensure custom renderers are registered (overriding built-ins)
 registerCodingAgentRenderers();
@@ -44,7 +49,8 @@ describe("stripCdPrefix", () => {
 });
 
 describe("syntax highlighting", () => {
-	it("reuses highlighted output across unchanged historical tool renders", () => {
+	it("reuses highlighted output across unchanged historical tool renders", async () => {
+		await loadSyntaxHighlighter();
 		const highlight = vi.spyOn(hljs, "highlight");
 		const renderer = getToolRenderer("read")!;
 		const toolResult = {

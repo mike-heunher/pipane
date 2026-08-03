@@ -17,6 +17,7 @@ import {
 	type RendezvousTrustStoreOptions,
 	type TurnCredentialOptions,
 } from "./trust-store.js";
+import { mountClientApp } from "../server/client-assets.js";
 
 const BACKEND_PATH = `/v${RENDEZVOUS_PROTOCOL_VERSION}/rendezvous/backend`;
 const BROWSER_PATH = `/v${RENDEZVOUS_PROTOCOL_VERSION}/rendezvous/browser`;
@@ -193,13 +194,12 @@ export function createRendezvousServer(
 		? undefined
 		: options.clientDist ?? (process.env.NODE_ENV === "production" ? packagedClientDist : undefined);
 	if (clientDist && existsSync(path.join(clientDist, "index.html"))) {
-		app.use(express.static(clientDist));
-		app.use((request, response, next) => {
-			if (request.method === "GET" && (/^\/(?:pair|invite)\/[^/]+$/u.test(request.path) || /^\/backend\/[^/]+$/u.test(request.path) || /^\/settings\/?$/u.test(request.path))) {
-				response.sendFile(path.join(clientDist, "index.html"));
-				return;
-			}
-			next();
+		mountClientApp(app, {
+			clientDist,
+			runtimeMode: "rendezvous",
+			isAppPath: (pathname) => pathname === "/"
+				|| /^\/(?:pair|invite|backend)\/[^/]+$/u.test(pathname)
+				|| /^\/settings\/?$/u.test(pathname),
 		});
 	}
 

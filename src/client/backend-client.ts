@@ -98,6 +98,8 @@ export interface BackendClient extends BackendApi {
 	forkAndPrompt(text: string, images?: WireImage[]): Promise<void>;
 	/** Warm a bounded browser cache entry before an anticipated session switch. */
 	prefetchSession?(sessionPath: string, backendId?: string): void;
+	/** Paint a verified cached session before remote transport negotiation finishes. */
+	restoreCachedSessionPreview?(sessionPath: string, cwd?: string, backendId?: string): Promise<boolean>;
 	switchSession(sessionPath: string, cwd?: string, backendId?: string): Promise<void>;
 	newSession(cwd?: string, backendId?: string): Promise<void>;
 	/** Pause or restore full session snapshots while retaining host-level status/catalog events. */

@@ -2,6 +2,10 @@ import type { BackendClient } from "./backend-client.js";
 
 export interface AppRuntime {
 	client: BackendClient;
+	/** Remote bootstrap starts transport negotiation while the UI chunk loads. */
+	connection?: Promise<void>;
+	/** Best-effort verified cached conversation restoration started before transport. */
+	startupPreview?: Promise<boolean>;
 }
 
 let configured: AppRuntime | undefined;

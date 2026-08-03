@@ -23,7 +23,7 @@ import { CONTENT_ADDRESSED_SESSION_SYNC_FEATURE, UPLOADED_IMAGE_PROMPT_FEATURE }
  * Create an adapter with a mocked WebSocket. Returns the adapter and a
  * spy that captures all messages sent over the WS.
  */
-function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessionCache" | "requestFrame"> = {}) {
+function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessionCache" | "requestFrame" | "cacheBackendId"> = {}) {
 	const sent: any[] = [];
 	let messageHandler: ((ev: { data: string }) => void) | null = null;
 
@@ -101,6 +101,7 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessi
 		}),
 		...(options.sessionCache !== undefined ? { sessionCache: options.sessionCache } : {}),
 		...(options.requestFrame ? { requestFrame: options.requestFrame } : {}),
+		...(options.cacheBackendId ? { cacheBackendId: options.cacheBackendId } : {}),
 	});
 
 	return {
@@ -1136,6 +1137,32 @@ describe("WsAgentAdapter prompt routing", () => {
 	});
 
 	describe("model persistence across session sync", () => {
+		it("does not let a delayed default-model response overwrite synchronized session state", async () => {
+			const { adapter, mockWs, sent, simulateServerMessage } = createTestAdapter();
+			let request: any;
+			mockWs.send.mockImplementation((data: string) => {
+				request = JSON.parse(data);
+				sent.push(request);
+			});
+
+			const loading = adapter.loadDefaultModel();
+			expect(request).toMatchObject({ type: "get_default_model" });
+			(adapter as any)._state.model = { provider: "mock", id: "session-model" };
+			simulateServerMessage({
+				type: "response",
+				id: request.id,
+				command: "get_default_model",
+				success: true,
+				data: {
+					model: { provider: "mock", id: "default-model" },
+					thinkingLevel: "medium",
+				},
+			});
+
+			await loading;
+			expect(adapter.state.model).toMatchObject({ provider: "mock", id: "session-model" });
+		});
+
 		it("does not overwrite a locally selected model when an older snapshot arrives", async () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
@@ -1381,6 +1408,43 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(sessions).toHaveBeenCalledOnce();
 			expect(content).not.toHaveBeenCalled();
 			expect(status).not.toHaveBeenCalled();
+		});
+
+		it("restores a verified startup cache before capability negotiation", async () => {
+			const sessionPath = "/tmp/sessions/startup.jsonl";
+			const state = {
+				messages: [{ role: "user", content: "cached startup" }],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off" as const,
+				steeringQueue: [],
+			};
+			const json = JSON.stringify(state);
+			const hash = await computeHash(json);
+			const cache = {
+				loadPreview: vi.fn().mockResolvedValue({ hash, state }),
+				load: vi.fn().mockResolvedValue({ json, hash, state, messageHashes: [], messageObjects: new Map() }),
+				save: vi.fn(),
+				remove: vi.fn(),
+			};
+			const { adapter, sent } = createTestAdapter({ sessionCache: cache, cacheBackendId: "backend-one" });
+
+			await expect(adapter.restoreCachedSessionPreview?.(sessionPath, "/work/startup")).resolves.toBe(true);
+			expect(adapter.state.messages).toEqual(state.messages);
+			expect(cache.loadPreview).toHaveBeenCalledOnce();
+			expect(cache.load).toHaveBeenCalledOnce();
+
+			const internal = adapter as any;
+			internal.handleTransportConnectionChange(true, false);
+			expect(adapter.sessionStatus).toBe("detached");
+			internal._backendFeatures.add(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE);
+			await adapter.switchSession(sessionPath, "/work/startup");
+			expect(cache.load).toHaveBeenCalledOnce();
+			expect(sent.find((frame) => frame.type === "subscribe_session")).toMatchObject({
+				cachedStateHash: hash,
+			});
 		});
 
 		it("paints a compact cache preview before hydrating the verified full state", async () => {

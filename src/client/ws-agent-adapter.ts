@@ -65,6 +65,7 @@ import {
 	WebSocketFrameTransport,
 	type WebSocketLike,
 } from "./websocket-frame-transport.js";
+import { markStartup, STARTUP_MARK } from "./startup-performance.js";
 
 export type {
 	BackendClientState as AdapterState,
@@ -136,6 +137,8 @@ export interface WsAgentAdapterOptions {
 	requestFrame?: (callback: FrameRequestCallback) => number;
 	/** Persistent serialized-session cache override; false disables browser caching. */
 	sessionCache?: SessionStateCache | false;
+	/** Known remote backend identity allows cache restoration before capability RPCs. */
+	cacheBackendId?: string;
 }
 
 export class WsAgentAdapter implements BackendClient {
@@ -252,6 +255,8 @@ export class WsAgentAdapter implements BackendClient {
 	private readonly cacheSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	/** At most two verified snapshots anticipated by sidebar hover/focus. */
 	private readonly prefetchedSessionStates = new Map<string, Promise<CachedSessionState | undefined>>();
+	/** Verified startup cache already assigned before transport connection. */
+	private startupCachedSessionPath: string | undefined;
 
 	// ── session_sync frame queue ──────────────────────────────────────────
 	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
@@ -275,6 +280,7 @@ export class WsAgentAdapter implements BackendClient {
 		this.sessionCache = options.sessionCache === false
 			? undefined
 			: options.sessionCache ?? createBrowserSessionStateCache();
+		this.cacheBackendId = options.cacheBackendId;
 		this.transport.onFrame((frame) => this.handleMessage(frame));
 		this.transport.onConnectionChange((event) => this.handleTransportConnectionChange(event.connected, event.reconnected));
 	}
@@ -564,8 +570,8 @@ export class WsAgentAdapter implements BackendClient {
 
 	private handleTransportConnectionChange(connected: boolean, reconnected: boolean): void {
 		if (connected) {
-			if (!reconnected) this._sessionStatus = "virtual";
-			else this.onReconnected();
+			if (!reconnected && !this._sessionPath) this._sessionStatus = "virtual";
+			else if (reconnected) this.onReconnected();
 		} else {
 			this.handleTransportDisconnected();
 		}
@@ -1094,6 +1100,40 @@ export class WsAgentAdapter implements BackendClient {
 		this._cachedMessageObjects = new Map();
 	}
 
+	async restoreCachedSessionPreview(sessionPath: string, cwd?: string): Promise<boolean> {
+		if (!this.sessionCache || !this.cacheBackendId) return false;
+		const nonce = ++this._sessionNonce;
+		if (cwd !== undefined) this._pendingCwd = cwd;
+		this._pendingNewPrompt = false;
+		this._virtualPromptOperationIds.clear();
+		this._pendingControl = undefined;
+		this._lastAuthoritativeControl = undefined;
+		this._sessionPath = sessionPath;
+		this._localAssistantMessages = [];
+		this.clearExtensionStatuses();
+		const filename = path.basename(sessionPath, ".jsonl");
+		const parts = filename.split("_");
+		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
+		this._sessionName = undefined;
+		this._sessionStatus = "detached";
+		this._state.messages = [];
+		this._state.isStreaming = false;
+		this._pendingToolCallIds.clear();
+		this._toolCallTimings = {};
+		this._awaitingFullSync = undefined;
+		this._state.error = undefined;
+		this._syncJson = "";
+		this._syncHash = "";
+		this._syncRevision = undefined;
+		this.clearSessionSyncQueue();
+		this.clearCachedInventory();
+		const restored = await this.restoreCachedSession(sessionPath, nonce, true);
+		if (restored && nonce === this._sessionNonce && sessionPath === this._sessionPath) {
+			this.startupCachedSessionPath = sessionPath;
+		}
+		return restored;
+	}
+
 	prefetchSession(sessionPath: string): void {
 		if (!this.sessionCache || !this.cacheBackendId
 			|| !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)
@@ -1113,9 +1153,9 @@ export class WsAgentAdapter implements BackendClient {
 		});
 	}
 
-	private async restoreCachedSession(sessionPath: string, nonce: number): Promise<boolean> {
+	private async restoreCachedSession(sessionPath: string, nonce: number, beforeCapabilities = false): Promise<boolean> {
 		if (!this.sessionCache || !this.cacheBackendId
-			|| !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)) return false;
+			|| (!beforeCapabilities && !this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE))) return false;
 		const backendId = this.cacheBackendId;
 		const prefetched = this.prefetchedSessionStates.get(sessionPath);
 		this.prefetchedSessionStates.delete(sessionPath);
@@ -1127,6 +1167,7 @@ export class WsAgentAdapter implements BackendClient {
 				if (preview) {
 					this.assignCachedState(preview.state, sessionPath);
 					this.emitSessionChange();
+					markStartup(STARTUP_MARK.cachedSessionPainted);
 					painted = true;
 				}
 			}
@@ -1144,6 +1185,7 @@ export class WsAgentAdapter implements BackendClient {
 			else {
 				this.assignCachedState(cached.state, sessionPath);
 				this.emitSessionChange();
+				markStartup(STARTUP_MARK.cachedSessionPainted);
 				painted = true;
 			}
 			return painted;
@@ -1357,7 +1399,12 @@ export class WsAgentAdapter implements BackendClient {
 	/** Load the default model from the pi process (respects user's settings) */
 	async loadDefaultModel(): Promise<void> {
 		if (this._state.model) return;
+		const sessionNonce = this._sessionNonce;
+		const sessionPath = this._sessionPath;
 		const data = await this.send({ type: "get_default_model" });
+		// Session synchronization or an explicit selection may resolve while this
+		// noncritical startup request is in flight. Never replace that newer state.
+		if (sessionNonce !== this._sessionNonce || sessionPath !== this._sessionPath || this._state.model) return;
 		this.applyAuthoritativeControlState(data?.model, data?.thinkingLevel);
 	}
 
@@ -2074,24 +2121,30 @@ export class WsAgentAdapter implements BackendClient {
 		const parts = filename.split("_");
 		this._sessionId = parts.length > 1 ? parts.slice(1).join("_") : filename;
 		this._sessionStatus = "detached";
+		const reuseStartupCache = this.startupCachedSessionPath === sessionPath
+			&& Boolean(this._syncJson && this._syncHash);
+		this.startupCachedSessionPath = undefined;
 
-		// Clear current state — including isStreaming since a detached session is never streaming
-		this._state.messages = [];
-		this._state.isStreaming = false;
-		this._pendingToolCallIds.clear();
-		this._toolCallTimings = {};
 		this._awaitingFullSync = undefined;
-		this._state.error = undefined;
-		this._syncJson = "";
-		this._syncHash = "";
-		this._syncRevision = undefined;
 		this.clearSessionSyncQueue();
-		this.clearCachedInventory();
+		let restoredFromCache = reuseStartupCache;
+		if (!reuseStartupCache) {
+			// Clear current state — including isStreaming since a detached session is never streaming.
+			this._state.messages = [];
+			this._state.isStreaming = false;
+			this._pendingToolCallIds.clear();
+			this._toolCallTimings = {};
+			this._state.error = undefined;
+			this._syncJson = "";
+			this._syncHash = "";
+			this._syncRevision = undefined;
+			this.clearCachedInventory();
 
-		// Paint a verified serialized browser snapshot immediately when available,
-		// then let the backend confirm it or supply only missing message bodies.
-		const restoredFromCache = await this.restoreCachedSession(sessionPath, nonce);
-		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
+			// Paint a verified serialized browser snapshot immediately when available,
+			// then let the backend confirm it or supply only missing message bodies.
+			restoredFromCache = await this.restoreCachedSession(sessionPath, nonce);
+			if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;
+		}
 
 		await this.requestFullSessionSync(sessionPath);
 		if (nonce !== this._sessionNonce || sessionPath !== this._sessionPath) return;

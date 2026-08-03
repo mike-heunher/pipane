@@ -232,9 +232,15 @@ export class WorkspaceBackendClient implements BackendClient {
 		this.contexts.get(backendId)?.client?.prefetchSession?.(sessionPath);
 	}
 
+	async restoreCachedSessionPreview(sessionPath: string, cwd?: string, backendId = this.activeId): Promise<boolean> {
+		const context = this.requireContext(backendId);
+		const client = this.ensureClient(context);
+		if (this.activeId !== backendId) this.setActiveBackend(backendId);
+		return client.restoreCachedSessionPreview?.(sessionPath, cwd) ?? false;
+	}
+
 	async switchSession(sessionPath: string, cwd?: string, backendId = this.activeId): Promise<void> {
 		const context = await this.activateContext(backendId, false);
-		await this.ensureConversationInitialized(context);
 		await this.requireContextClient(context).switchSession(sessionPath, cwd);
 	}
 

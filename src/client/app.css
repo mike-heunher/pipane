@@ -9,6 +9,13 @@ body {
 	-webkit-font-smoothing: antialiased;
 }
 
+/* Cached content may paint while startup reconciliation is still choosing the
+   authoritative session, but the composer must not accept an early prompt. */
+.pipane-startup-pending message-editor {
+	visibility: hidden;
+	pointer-events: none;
+}
+
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border) transparent;
@@ -847,6 +854,10 @@ tool-runtime[running] {
 .tool-body-code {
 	font-size: 0.65rem; /* ~10.4px — down from 0.75rem/12px */
 	line-height: 1.5;
+	/* Historical tool output outside the viewport should not delay the first
+	   useful conversation paint. Chrome remembers the real size after reveal. */
+	content-visibility: auto;
+	contain-intrinsic-size: auto 12rem;
 }
 
 /* Tighter gap between messages in the conversation */

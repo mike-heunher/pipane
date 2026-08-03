@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./index.js";
-import { MarkdownBlock } from "./components/MarkdownBlock.js";
+import { loadMathRenderer, MarkdownBlock } from "./components/MarkdownBlock.js";
 import { MessageEditor } from "./components/MessageEditor.js";
 import { PiMessageList } from "./components/MessageList.js";
 import { formatToolRuntime, ToolRuntime } from "./components/Messages.js";
@@ -58,6 +58,7 @@ describe("owned UI architecture", () => {
 
 describe("owned markdown renderer", () => {
 	it("renders Unicode punctuation in math without KaTeX strict-mode warnings", async () => {
+		await loadMathRenderer();
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const block = new MarkdownBlock();
 		block.content = "Range: $1–2$";

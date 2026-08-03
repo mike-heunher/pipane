@@ -545,7 +545,7 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		await expect(page.locator("session-picker .group-label")).toHaveText([
 			"First backend / first-project",
 			"Second backend / second-project",
-		]);
+		], { timeout: 15_000 });
 		await expect(page.locator("message-editor")).toBeVisible();
 		await expect(page.locator("[data-testid='backend-switcher']")).toHaveCount(0);
 

@@ -1,4 +1,3 @@
-import katex from "katex";
 import "@mariozechner/mini-lit/dist/CodeBlock.js";
 import { html, LitElement } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -6,19 +5,44 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { isPreviewableFileHref } from "../../file-preview-panel.js";
 import { Marked, type Tokens } from "marked";
 
-const KATEX_OPTIONS = {
-	throwOnError: false,
-	strict: false,
-	output: "html" as const,
-};
+const MATH_RENDERER_READY_EVENT = "pipane:math-renderer-ready";
+let mathRenderer: typeof import("../math-renderer.js") | undefined;
+let mathRendererPromise: Promise<typeof import("../math-renderer.js")> | undefined;
+let mathRendererScheduled = false;
+
+export function loadMathRenderer(): Promise<typeof import("../math-renderer.js")> {
+	mathRendererPromise ??= import("../math-renderer.js").then((module) => {
+		mathRenderer = module;
+		window.dispatchEvent(new Event(MATH_RENDERER_READY_EVENT));
+		return module;
+	});
+	return mathRendererPromise;
+}
+
+function scheduleMathRenderer(): void {
+	if (mathRenderer || mathRendererScheduled) return;
+	mathRendererScheduled = true;
+	const load = () => { void loadMathRenderer(); };
+	if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(load, { timeout: 1_000 });
+	else window.setTimeout(load, 0);
+}
+
+function escapeMath(value: string): string {
+	return value.replace(/[&<>]/gu, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character] ?? character);
+}
 
 function renderMath(text: string, displayMode: boolean): string {
+	if (!mathRenderer) {
+		scheduleMathRenderer();
+		const delimiter = displayMode ? "$$" : "$";
+		return `<span class="font-mono">${delimiter}${escapeMath(text)}${delimiter}</span>`;
+	}
 	try {
-		return katex.renderToString(text, { ...KATEX_OPTIONS, displayMode });
+		return mathRenderer.renderMath(text, displayMode);
 	} catch (error) {
 		console.error("KaTeX error:", error);
 		const delimiter = displayMode ? "$$" : "$";
-		return `<span class="text-red-500 font-mono">${delimiter}${text}${delimiter}</span>`;
+		return `<span class="text-red-500 font-mono">${delimiter}${escapeMath(text)}${delimiter}</span>`;
 	}
 }
 
@@ -133,10 +157,18 @@ export class MarkdownBlock extends LitElement {
 		return this;
 	}
 
+	private readonly handleMathRendererReady = () => this.requestUpdate();
+
 	connectedCallback() {
 		super.connectedCallback();
 		this.classList.add("markdown-content");
 		this.style.display = "block";
+		window.addEventListener(MATH_RENDERER_READY_EVENT, this.handleMathRendererReady);
+	}
+
+	disconnectedCallback() {
+		window.removeEventListener(MATH_RENDERER_READY_EVENT, this.handleMathRendererReady);
+		super.disconnectedCallback();
 	}
 
 	render() {
