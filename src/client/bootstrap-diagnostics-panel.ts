@@ -59,6 +59,7 @@ export class BootstrapDiagnosticsController {
 	private latestConnection: ConnectionDiagnostics | undefined;
 	private error: Error | undefined;
 	private panel: HTMLElement | undefined;
+	private dismissed = false;
 	private timer: ReturnType<typeof setInterval> | undefined;
 	private refreshing = false;
 	private unsubscribers: Array<() => void> = [];
@@ -179,7 +180,7 @@ export class BootstrapDiagnosticsController {
 	}
 
 	private ensurePanel(): void {
-		if (!this.enabled || !this.document || this.panel) return;
+		if (!this.enabled || !this.document || this.panel || this.dismissed) return;
 		this.panel = this.document.createElement("section");
 		this.panel.dataset.testid = "bootstrap-diagnostics";
 		this.panel.setAttribute("role", "status");
@@ -200,7 +201,13 @@ export class BootstrapDiagnosticsController {
 		if (!this.panel || !this.document) return;
 		const header = this.document.createElement("div");
 		header.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:700;color:var(--foreground,#111827)";
-		header.append(this.textElement("span", "Preview startup diagnostics"), this.badge("preview only"));
+		const headerActions = this.document.createElement("div");
+		headerActions.style.cssText = "display:flex;align-items:center;gap:7px";
+		const dismiss = this.actionButton("Dismiss", () => this.dismiss());
+		dismiss.dataset.testid = "bootstrap-diagnostics-dismiss";
+		dismiss.setAttribute("aria-label", "Dismiss preview startup diagnostics");
+		headerActions.append(this.badge("preview only"), dismiss);
+		header.append(this.textElement("span", "Preview startup diagnostics"), headerActions);
 
 		const status = this.textElement("div", this.error
 			? `Failed: ${this.error.message}`
@@ -227,6 +234,7 @@ export class BootstrapDiagnosticsController {
 				setTimeout(() => { if (copy.isConnected) copy.textContent = "Copy debug report"; }, 1_200);
 			}).catch(() => { copy.textContent = "Copy failed"; });
 		});
+		copy.dataset.testid = "bootstrap-diagnostics-copy";
 		const details = this.actionButton("Connection details", () => { void this.openConnectionDetails(); });
 		details.disabled = !this.client;
 		const relay = this.actionButton("Configure TURN", () => { void this.openTurnSettings(); });
@@ -235,6 +243,14 @@ export class BootstrapDiagnosticsController {
 		const privacy = this.textElement("div", "Browser-local diagnostics; nothing is uploaded automatically. Copying may include browser-exposed ICE addresses.");
 		privacy.style.cssText = "margin-top:8px;opacity:.75";
 		this.panel.replaceChildren(header, status, connection, timeline, actions, privacy);
+	}
+
+	private dismiss(): void {
+		this.dismissed = true;
+		if (this.timer) clearInterval(this.timer);
+		this.timer = undefined;
+		this.panel?.remove();
+		this.panel = undefined;
 	}
 
 	private connectionSummary(): string {

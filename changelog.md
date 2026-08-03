@@ -1,5 +1,6 @@
 # Unreleased
 
+- Allow preview startup diagnostics to be dismissed so they do not obstruct backend or TURN configuration.
 - Verify preview deployments against the runtime-tagged browser shell instead of rolling back healthy releases for an expected HTML rewrite.
 - Add preview-only startup diagnostics for mobile WebRTC, ICE, TURN, and bootstrap failures, and reveal connection recovery instead of leaving the wireframe visible.
 - Show collapsed tool calls without output with the correct closed chevron.

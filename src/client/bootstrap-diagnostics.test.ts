@@ -51,6 +51,31 @@ describe("BootstrapDiagnosticsController", () => {
 		expect(diagnostics.collectReport().entries).toEqual([]);
 	});
 
+	it("stays dismissed for the rest of startup", () => {
+		const diagnostics = new BootstrapDiagnosticsController({
+			enabled: true,
+			document,
+			refreshIntervalMs: 60_000,
+		});
+		try {
+			diagnostics.mark("Discovering authorized backends");
+			const dismiss = document.querySelector<HTMLButtonElement>("[data-testid='bootstrap-diagnostics-dismiss']")!;
+			expect(dismiss.getAttribute("aria-label")).toBe("Dismiss preview startup diagnostics");
+			dismiss.click();
+			expect(document.querySelector("[data-testid='bootstrap-diagnostics']")).toBeNull();
+
+			diagnostics.mark("Connecting to backend");
+			diagnostics.fail(new Error("ICE failed after dismissal"));
+			expect(document.querySelector("[data-testid='bootstrap-diagnostics']")).toBeNull();
+			expect(diagnostics.collectReport()).toMatchObject({
+				failed: true,
+				error: { message: "ICE failed after dismissal" },
+			});
+		} finally {
+			diagnostics.complete();
+		}
+	});
+
 	it("tracks startup stages and polls sanitized WebRTC state while visible", async () => {
 		let now = Date.parse("2026-08-02T20:00:00.000Z");
 		const diagnostics = new BootstrapDiagnosticsController({
@@ -103,7 +128,7 @@ describe("BootstrapDiagnosticsController", () => {
 			const panel = document.querySelector("[data-testid='bootstrap-diagnostics']")!;
 			expect(panel.textContent).toContain("Failed: No direct ICE path");
 			expect(panel.textContent).toContain("Configure TURN");
-			(panel.querySelector("button") as HTMLButtonElement).click();
+			(panel.querySelector("[data-testid='bootstrap-diagnostics-copy']") as HTMLButtonElement).click();
 			await vi.waitFor(() => expect(writeText).toHaveBeenCalledOnce());
 			const copied = writeText.mock.calls[0][0];
 			expect(JSON.parse(copied)).toMatchObject({
