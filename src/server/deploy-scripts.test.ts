@@ -63,6 +63,28 @@ describe("deployment scripts", () => {
 		expect(result.stdout).not.toContain("Deploying the preview backend");
 	});
 
+	it("hashes the runtime-transformed browser shell used by preview verification", () => {
+		const tempDir = mkdtempSync(path.join(tmpdir(), "pipane-runtime-index-hash-"));
+		try {
+			const indexPath = path.join(tempDir, "index.html");
+			const rendererPath = path.join(tempDir, "renderer.mjs");
+			const source = '<meta name="pipane-runtime" content="local" />\n';
+			const rendered = '<meta name="pipane-runtime" content="rendezvous" />\n';
+			writeFileSync(indexPath, source);
+			writeFileSync(rendererPath, `export function renderClientRuntimeIndex(source, mode) { return source.replace("local", mode); }\n`);
+
+			const hash = execFileSync(process.execPath, [
+				path.join(repositoryRoot, "scripts/hash-client-runtime-index.js"),
+				indexPath,
+				rendererPath,
+				"rendezvous",
+			], { encoding: "utf8" });
+			expect(hash).toBe(createHash("sha256").update(rendered).digest("hex"));
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps development on a distinct remote backend identity", () => {
 		const service = readFileSync(path.join(repositoryRoot, "scripts/pipane-dev.service"), "utf8");
 
@@ -88,7 +110,8 @@ describe("deployment scripts", () => {
 				return;
 			}
 			try {
-				response.end(readFileSync(path.join(deployRoot, "current/dist/client/index.html")));
+				const source = readFileSync(path.join(deployRoot, "current/dist/client/index.html"), "utf8");
+				response.end(source.replace('content="local"', 'content="rendezvous"'));
 			} catch {
 				response.statusCode = 404;
 				response.end("missing");
@@ -117,8 +140,10 @@ describe("deployment scripts", () => {
 					"WorkingDirectory=@STATE_DIR@",
 					"ExecStart=@DEPLOY_ROOT@/current/bin/pipane-rendezvous.js",
 				].join("\n"));
-				const expectedHash = createHash("sha256").update(index).digest("hex");
-				await execFileAsync(activationScript, [deployRoot, releaseId, expectedHash, publicUrl], {
+				const sourceHash = createHash("sha256").update(index).digest("hex");
+				const publicIndex = index.replace('content="local"', 'content="rendezvous"');
+				const publicHash = createHash("sha256").update(publicIndex).digest("hex");
+				await execFileAsync(activationScript, [deployRoot, releaseId, sourceHash, publicHash, publicUrl], {
 					env: {
 						...process.env,
 						PIPANE_PREVIEW_RENDEZVOUS_SERVICE_FILE: path.join(tempDir, "preview.service"),
@@ -132,12 +157,14 @@ describe("deployment scripts", () => {
 				});
 			};
 
-			await activate("release-one", "browser one\n");
-			expect(readFileSync(path.join(deployRoot, "current/dist/client/index.html"), "utf8")).toBe("browser one\n");
+			const firstIndex = '<meta name="pipane-runtime" content="local" />browser one\n';
+			await activate("release-one", firstIndex);
+			expect(readFileSync(path.join(deployRoot, "current/dist/client/index.html"), "utf8")).toBe(firstIndex);
 
 			healthy = false;
-			await expect(activate("release-two", "browser two\n")).rejects.toMatchObject({ code: 1 });
-			expect(readFileSync(path.join(deployRoot, "current/dist/client/index.html"), "utf8")).toBe("browser one\n");
+			await expect(activate("release-two", '<meta name="pipane-runtime" content="local" />browser two\n'))
+				.rejects.toMatchObject({ code: 1 });
+			expect(readFileSync(path.join(deployRoot, "current/dist/client/index.html"), "utf8")).toBe(firstIndex);
 			expect(existsSync(path.join(deployRoot, "releases/release-two"))).toBe(false);
 		} finally {
 			await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -154,12 +181,16 @@ describe("deployment scripts", () => {
 		expect(pkg.scripts["deploy:preview"]).toBe("./deploy-preview.sh");
 		expect(previewScript).toContain('deploy-local-release.sh" dev');
 		expect(previewScript).toContain("VITE_PIPANE_BOOTSTRAP_DIAGNOSTICS=1");
+		expect(previewScript).toContain("hash-client-runtime-index.js");
+		expect(previewScript).toContain("dist/server/server/client-assets.js");
 		expect(previewScript).toContain("dist/server/rendezvous/server.js");
 		expect(previewScript).toContain("npm ci --omit=dev");
 		expect(previewScript).toContain("systemd-run --quiet --no-block --collect");
 		expect(previewScript).toContain("PIPANE_PREVIEW_DEPLOY_IN_SYSTEMD=1");
 		expect(previewScript).not.toContain("npm publish");
 		expect(activationScript).toContain('SERVICE_NAME="${PIPANE_PREVIEW_RENDEZVOUS_SERVICE:-pipane-rendezvous-preview}"');
+		expect(activationScript).toContain("SOURCE_INDEX_HASH");
+		expect(activationScript).toContain("EXPECTED_PUBLIC_INDEX_HASH");
 		expect(activationScript).toContain("PUBLIC_INDEX_HASH");
 		expect(activationScript).not.toContain('restart "pipane-rendezvous"');
 		expect(previewService).toContain("PORT=8788");

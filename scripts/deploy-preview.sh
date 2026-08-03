@@ -46,7 +46,7 @@ if [[ ! "$SYSTEMD_UNIT" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
 	echo "❌ PIPANE_PREVIEW_SYSTEMD_UNIT must be a valid systemd unit name." >&2
 	exit 1
 fi
-for command_name in ssh rsync sha256sum git systemctl systemd-run; do
+for command_name in ssh rsync sha256sum git node systemctl systemd-run; do
 	if ! command -v "$command_name" >/dev/null 2>&1; then
 		echo "❌ Missing required command: $command_name" >&2
 		exit 1
@@ -87,7 +87,7 @@ trap cleanup EXIT
 echo "🚀 Deploying the preview backend locally..."
 VITE_PIPANE_BOOTSTRAP_DIAGNOSTICS=1 "$SOURCE_DIR/scripts/deploy-local-release.sh" dev
 
-for required_file in dist/client/index.html dist/server/rendezvous/server.js bin/pipane-rendezvous.js; do
+for required_file in dist/client/index.html dist/server/server/client-assets.js dist/server/rendezvous/server.js bin/pipane-rendezvous.js; do
 	if [[ ! -f "$SOURCE_DIR/$required_file" ]]; then
 		echo "❌ The local deployment did not produce $required_file." >&2
 		exit 1
@@ -100,7 +100,13 @@ if [[ -n "$(git -C "$SOURCE_DIR" status --porcelain 2>/dev/null || true)" ]]; th
 fi
 RELEASE_ID="$(date -u +%Y%m%dT%H%M%S)-${GIT_REV//+/-}-$$"
 REMOTE_STAGING="$REMOTE_ROOT/.staging-$RELEASE_ID"
-EXPECTED_INDEX_HASH="$(sha256sum "$SOURCE_DIR/dist/client/index.html" | awk '{print $1}')"
+SOURCE_INDEX_HASH="$(sha256sum "$SOURCE_DIR/dist/client/index.html" | awk '{print $1}')"
+# The rendezvous server rewrites the runtime marker in index.html before serving
+# it, so the uploaded source and public representation have distinct hashes.
+EXPECTED_PUBLIC_INDEX_HASH="$(node "$SOURCE_DIR/scripts/hash-client-runtime-index.js" \
+	"$SOURCE_DIR/dist/client/index.html" \
+	"$SOURCE_DIR/dist/server/server/client-assets.js" \
+	rendezvous)"
 
 printf -v quoted_root '%q' "$REMOTE_ROOT"
 printf -v quoted_staging '%q' "$REMOTE_STAGING"
@@ -120,7 +126,7 @@ ssh -o BatchMode=yes "$REMOTE_HOST" \
 	"cd $quoted_staging && npm ci --omit=dev --no-audit --no-fund"
 
 ssh -o BatchMode=yes "$REMOTE_HOST" bash -s -- \
-	"$REMOTE_ROOT" "$RELEASE_ID" "$EXPECTED_INDEX_HASH" "$PUBLIC_URL" \
+	"$REMOTE_ROOT" "$RELEASE_ID" "$SOURCE_INDEX_HASH" "$EXPECTED_PUBLIC_INDEX_HASH" "$PUBLIC_URL" \
 	< "$SOURCE_DIR/scripts/activate-preview-rendezvous.sh"
 ACTIVATED=1
 REMOTE_STAGING=""

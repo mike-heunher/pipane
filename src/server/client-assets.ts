@@ -77,9 +77,7 @@ export function createClientAssetMiddleware(assetsDirectory: string): RequestHan
 	};
 }
 
-function runtimeIndexHtml(clientDist: string, runtimeMode: ClientRuntimeMode): string {
-	const indexPath = path.join(clientDist, "index.html");
-	const source = readFileSync(indexPath, "utf8");
+export function renderClientRuntimeIndex(source: string, runtimeMode: ClientRuntimeMode): string {
 	const runtimeMeta = `<meta name="pipane-runtime" content="${runtimeMode}" />`;
 	const marker = /<meta\s+name=["']pipane-runtime["']\s+content=["'][^"']*["']\s*\/?\s*>/iu;
 	if (marker.test(source)) return source.replace(marker, runtimeMeta);
@@ -87,6 +85,10 @@ function runtimeIndexHtml(clientDist: string, runtimeMode: ClientRuntimeMode): s
 	return headEnd >= 0
 		? `${source.slice(0, headEnd)}\t\t${runtimeMeta}\n\t${source.slice(headEnd)}`
 		: `${runtimeMeta}\n${source}`;
+}
+
+function runtimeIndexHtml(clientDist: string, runtimeMode: ClientRuntimeMode): string {
+	return renderClientRuntimeIndex(readFileSync(path.join(clientDist, "index.html"), "utf8"), runtimeMode);
 }
 
 export function mountClientApp(app: Express, options: MountClientAppOptions): void {

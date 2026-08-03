@@ -2,15 +2,16 @@
 # Atomically activate an uploaded, isolated rendezvous preview release.
 set -Eeuo pipefail
 
-if [[ $# -ne 4 ]]; then
-	echo "Usage: $0 <deploy-root> <release-id> <index-sha256> <public-url>" >&2
+if [[ $# -ne 5 ]]; then
+	echo "Usage: $0 <deploy-root> <release-id> <source-index-sha256> <public-index-sha256> <public-url>" >&2
 	exit 2
 fi
 
 DEPLOY_ROOT="$1"
 RELEASE_ID="$2"
-EXPECTED_INDEX_HASH="$3"
-PUBLIC_URL="${4%/}"
+SOURCE_INDEX_HASH="$3"
+EXPECTED_PUBLIC_INDEX_HASH="$4"
+PUBLIC_URL="${5%/}"
 RELEASES_DIR="$DEPLOY_ROOT/releases"
 CURRENT_LINK="$DEPLOY_ROOT/current"
 STAGING_DIR="$DEPLOY_ROOT/.staging-$RELEASE_ID"
@@ -43,7 +44,8 @@ if [[ ! "$DEPLOY_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]] \
 	|| [[ ! "$SERVICE_NAME" =~ ^[A-Za-z0-9_.@-]+$ ]] \
 	|| [[ ! "$SERVICE_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
 	|| [[ ! "$SERVICE_GROUP" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] \
-	|| [[ ! "$EXPECTED_INDEX_HASH" =~ ^[a-f0-9]{64}$ ]] \
+	|| [[ ! "$SOURCE_INDEX_HASH" =~ ^[a-f0-9]{64}$ ]] \
+	|| [[ ! "$EXPECTED_PUBLIC_INDEX_HASH" =~ ^[a-f0-9]{64}$ ]] \
 	|| [[ ! "$PUBLIC_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
 	|| [[ ! "$HEALTH_ATTEMPTS" =~ ^[1-9][0-9]*$ ]] \
 	|| [[ ! "$HEALTH_DELAY" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
@@ -67,7 +69,7 @@ for required_file in \
 		exit 1
 	fi
 done
-if [[ "$(sha256sum "$STAGING_DIR/dist/client/index.html" | awk '{print $1}')" != "$EXPECTED_INDEX_HASH" ]]; then
+if [[ "$(sha256sum "$STAGING_DIR/dist/client/index.html" | awk '{print $1}')" != "$SOURCE_INDEX_HASH" ]]; then
 	echo "❌ Uploaded preview browser bundle failed its checksum." >&2
 	exit 1
 fi
@@ -157,7 +159,7 @@ for ((attempt = 0; attempt < HEALTH_ATTEMPTS; attempt++)); do
 	PUBLIC_INDEX_HASH="$(curl -fsS "$PUBLIC_URL/" 2>/dev/null | sha256sum | awk '{print $1}' || true)"
 	if "$SYSTEMCTL" is-active --quiet "$SERVICE_NAME" \
 		&& curl -fsS "$PUBLIC_URL/health" 2>/dev/null | grep -q '"ok":true' \
-		&& [[ "$PUBLIC_INDEX_HASH" == "$EXPECTED_INDEX_HASH" ]]; then
+		&& [[ "$PUBLIC_INDEX_HASH" == "$EXPECTED_PUBLIC_INDEX_HASH" ]]; then
 		HEALTHY=1
 		break
 	fi

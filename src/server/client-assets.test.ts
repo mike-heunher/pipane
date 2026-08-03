@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
-import { mountClientApp } from "./client-assets.js";
+import { mountClientApp, renderClientRuntimeIndex } from "./client-assets.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];
 
@@ -46,6 +46,12 @@ function closeServer(server: Server): Promise<void> {
 }
 
 describe("client asset delivery", () => {
+	it("renders the exact runtime-tagged shell used for deployment verification", () => {
+		const source = '<html><head><meta name="pipane-runtime" content="local" /></head><body>shell</body></html>';
+		expect(renderClientRuntimeIndex(source, "rendezvous"))
+			.toBe('<html><head><meta name="pipane-runtime" content="rendezvous" /></head><body>shell</body></html>');
+	});
+
 	it("serves Brotli and gzip representations with immutable caching", async () => {
 		const { baseUrl, source } = await startClient("local");
 		const brotli = await fetch(`${baseUrl}/assets/main-hash.js`, { headers: { "Accept-Encoding": "br, gzip" } });
