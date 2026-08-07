@@ -49,6 +49,7 @@ export interface WebRtcFrameTransportOptions {
 	reconnectDelayMs?: (attempt: number) => number;
 	connectionTimeoutMs?: number;
 	schedule?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+	cancelSchedule?: (timer: ReturnType<typeof setTimeout>) => void;
 }
 
 /** Authenticated reliable browser DataChannel carrier for the existing v1 frame protocol. */
@@ -63,6 +64,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private readonly reconnectDelayMs: (attempt: number) => number;
 	private readonly connectionTimeoutMs: number;
 	private readonly schedule: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
+	private readonly cancelSchedule: (timer: ReturnType<typeof setTimeout>) => void;
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
 	private readonly decoder = new DataChannelFrameDecoder();
@@ -75,6 +77,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private everConnected = false;
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	private connecting: Promise<void> | undefined;
 	private nextFrameId = 0;
 	private queuedBytes = 0;
 	private flushing = false;
@@ -98,8 +101,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 			iceServers,
 		}));
 		this.reconnectDelayMs = options.reconnectDelayMs ?? ((attempt) => Math.min(15_000, 500 * 2 ** Math.min(attempt, 5)));
-		this.connectionTimeoutMs = options.connectionTimeoutMs ?? 20_000;
+		this.connectionTimeoutMs = options.connectionTimeoutMs ?? 45_000;
 		this.schedule = options.schedule ?? ((callback, delayMs) => setTimeout(callback, delayMs));
+		this.cancelSchedule = options.cancelSchedule ?? ((timer) => clearTimeout(timer));
 	}
 
 	get isConnected(): boolean {
@@ -120,9 +124,22 @@ export class WebRtcFrameTransport implements FrameTransport {
 		return () => this.connectionListeners.delete(listener);
 	}
 
-	async connect(_endpoint: string): Promise<void> {
-		if (this.isConnected) return;
+	connect(endpoint: string): Promise<void> {
+		if (this.isConnected) return Promise.resolve();
+		if (this.connecting) return this.connecting;
+		if (this.reconnectTimer) {
+			this.cancelSchedule(this.reconnectTimer);
+			this.reconnectTimer = undefined;
+		}
 		this.manuallyClosed = false;
+		const connecting = this.establishConnection(endpoint).finally(() => {
+			if (this.connecting === connecting) this.connecting = undefined;
+		});
+		this.connecting = connecting;
+		return connecting;
+	}
+
+	private async establishConnection(_endpoint: string): Promise<void> {
 		this.lastDiagnostics = undefined;
 		this.lastFailure = undefined;
 		this.iceServerUrls = [];
@@ -170,6 +187,10 @@ export class WebRtcFrameTransport implements FrameTransport {
 
 		await new Promise<void>(async (resolve, reject) => {
 			let settled = false;
+			let authenticated = false;
+			const isCurrentAttempt = () => this.rendezvous === rendezvous
+				&& this.peer === peer
+				&& this.channel === channel;
 			let connectionId = "";
 			let offerSdp = "";
 			let answerSdp: string | undefined;
@@ -185,12 +206,16 @@ export class WebRtcFrameTransport implements FrameTransport {
 				const failure = error instanceof ConnectionAttemptError
 					? error
 					: new ConnectionAttemptError(code, error instanceof Error ? error.message : String(error), code === "ice");
+				if (!isCurrentAttempt()) {
+					reject(failure);
+					return;
+				}
 				const failureDetails = { code: failure.code, message: failure.message, turnRecommended: failure.turnRecommended };
 				this.lastFailure = failureDetails;
 				void this.collectConnectionDiagnostics().then((diagnostics) => {
 					this.lastDiagnostics = { ...diagnostics, failure: { ...failureDetails } };
 				}).catch(() => undefined).finally(() => {
-					this.closeInternal();
+					if (isCurrentAttempt()) this.closeInternal();
 					reject(failure);
 				});
 			};
@@ -198,7 +223,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 				"WebRTC could not find a working network path before the connection attempt timed out",
 			), "ice"), this.connectionTimeoutMs);
 			const applyAnswer = async (): Promise<void> => {
-				if (!answerSdp || !binding || remoteDescriptionSet) return;
+				if (!isCurrentAttempt() || !answerSdp || !binding || remoteDescriptionSet) return;
 				await verifyBrowserBackendBinding(binding, {
 					backendId: this.backendId,
 					connectionId,
@@ -212,7 +237,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 			};
 
 			peer.onicecandidate = (event) => {
-				if (!event.candidate || !connectionId) return;
+				if (!isCurrentAttempt() || !event.candidate || !connectionId) return;
 				const candidate = event.candidate.toJSON();
 				rendezvous.sendSignal({
 					kind: "candidate",
@@ -222,12 +247,14 @@ export class WebRtcFrameTransport implements FrameTransport {
 				});
 			};
 			peer.oniceconnectionstatechange = () => {
+				if (!isCurrentAttempt()) return;
 				if (peer.iceConnectionState === "failed") {
 					if (!settled) fail(new Error("WebRTC ICE could not establish a network path"), "ice");
 					else this.handleDisconnected(new Error("Established WebRTC ICE path failed"), "ice");
 				}
 			};
 			peer.onconnectionstatechange = () => {
+				if (!isCurrentAttempt()) return;
 				if (peer.connectionState === "failed" || peer.connectionState === "closed") {
 					const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
 					const error = new Error(`WebRTC connection ${peer.connectionState}`);
@@ -236,12 +263,14 @@ export class WebRtcFrameTransport implements FrameTransport {
 				}
 			};
 			channel.onerror = () => {
+				if (!isCurrentAttempt()) return;
 				const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
 				const error = new Error("WebRTC DataChannel failed");
 				if (!settled) fail(error, code);
 				else this.handleDisconnected(error, code);
 			};
 			channel.onclose = () => {
+				if (!isCurrentAttempt()) return;
 				const code = peer.iceConnectionState === "failed" ? "ice" : "datachannel";
 				const error = new Error(settled
 					? "Established WebRTC DataChannel closed"
@@ -250,7 +279,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 				else this.handleDisconnected(error, code);
 			};
 			channel.onopen = () => {
+				if (!isCurrentAttempt()) return;
 				void signDeviceConnection(this.deviceIdentity, authorization.ticket, binding?.signature ?? "").then((deviceSignature) => {
+					if (!isCurrentAttempt()) return;
 					if (!binding) throw new Error("Backend identity binding is missing");
 					channel.send(JSON.stringify({
 						protocolVersion: TRUST_PROTOCOL_VERSION,
@@ -263,8 +294,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 				}).catch((error) => fail(error, "authentication"));
 			};
 			channel.onmessage = (event) => {
+				if (!isCurrentAttempt()) return;
 				const frame = String(event.data);
-				if (!this.connected) {
+				if (!authenticated) {
 					let result: any;
 					try {
 						result = JSON.parse(frame);
@@ -280,6 +312,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 						fail(new Error("Backend authenticated an unexpected browser device"), "authentication");
 						return;
 					}
+					authenticated = true;
 					this.connected = true;
 					this.reconnectAttempt = 0;
 					settled = true;
@@ -303,7 +336,9 @@ export class WebRtcFrameTransport implements FrameTransport {
 			};
 
 			rendezvous.onSignal((signal) => {
+				if (!isCurrentAttempt()) return;
 				void (async () => {
+					if (!isCurrentAttempt()) return;
 					if (signal.kind === "description") {
 						if (signal.type !== "answer") throw new Error("Browser expected an SDP answer");
 						answerSdp = signal.sdp;
@@ -320,15 +355,18 @@ export class WebRtcFrameTransport implements FrameTransport {
 				})().catch((error) => fail(error, signal.kind === "description" ? "authorization" : "ice"));
 			});
 			rendezvous.onIdentityBinding((received) => {
+				if (!isCurrentAttempt()) return;
 				binding = received;
 				void applyAnswer().catch((error) => fail(error, "authorization"));
 			});
 			rendezvous.onConnectionClosed((reason) => {
+				if (!isCurrentAttempt()) return;
 				const error = new Error(`Rendezvous closed the backend route: ${reason}`);
 				if (!settled) fail(error, "rendezvous");
 				else this.handleDisconnected(error, "rendezvous");
 			});
 			rendezvous.onError((error) => {
+				if (!isCurrentAttempt()) return;
 				if (error instanceof Error) {
 					fail(error, "rendezvous");
 					return;
@@ -458,7 +496,7 @@ export class WebRtcFrameTransport implements FrameTransport {
 
 	close(_code = 1000, reason = "Client closed"): void {
 		this.manuallyClosed = true;
-		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+		if (this.reconnectTimer) this.cancelSchedule(this.reconnectTimer);
 		this.reconnectTimer = undefined;
 		this.rendezvous?.close(reason);
 		this.closeInternal();

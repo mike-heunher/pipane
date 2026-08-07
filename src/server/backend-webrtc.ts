@@ -20,7 +20,7 @@ import { toNodeIceServers } from "./ice-servers.js";
 
 export { PIPANE_DATA_CHANNEL_LABEL, PIPANE_DATA_CHANNEL_PROTOCOL } from "../shared/trust-protocol.js";
 
-const AUTHENTICATION_TIMEOUT_MS = 10_000;
+const AUTHENTICATION_TIMEOUT_MS = 20_000;
 const MAX_AUTHENTICATION_FRAME_BYTES = 32 * 1024;
 
 export interface BackendSignalingClient {

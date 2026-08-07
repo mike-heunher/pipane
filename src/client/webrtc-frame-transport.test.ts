@@ -133,7 +133,7 @@ function encodeClaims(claims: ConnectionTicketClaims): string {
 }
 
 describe("WebRtcFrameTransport", () => {
-	it("verifies backend binding and authenticates before exposing v1 frames", async () => {
+	it("coalesces connection calls and authenticates before exposing v1 frames", async () => {
 		const dir = mkdtempSync(path.join(tmpdir(), "pipane-transport-test-"));
 		cleanupDirs.push(dir);
 		const backend = loadOrCreateBackendIdentity(path.join(dir, "identity.json"));
@@ -154,15 +154,18 @@ describe("WebRtcFrameTransport", () => {
 		});
 		const peer = new FakePeer();
 		const rendezvous = new FakeRendezvous(connectionId);
+		const authorize = vi.fn(async () => ({ ticket, iceServers: [{ urls: ["stun:stun.example:3478"] }], pairingSecret: "secret" }));
 		const transport = new WebRtcFrameTransport({
 			rendezvousUrl: "https://signal.example",
 			backendId: backend.backendId,
 			deviceIdentity: device,
-			authorize: async () => ({ ticket, iceServers: [{ urls: ["stun:stun.example:3478"] }], pairingSecret: "secret" }),
+			authorize,
 			createPeerConnection: () => peer as unknown as RTCPeerConnection,
 			createRendezvousClient: () => rendezvous as unknown as BrowserRendezvousClient,
 		});
 		const connecting = transport.connect("unused");
+		expect(transport.connect("unused")).toBe(connecting);
+		expect(authorize).toHaveBeenCalledOnce();
 		await vi.waitFor(() => expect(rendezvous.sendSignal).toHaveBeenCalledWith(expect.objectContaining({
 			kind: "description",
 			type: "offer",

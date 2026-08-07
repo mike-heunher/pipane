@@ -41,7 +41,7 @@ const TICKET_ID_PREFIX = "t_";
 const CHALLENGE_ID_PREFIX = "ch_";
 const DEVICE_INVITE_ID_PREFIX = "invite_";
 const DEFAULT_CHALLENGE_TTL_MS = 2 * 60_000;
-const DEFAULT_TICKET_TTL_MS = 60_000;
+const DEFAULT_TICKET_TTL_MS = 2 * 60_000;
 const DEVICE_INVITE_TTL_MS = 10 * 60_000;
 
 interface StoredSigningIdentity {
