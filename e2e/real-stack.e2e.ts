@@ -324,7 +324,7 @@ test.describe("Real stack e2e", () => {
 		await gotoFreshSession(page, harness);
 
 		// Open the JSONL viewer from the categorized settings command center.
-		await page.locator("session-picker").getByTitle("Settings").click();
+		await page.locator("session-picker").getByTitle("Pipane settings").click();
 		await page.locator(".local-settings-nav-item", { hasText: "Messages" }).click();
 		await page.getByRole("button", { name: "Open viewer" }).click();
 		await expect(page.locator(".jsonl-panel")).toBeVisible();

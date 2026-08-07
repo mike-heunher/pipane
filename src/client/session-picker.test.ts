@@ -134,17 +134,19 @@ describe("session-picker", () => {
 		expect(prefetchSession).toHaveBeenCalledWith(target.path, undefined);
 	});
 
-	it("places a settings gear beside New project", async () => {
+	it("places Pipane settings beside the compact new-project action", async () => {
 		const agent = new MockAgent();
 		const onOpenSettings = vi.fn();
+		const onInviteDevice = vi.fn();
 		const el = await createPicker(agent);
-		(el as any).settingsMenu = { onOpenSettings, isDevMode: false };
+		(el as any).settingsMenu = { onOpenSettings, onInviteDevice, isDevMode: false };
 		await el.updateComplete;
 
 		const headerActions = el.shadowRoot!.querySelector(".header-right")!;
-		expect(headerActions.textContent).toContain("NEW PROJECT");
-		const settings = headerActions.querySelector<HTMLButtonElement>('button[title="Settings"]');
+		expect(headerActions.querySelector<HTMLButtonElement>(".new-btn")?.textContent).toBe("+ NEW");
+		const settings = headerActions.querySelector<HTMLButtonElement>('button[title="Pipane settings"]');
 		expect(settings).not.toBeNull();
+		expect(headerActions.querySelector('button[title="Add device"]')).toBeNull();
 		expect(el.shadowRoot!.querySelector('button[title="Menu"]')).toBeNull();
 		settings!.click();
 		expect(onOpenSettings).toHaveBeenCalledOnce();
@@ -230,6 +232,10 @@ describe("session-picker", () => {
 		expect(workspaceSettings).not.toBeNull();
 		workspaceSettings!.click();
 		expect(onOpenSettings).toHaveBeenCalledWith();
+		const addDevice = el.shadowRoot!.querySelector<HTMLButtonElement>('.header button[title="Add device"]');
+		expect(addDevice).not.toBeNull();
+		addDevice!.click();
+		expect(onInviteDevice).toHaveBeenCalledOnce();
 		expect(Array.from(el.shadowRoot!.querySelectorAll(".group-label"), (label) => label.textContent)).toEqual([
 			"beta / project",
 			"alpha / project",
@@ -258,10 +264,7 @@ describe("session-picker", () => {
 
 		hosts[1].querySelector<HTMLButtonElement>('[aria-label="Manage beta"]')!.click();
 		await el.updateComplete;
-		const invite = [...el.shadowRoot!.querySelectorAll<HTMLButtonElement>(".host-menu button")]
-			.find((button) => button.textContent === "Add another device")!;
-		invite.click();
-		expect(onInviteDevice).toHaveBeenCalledOnce();
+		expect(el.shadowRoot!.querySelector(".host-menu")?.textContent).not.toContain("Add another device");
 	});
 
 	it("omits the backend prefix when a workspace has only one host", async () => {

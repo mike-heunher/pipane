@@ -132,7 +132,7 @@ export class SessionPicker extends LitElement {
 			gap: 0.25rem;
 		}
 
-		.settings-btn {
+		.header-icon-btn {
 			display: inline-flex;
 			align-items: center;
 			justify-content: center;
@@ -147,12 +147,12 @@ export class SessionPicker extends LitElement {
 			transition: background 0.15s, color 0.15s;
 		}
 
-		.settings-btn:hover {
+		.header-icon-btn:hover {
 			background: color-mix(in srgb, var(--picker-active) 20%, transparent);
 			color: color-mix(in srgb, var(--picker-active) 75%, var(--picker-text));
 		}
 
-		.settings-btn:focus-visible {
+		.header-icon-btn:focus-visible {
 			outline: 2px solid var(--picker-active);
 			outline-offset: 2px;
 		}
@@ -1676,12 +1676,27 @@ export class SessionPicker extends LitElement {
 						${!isWorkspace ? this.renderUpdateControl(LOCAL_BACKEND_UPDATE_KEY, "this backend") : nothing}
 					</div>
 					<div class="header-right">
-						<button class="new-btn" @click=${() => this.openFolderPicker()}>NEW PROJECT</button>
+						<button class="new-btn" @click=${() => this.openFolderPicker()}>+ NEW</button>
+						${isWorkspace && this.settingsMenu?.onInviteDevice ? html`
+							<button
+								class="header-icon-btn device-btn"
+								@click=${() => this.settingsMenu?.onInviteDevice?.()}
+								title="Add device"
+								aria-label="Add device"
+							>
+								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+									<rect x="3" y="3" width="6" height="6" rx="1"></rect>
+									<rect x="15" y="3" width="6" height="6" rx="1"></rect>
+									<rect x="3" y="15" width="6" height="6" rx="1"></rect>
+									<path d="M15 15h2v2h-2zM19 15h2v4M15 19v2h2M19 21h2"></path>
+								</svg>
+							</button>
+						` : nothing}
 						<button
-							class="settings-btn"
+							class="header-icon-btn settings-btn"
 							@click=${() => this.settingsMenu?.onOpenSettings()}
-							title="Settings"
-							aria-label="Settings"
+							title="Pipane settings"
+							aria-label="Pipane settings"
 						>
 							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 								<path d="M10.33 4.32c.42-1.76 2.92-1.76 3.34 0a1.72 1.72 0 0 0 2.58 1.06c1.54-.94 3.3.83 2.36 2.37a1.72 1.72 0 0 0 1.07 2.58c1.75.42 1.75 2.92 0 3.34a1.72 1.72 0 0 0-1.07 2.58c.94 1.54-.82 3.3-2.36 2.36a1.72 1.72 0 0 0-2.58 1.07c-.42 1.75-2.92 1.75-3.34 0a1.72 1.72 0 0 0-2.58-1.07c-1.54.94-3.3-.82-2.36-2.36a1.72 1.72 0 0 0-1.07-2.58c-1.75-.42-1.75-2.92 0-3.34a1.72 1.72 0 0 0 1.07-2.58c-.94-1.54.82-3.31 2.36-2.37a1.72 1.72 0 0 0 2.58-1.06Z"></path>
@@ -1742,7 +1757,6 @@ export class SessionPicker extends LitElement {
 						<button ?disabled=${!host.online || !host.compatible} @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenSettings(host.backendId); }}>Host settings</button>
 						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenDiagnostics?.(host.backendId); }}>Connection details</button>
 						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onOpenRelaySettings?.(); }}>TURN relay settings</button>
-						<button @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onInviteDevice?.(); }}>Add another device</button>
 						<button class="danger" @click=${() => { this.openHostMenu = undefined; this.settingsMenu?.onRemoveBackend?.(host.backendId); }}>Remove host</button>
 					</div>
 				` : nothing}

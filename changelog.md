@@ -1,5 +1,6 @@
 # Unreleased
 
+- Move QR device invitations from per-backend menus to a compact workspace-wide Pipane action.
 - Keep TURN settings reachable from the backend-unavailable screen even when a connection failure cannot be classified.
 - Allow preview startup diagnostics to be dismissed so they do not obstruct backend or TURN configuration.
 - Verify preview deployments against the runtime-tagged browser shell instead of rolling back healthy releases for an expected HTML rewrite.

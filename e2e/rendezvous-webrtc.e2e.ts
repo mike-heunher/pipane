@@ -555,8 +555,7 @@ test("pairs, forces TURN, merges backend sessions, and revokes a DataChannel", a
 		const relayDialog = page.locator("[data-testid='turn-relay-dialog']");
 		await expect(relayDialog).toContainText("Another TURN provider");
 		await relayDialog.locator("[aria-label='Close TURN relay settings']").click();
-		await firstHost.locator("[aria-label^='Manage']").click();
-		await page.getByRole("button", { name: "Add another device" }).click();
+		await page.locator("session-picker").getByRole("button", { name: "Add device" }).click();
 		const inviteDialog = page.locator("[data-testid='device-invite-dialog']");
 		await expect(inviteDialog.locator("[data-testid='device-invite-create-status']")).toContainText("expires in 10:");
 		await expect(inviteDialog.locator("[data-testid='device-invite-qr']")).toBeVisible();

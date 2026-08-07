@@ -279,7 +279,7 @@ test.describe("UI behavior and visual goldens", () => {
 		const origin = `http://localhost:${mock.port}`;
 		await page.goto(origin);
 		await openMainSession(page);
-		await page.locator("session-picker").getByTitle("Settings").click();
+		await page.locator("session-picker").getByTitle("Pipane settings").click();
 		await expect(page).toHaveURL(`${origin}/settings`);
 		await expect(page.locator(".local-settings-panel")).toBeVisible();
 		await expect(page.locator(".local-settings-status.is-valid")).toBeVisible();
