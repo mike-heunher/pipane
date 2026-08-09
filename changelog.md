@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.17 - 2026-08-09
+
 - Prevent overlapping remote connection attempts from leaking authentication frames, and allow more time for WebRTC and TURN negotiation.
 - Move QR device invitations from per-backend menus to a compact workspace-wide Pipane action.
 - Keep TURN settings reachable from the backend-unavailable screen even when a connection failure cannot be classified.
