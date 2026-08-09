@@ -260,7 +260,7 @@ export class UpdateManager {
 				if (!notice.latestVersion) throw new Error("The pipane update has no target version.");
 				await this.dependencies.runCommand(
 					"npm",
-					["install", "-g", "--ignore-scripts", `${this.options.pipanePackageName}@${notice.latestVersion}`],
+					["install", "-g", `${this.options.pipanePackageName}@${notice.latestVersion}`],
 					this.options.cwd,
 				);
 				return {

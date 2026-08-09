@@ -1,5 +1,7 @@
 # Unreleased
 
+- Run dependency lifecycle scripts during self-updates so native packages such as `node-datachannel` remain usable.
+
 # 0.1.17 - 2026-08-09
 
 - Prevent overlapping remote connection attempts from leaking authentication frames, and allow more time for WebRTC and TURN negotiation.

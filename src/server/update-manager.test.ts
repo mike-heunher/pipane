@@ -86,7 +86,7 @@ describe("UpdateManager", () => {
 		expect(dependencies.runCommand).toHaveBeenNthCalledWith(
 			1,
 			"npm",
-			["install", "-g", "--ignore-scripts", "pipane@1.2.0"],
+			["install", "-g", "pipane@1.2.0"],
 			"/srv/project",
 		);
 		expect(dependencies.runCommand).toHaveBeenNthCalledWith(
