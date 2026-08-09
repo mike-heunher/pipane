@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.18 - 2026-08-09
+
 - Run dependency lifecycle scripts during self-updates so native packages such as `node-datachannel` remain usable.
 
 # 0.1.17 - 2026-08-09
