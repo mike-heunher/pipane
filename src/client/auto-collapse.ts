@@ -42,6 +42,15 @@ export function notifyToolToggled(wrapElement: Element) {
 	}
 }
 
+function isInConversationViewport(toolMessage: Element): boolean {
+	const scrollArea = toolMessage.closest<HTMLElement>("#chat-scroll-area");
+	if (!scrollArea) return false;
+
+	const viewport = scrollArea.getBoundingClientRect();
+	const toolBounds = toolMessage.getBoundingClientRect();
+	return Math.min(toolBounds.bottom, viewport.bottom) > Math.max(toolBounds.top, viewport.top);
+}
+
 /**
  * Scan the DOM for completed tool calls and auto-collapse older ones.
  * Should be called after each render/content change.
@@ -74,6 +83,12 @@ export function runAutoCollapse() {
 	const toCollapse = candidates.slice(0, Math.max(0, candidates.length - keepOpen));
 
 	for (const { id, wrap } of toCollapse) {
+		// Removing output from the area the user is reading changes its height and
+		// can move the viewport by thousands of pixels. Defer that collapse until
+		// the call is outside the conversation viewport on a later render.
+		const toolMessage = wrap.closest("tool-message");
+		if (toolMessage && isInConversationViewport(toolMessage)) continue;
+
 		const body = wrap.querySelector(".tool-body-collapsible") as HTMLElement | null;
 		const threadLine = wrap.querySelector(".tool-thread-line") as HTMLElement | null;
 		const chevron = wrap.querySelector(".tool-chevron") as HTMLElement | null;

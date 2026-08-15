@@ -114,6 +114,33 @@ describe("auto-collapse", () => {
 		expect((messages[2].querySelector(".tool-body-collapsible") as HTMLElement).style.display).not.toBe("none");
 	});
 
+	it("does not collapse a tool in the currently visible conversation area", () => {
+		container.id = "chat-scroll-area";
+		setAutoCollapseKeepOpen(1);
+		for (let i = 0; i < 4; i++) {
+			container.appendChild(createToolMessage(`t${i}`, true));
+		}
+
+		container.getBoundingClientRect = () => ({ top: 100, bottom: 700 }) as DOMRect;
+		const messages = container.querySelectorAll<HTMLElement>("tool-message");
+		messages[0].getBoundingClientRect = () => ({ top: -300, bottom: -100 }) as DOMRect;
+		messages[1].getBoundingClientRect = () => ({ top: 150, bottom: 650 }) as DOMRect;
+		messages[2].getBoundingClientRect = () => ({ top: 750, bottom: 900 }) as DOMRect;
+		messages[3].getBoundingClientRect = () => ({ top: 950, bottom: 1_100 }) as DOMRect;
+
+		runAutoCollapse();
+
+		expect((messages[0].querySelector(".tool-body-collapsible") as HTMLElement).style.display).toBe("none");
+		expect((messages[1].querySelector(".tool-body-collapsible") as HTMLElement).style.display).not.toBe("none");
+		expect((messages[2].querySelector(".tool-body-collapsible") as HTMLElement).style.display).toBe("none");
+		expect((messages[3].querySelector(".tool-body-collapsible") as HTMLElement).style.display).not.toBe("none");
+
+		// Once the user scrolls away, a later render may safely collapse it.
+		messages[1].getBoundingClientRect = () => ({ top: -600, bottom: -100 }) as DOMRect;
+		runAutoCollapse();
+		expect((messages[1].querySelector(".tool-body-collapsible") as HTMLElement).style.display).toBe("none");
+	});
+
 	it("does not re-collapse a tool the user manually opened", () => {
 		setAutoCollapseKeepOpen(1);
 		container.appendChild(createToolMessage("t0", true));
