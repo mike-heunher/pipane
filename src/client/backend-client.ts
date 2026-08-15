@@ -95,6 +95,7 @@ export interface BackendClient extends BackendApi {
 	setThinkingLevel(level: ThinkingLevelValue): void;
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>>;
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }>;
+	forkCurrent(): Promise<{ newSessionPath: string }>;
 	forkAndPrompt(text: string, images?: WireImage[]): Promise<void>;
 	/** Warm a bounded browser cache entry before an anticipated session switch. */
 	prefetchSession?(sessionPath: string, backendId?: string): void;
@@ -138,4 +139,4 @@ export type SessionPickerBackendClient = Pick<
 	| "createDirectory"
 >;
 
-export type ForkBackendClient = Pick<BackendClient, "getForkMessages" | "fork">;
+export type ForkBackendClient = Pick<BackendClient, "getForkMessages" | "fork" | "forkCurrent">;

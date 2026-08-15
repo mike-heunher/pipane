@@ -109,6 +109,7 @@ export type ClientCommand = CommandEnvelope & (
 	| { type: "get_session_statuses" }
 	| ({ type: "get_session_stats" } & SessionCommand)
 	| ({ type: "fork"; entryId: string } & SessionCommand)
+	| ({ type: "fork_current" } & SessionCommand & IdempotentCommand)
 	| ({
 		type: "fork_prompt";
 		message: string;
@@ -147,6 +148,7 @@ export interface CommandResponseDataMap {
 	get_session_statuses: { statuses: SessionRuntimeStatuses };
 	get_session_stats: SessionStats;
 	fork: { text: string; cancelled: boolean; newSessionPath: string | null };
+	fork_current: { newSessionPath: string };
 	fork_prompt: { newSessionPath: string };
 	set_session_name: Record<string, never>;
 	get_commands: { commands: SlashCommandInfo[] };
@@ -567,6 +569,10 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 				sessionPath();
 				string(command.entryId, "$command.entryId", false);
 				break;
+			case "fork_current":
+				sessionPath();
+				optionalOperationId(command.operationId, "$command.operationId");
+				break;
 			case "fork_prompt":
 				sessionPath();
 				string(command.message, "$command.message");
@@ -637,6 +643,7 @@ function validateSuccessData(command: ClientCommandType, value: unknown, path: s
 			string(data.newSessionPath, `${path}.newSessionPath`, false);
 			if (data.sessionCreated !== undefined) boolean(data.sessionCreated, `${path}.sessionCreated`);
 			break;
+		case "fork_current":
 		case "fork_prompt":
 			string(data.newSessionPath, `${path}.newSessionPath`, false);
 			break;
@@ -690,6 +697,7 @@ const CLIENT_COMMAND_TYPES = new Set<ClientCommandType>([
 	"get_session_statuses",
 	"get_session_stats",
 	"fork",
+	"fork_current",
 	"fork_prompt",
 	"set_session_name",
 	"get_commands",

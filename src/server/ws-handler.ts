@@ -18,8 +18,9 @@ import {
 	type ServerFrameConnection,
 } from "./frame-connection.js";
 
-import { copyFile } from "node:fs/promises";
-import { constants as fsConstants, existsSync } from "node:fs";
+import { open, unlink, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import type { RpcSessionState } from "@earendil-works/pi-coding-agent";
 import { SessionRegistry } from "./session-registry.js";
@@ -80,7 +81,7 @@ export interface WsHandlerOptions {
 
 type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: Type }>;
 type ControlCommand = CommandOf<"prompt"> | CommandOf<"fork_prompt">;
-type IdempotentControlCommand = ControlCommand | CommandOf<"steer">;
+type IdempotentControlCommand = ControlCommand | CommandOf<"steer"> | CommandOf<"fork_current">;
 type IdempotentControlType = IdempotentControlCommand["type"];
 interface OperationReceipt {
 	fingerprint: string;
@@ -92,6 +93,62 @@ type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
 const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+
+async function cloneSessionFile(sourcePath: string, destinationPath: string): Promise<void> {
+	const handle = await open(sourcePath, "r");
+	let buffered = Buffer.alloc(0);
+	let bodyOffset = -1;
+	try {
+		while (buffered.length <= MAX_SESSION_HEADER_BYTES) {
+			const chunk = Buffer.alloc(Math.min(4096, MAX_SESSION_HEADER_BYTES + 1 - buffered.length));
+			const { bytesRead } = await handle.read(chunk, 0, chunk.length, buffered.length);
+			if (bytesRead === 0) break;
+			buffered = Buffer.concat([buffered, chunk.subarray(0, bytesRead)]);
+			const newline = buffered.indexOf(0x0a);
+			if (newline >= 0) {
+				bodyOffset = newline + 1;
+				break;
+			}
+		}
+	} finally {
+		await handle.close();
+	}
+
+	if (buffered.length === 0 || (bodyOffset < 0 && buffered.length > MAX_SESSION_HEADER_BYTES)) {
+		throw new Error("Invalid or oversized session header");
+	}
+	const headerEnd = bodyOffset < 0 ? buffered.length : bodyOffset - 1;
+	const headerText = buffered.subarray(0, headerEnd).toString("utf8").replace(/\r$/, "");
+	let header: Record<string, unknown>;
+	try {
+		header = JSON.parse(headerText) as Record<string, unknown>;
+	} catch {
+		throw new Error("Invalid session header");
+	}
+	if (header.type !== "session" || typeof header.id !== "string") {
+		throw new Error("Invalid session header");
+	}
+
+	let destinationCreated = false;
+	try {
+		await writeFile(destinationPath, `${JSON.stringify({
+			...header,
+			id: crypto.randomUUID(),
+			timestamp: new Date().toISOString(),
+		})}\n`, { flag: "wx" });
+		destinationCreated = true;
+		if (bodyOffset >= 0) {
+			await pipeline(
+				createReadStream(sourcePath, { start: bodyOffset }),
+				createWriteStream(destinationPath, { flags: "a" }),
+			);
+		}
+	} catch (error) {
+		if (destinationCreated) await unlink(destinationPath).catch(() => undefined);
+		throw error;
+	}
+}
 const MAX_COMPLETED_CONTROL_OPERATIONS = 512;
 const MAX_ACTIVE_CONTROL_OPERATIONS = 128;
 const MODEL_CATALOG_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000] as const;
@@ -569,6 +626,13 @@ export class WsHandler {
 				case "fork":
 					await this.handleFork(ws, command);
 					break;
+				case "fork_current": {
+					const data = await this.runIdempotentControl(command, async (accept) => {
+						accept(await this.handleForkCurrent(command));
+					});
+					this.sendSuccess(ws, command.id, "fork_current", data);
+					break;
+				}
 				case "fork_prompt": {
 					const data = await this.runIdempotentControl(command, (accept) => this.handleForkPrompt(ws, command, accept));
 					this.sendSuccess(ws, command.id, "fork_prompt", data);
@@ -1077,6 +1141,24 @@ export class WsHandler {
 		});
 	}
 
+	private async handleForkCurrent(
+		command: CommandOf<"fork_current">,
+	): Promise<CommandResponseData<"fork_current">> {
+		const sessionPath = this.sessionPaths.resolveExisting(command.sessionPath);
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+		const newId = crypto.randomUUID().slice(0, 8);
+		let newSessionPath = this.sessionPaths.createPath(`${timestamp}_${newId}.jsonl`);
+		const sourceActor = this.registry.get(sessionPath);
+
+		await sourceActor.enqueue("fork current state", async () => {
+			sourceActor.assertAvailable("fork current state");
+			await cloneSessionFile(sessionPath, newSessionPath);
+			newSessionPath = this.sessionPaths.resolveExisting(newSessionPath);
+		});
+
+		return { newSessionPath };
+	}
+
 	private async handleForkPrompt(
 		ws: ServerFrameConnection,
 		command: CommandOf<"fork_prompt">,
@@ -1092,7 +1174,7 @@ export class WsHandler {
 		const sourceActor = this.registry.get(sessionPath);
 		await sourceActor.enqueue("fork prompt source", async () => {
 			sourceActor.assertAvailable("fork and prompt");
-			await copyFile(sessionPath, newSessionPath, fsConstants.COPYFILE_EXCL);
+			await cloneSessionFile(sessionPath, newSessionPath);
 			newSessionPath = this.sessionPaths.resolveExisting(newSessionPath);
 		});
 

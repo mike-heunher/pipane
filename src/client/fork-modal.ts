@@ -1,10 +1,9 @@
 /**
  * Fork modal component.
  *
- * Shows a searchable list of user messages from the current session.
- * Selecting one forks the session from that message's parent,
- * creating a new session with the history up to that point and
- * pre-filling the editor with the selected message text.
+ * Duplicates the complete current conversation or shows a searchable list
+ * of earlier user messages. Selecting a message forks from its parent and
+ * pre-fills the editor with the selected message text.
  */
 
 import { html, css, LitElement, nothing } from "lit";
@@ -85,6 +84,54 @@ export class ForkModal extends LitElement {
 
 		.header-hint {
 			margin-left: auto;
+			font-size: 0.7rem;
+			color: var(--muted-foreground, #6b7280);
+		}
+
+		.current-wrapper {
+			padding: 0.75rem 1rem;
+			border-bottom: 1px solid var(--border, #e5e7eb);
+			flex-shrink: 0;
+		}
+
+		.current-state {
+			display: flex;
+			align-items: center;
+			gap: 0.75rem;
+			width: 100%;
+			padding: 0.75rem;
+			border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 35%, var(--border, #e5e7eb));
+			border-radius: 0.5rem;
+			background: color-mix(in srgb, var(--primary, #2563eb) 7%, var(--background, #fff));
+			color: var(--foreground, #111);
+			font-family: inherit;
+			text-align: left;
+			cursor: pointer;
+		}
+
+		.current-state:hover,
+		.current-state:focus-visible {
+			background: color-mix(in srgb, var(--primary, #2563eb) 13%, var(--background, #fff));
+			outline: none;
+		}
+
+		.current-icon {
+			color: var(--primary, #2563eb);
+			font-size: 1.1rem;
+		}
+
+		.current-copy {
+			display: flex;
+			flex-direction: column;
+			gap: 0.15rem;
+		}
+
+		.current-title {
+			font-size: 0.8125rem;
+			font-weight: 600;
+		}
+
+		.current-description {
 			font-size: 0.7rem;
 			color: var(--muted-foreground, #6b7280);
 		}
@@ -267,6 +314,17 @@ export class ForkModal extends LitElement {
 		this.remove();
 	}
 
+	private async selectCurrentState() {
+		this.forking = true;
+		try {
+			const result = await this.agent.forkCurrent();
+			this.close({ text: "", newSessionPath: result.newSessionPath });
+		} catch (err) {
+			console.error("Fork failed:", err);
+			this.forking = false;
+		}
+	}
+
 	private async selectMessage(msg: { entryId: string; text: string }) {
 		this.forking = true;
 		try {
@@ -348,15 +406,25 @@ export class ForkModal extends LitElement {
 						<path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9"></path>
 						<path d="M12 12v3"></path>
 					</svg>
-					<span class="header-title">Fork from message</span>
+					<span class="header-title">Fork conversation</span>
 					<span class="header-hint"><kbd>↑↓</kbd> navigate · <kbd>Enter</kbd> fork · <kbd>Esc</kbd> cancel</span>
+				</div>
+
+				<div class="current-wrapper">
+					<button class="current-state" type="button" @click=${this.selectCurrentState}>
+						<span class="current-icon" aria-hidden="true">⑂</span>
+						<span class="current-copy">
+							<span class="current-title">Fork current state</span>
+							<span class="current-description">Duplicate the full conversation and continue in a new branch</span>
+						</span>
+					</button>
 				</div>
 
 				<div class="search-wrapper">
 					<input
 						class="search-input"
 						type="text"
-						placeholder="Search messages…"
+						placeholder="Or search earlier messages…"
 						.value=${this.search}
 						@input=${this.onSearchInput}
 					/>

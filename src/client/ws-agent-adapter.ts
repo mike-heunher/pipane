@@ -1242,7 +1242,7 @@ export class WsAgentAdapter implements BackendClient {
 
 		const id = `req_${++this.requestId}`;
 		const encodedFrame = encodeClientCommand(command, id);
-		const resumable = (command.type === "prompt" || command.type === "fork_prompt" || command.type === "steer")
+		const resumable = (command.type === "prompt" || command.type === "fork_prompt" || command.type === "fork_current" || command.type === "steer")
 			&& typeof (command as { operationId?: unknown }).operationId === "string";
 		return new Promise<CommandResponseData<Payload["type"]>>((resolve, reject) => {
 			const timeoutMs = command.type === "compact"
@@ -1995,6 +1995,16 @@ export class WsAgentAdapter implements BackendClient {
 			cancelled: data?.cancelled ?? false,
 			newSessionPath: data?.newSessionPath ?? null,
 		};
+	}
+
+	/** Duplicate the complete, settled conversation state into a new session. */
+	async forkCurrent(): Promise<{ newSessionPath: string }> {
+		if (!this._sessionPath) throw new Error("No session loaded");
+		return this.send({
+			type: "fork_current",
+			sessionPath: this._sessionPath,
+			operationId: crypto.randomUUID(),
+		});
 	}
 
 	// ── Fork and prompt ────────────────────────────────────────────────────

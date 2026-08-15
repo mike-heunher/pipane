@@ -50,6 +50,7 @@ function createTestAdapter(options: Pick<WsAgentAdapterOptions, "fetch" | "sessi
 			const responseData: Record<string, unknown> = (() => {
 				switch (parsed.type) {
 					case "prompt": return { newSessionPath };
+					case "fork_current": return { newSessionPath: "/tmp/sessions/current-fork.jsonl" };
 					case "fork_prompt": return { newSessionPath: "/tmp/sessions/fork.jsonl" };
 					case "hard_kill": return { killed: true };
 					case "get_available_models": return { models: [] };
@@ -247,6 +248,22 @@ describe("WsAgentAdapter transport injection", () => {
 });
 
 describe("WsAgentAdapter prompt routing", () => {
+	describe("conversation forking", () => {
+		it("requests a resumable fork of the complete current state", async () => {
+			const sessionPath = "/tmp/sessions/session-a.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+
+			await expect(adapter.forkCurrent()).resolves.toEqual({
+				newSessionPath: "/tmp/sessions/current-fork.jsonl",
+			});
+			expect(sent).toContainEqual(expect.objectContaining({
+				type: "fork_current",
+				sessionPath,
+				operationId: expect.any(String),
+			}));
+		});
+	});
+
 	describe("prompt to idle session sends 'prompt' command", () => {
 		it("sends a hard_kill command when hardKill() is called", () => {
 			const sessionPath = "/tmp/sessions/session-a.jsonl";

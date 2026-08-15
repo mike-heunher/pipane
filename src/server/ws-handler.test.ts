@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1005,6 +1005,38 @@ describe("WsHandler session path confinement", () => {
 		}
 	});
 
+	it("copies the complete current session into a new confined path", async () => {
+		const fixture = createFixture();
+		try {
+			const sourceHeader = { type: "session", id: "source", timestamp: "2026-01-01T00:00:00.000Z", cwd: "/tmp" };
+			const latestEntry = { type: "message", role: "user", content: "latest state" };
+			const sessionContents = [JSON.stringify(sourceHeader), JSON.stringify(latestEntry)].join("\n");
+			writeFileSync(fixture.sessionPath, sessionContents);
+			const { handler } = makeHandler({ sessionPaths: fixture.sessionPaths });
+
+			const result = await handler.handleForkCurrent({
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "fork-current",
+				type: "fork_current",
+				operationId: "fork-current-operation",
+				sessionPath: fixture.sessionPath,
+			});
+
+			expect(result.newSessionPath).not.toBe(fixture.sessionPath);
+			expect(path.dirname(result.newSessionPath)).toBe(fixture.sessionsRoot);
+			const [forkHeader, ...forkEntries] = readFileSync(result.newSessionPath, "utf8").split("\n");
+			expect(JSON.parse(forkHeader)).toEqual({
+				...sourceHeader,
+				id: expect.not.stringMatching(/^source$/),
+				timestamp: expect.not.stringMatching(/^2026-01-01T00:00:00.000Z$/),
+			});
+			expect(forkEntries).toEqual([JSON.stringify(latestEntry)]);
+			expect(readFileSync(fixture.sessionPath, "utf8")).toBe(sessionContents);
+		} finally {
+			rmSync(fixture.tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects outside fork sources before acquiring a process or copying", async () => {
 		const fixture = createFixture();
 		try {
@@ -1025,6 +1057,12 @@ describe("WsHandler session path confinement", () => {
 				sessionPath: fixture.symlinkPath,
 				message: "continue",
 			})).rejects.toThrow("escapes the Pi sessions directory");
+			await expect(handler.handleForkCurrent({
+				protocolVersion: WS_PROTOCOL_VERSION,
+				id: "fork-current",
+				type: "fork_current",
+				sessionPath: fixture.outsidePath,
+			})).rejects.toThrow("within the Pi sessions directory");
 			expect(pool.acquire).not.toHaveBeenCalled();
 		} finally {
 			rmSync(fixture.tmpDir, { recursive: true, force: true });

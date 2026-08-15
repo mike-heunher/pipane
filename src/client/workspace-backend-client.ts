@@ -226,6 +226,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	setThinkingLevel(level: ThinkingLevelValue): void { this.requireActiveClient().setThinkingLevel(level); }
 	getForkMessages(): Promise<Array<{ entryId: string; text: string }>> { return this.requireActiveClient().getForkMessages(); }
 	fork(entryId: string): Promise<{ text: string; cancelled: boolean; newSessionPath: string | null }> { return this.requireActiveClient().fork(entryId); }
+	forkCurrent(): Promise<{ newSessionPath: string }> { return this.requireActiveClient().forkCurrent(); }
 	forkAndPrompt(text: string, images?: WireImage[]): Promise<void> { return this.requireActiveClient().forkAndPrompt(text, images); }
 
 	prefetchSession(sessionPath: string, backendId = this.activeId): void {
