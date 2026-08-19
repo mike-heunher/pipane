@@ -1,5 +1,6 @@
 # Unreleased
 
+- Show live backend-to-browser conversation loading progress, including determinate chunk progress on slow connections.
 - Fork the complete current conversation state into a new branch, in addition to rewinding to an earlier message.
 - Defer automatic tool-call collapsing while a call is in the visible conversation area to prevent large scroll jumps.
 

@@ -1,4 +1,4 @@
-import type { FrameTransport, FrameTransportConnectionEvent } from "./frame-transport.js";
+import type { FrameTransferProgress, FrameTransport, FrameTransportConnectionEvent } from "./frame-transport.js";
 import { DataChannelFrameDecoder } from "../shared/data-channel-framing.js";
 
 const SOCKET_OPEN = 1;
@@ -25,9 +25,12 @@ export class WebSocketFrameTransport implements FrameTransport {
 	private reconnectAttempt = 0;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 	private manuallyClosed = false;
-	private readonly decoder = new DataChannelFrameDecoder();
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
+	private readonly transferProgressListeners = new Set<(progress: FrameTransferProgress) => void>();
+	private readonly decoder = new DataChannelFrameDecoder((progress) => {
+		for (const listener of this.transferProgressListeners) listener(progress);
+	});
 	private readonly createWebSocket: (endpoint: string) => WebSocketLike;
 	private readonly schedule: typeof globalThis.setTimeout;
 	private readonly cancelSchedule: typeof globalThis.clearTimeout;
@@ -58,6 +61,11 @@ export class WebSocketFrameTransport implements FrameTransport {
 	onConnectionChange(listener: (event: FrameTransportConnectionEvent) => void): () => void {
 		this.connectionListeners.add(listener);
 		return () => this.connectionListeners.delete(listener);
+	}
+
+	onTransferProgress(listener: (progress: FrameTransferProgress) => void): () => void {
+		this.transferProgressListeners.add(listener);
+		return () => this.transferProgressListeners.delete(listener);
 	}
 
 	async connect(endpoint: string): Promise<void> {

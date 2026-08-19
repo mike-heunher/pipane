@@ -16,6 +16,73 @@ body {
 	pointer-events: none;
 }
 
+/* Authoritative history arrives as bounded carrier chunks. Keep this visible
+   above cached/empty content so slow links expose real receive progress. */
+.conversation-load-indicator {
+	flex: 0 0 auto;
+	padding: 0.48rem 1rem 0.55rem;
+	border-bottom: 1px solid color-mix(in srgb, var(--primary, #2563eb) 22%, var(--border, #d1d5db));
+	background: color-mix(in srgb, var(--primary, #2563eb) 7%, var(--background, #fff));
+	color: var(--foreground, #111);
+}
+
+.conversation-load-copy {
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+	max-width: 48rem;
+	margin: 0 auto 0.34rem;
+	font-size: 0.73rem;
+	font-weight: 600;
+}
+
+.conversation-load-copy svg {
+	width: 0.9rem;
+	height: 0.9rem;
+	color: var(--primary, #2563eb);
+}
+
+.conversation-load-percent {
+	margin-left: auto;
+	color: var(--muted-foreground, #6b7280);
+	font-variant-numeric: tabular-nums;
+}
+
+.conversation-load-track {
+	position: relative;
+	overflow: hidden;
+	max-width: 48rem;
+	height: 0.24rem;
+	margin: 0 auto;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--primary, #2563eb) 18%, transparent);
+}
+
+.conversation-load-bar {
+	height: 100%;
+	border-radius: inherit;
+	background: var(--primary, #2563eb);
+	transition: width 120ms ease-out;
+}
+
+@keyframes conversation-load-slide {
+	0% { transform: translateX(-120%); }
+	100% { transform: translateX(340%); }
+}
+
+.conversation-load-track.is-indeterminate .conversation-load-bar {
+	width: 28%;
+	animation: conversation-load-slide 1.15s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.conversation-load-track.is-indeterminate .conversation-load-bar {
+		width: 100%;
+		animation: none;
+		opacity: 0.55;
+	}
+}
+
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--color-border) transparent;

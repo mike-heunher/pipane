@@ -128,6 +128,14 @@ export interface FrameTransportConnectionEvent {
 	reconnected: boolean;
 }
 
+export interface FrameTransferProgress {
+	id: string;
+	receivedChunks: number;
+	totalChunks: number;
+	receivedBytes: number;
+	cancelled: boolean;
+}
+
 /**
  * Ordered text-frame carrier used by the browser protocol client.
  *
@@ -144,5 +152,7 @@ export interface FrameTransport {
 	close(code?: number, reason?: string): void;
 	onFrame(listener: (frame: string) => void): () => void;
 	onConnectionChange(listener: (event: FrameTransportConnectionEvent) => void): () => void;
+	/** Physical receive progress for chunked logical frames. */
+	onTransferProgress?(listener: (progress: FrameTransferProgress) => void): () => void;
 	getConnectionDiagnostics?(): Promise<ConnectionDiagnostics | undefined>;
 }

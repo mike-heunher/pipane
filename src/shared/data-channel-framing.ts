@@ -11,6 +11,8 @@ export const MAX_DATA_CHANNEL_PENDING_FRAMES = 4;
 export const MAX_DATA_CHANNEL_QUEUED_BYTES = 96 * 1024 * 1024;
 export const DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES = 1024 * 1024;
 export const DATA_CHANNEL_BUFFER_LOW_WATER_BYTES = 256 * 1024;
+/** Stable carrier transfer identity used to expose active conversation receive progress. */
+export const ACTIVE_SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
 
 interface DataChannelChunk {
 	__pipaneDataChannelChunk: typeof CHUNK_MARKER;
@@ -30,6 +32,14 @@ interface PendingFrame {
 	nextIndex: number;
 	byteLength: number;
 	chunks: Uint8Array[];
+}
+
+export interface DataChannelFrameProgress {
+	id: string;
+	receivedChunks: number;
+	totalChunks: number;
+	receivedBytes: number;
+	cancelled: boolean;
 }
 
 const textEncoder = new TextEncoder();
@@ -75,11 +85,22 @@ export function encodeDataChannelFrameCancellation(id: string): string {
 export class DataChannelFrameDecoder {
 	private readonly pending = new Map<string, PendingFrame>();
 
+	constructor(private readonly onProgress?: (progress: DataChannelFrameProgress) => void) {}
+
 	accept(message: string): string | undefined {
 		if (!message.startsWith(CHUNK_PREFIX) && !message.startsWith(CANCEL_PREFIX)) return message;
 		try {
 			if (message.startsWith(CANCEL_PREFIX)) {
-				this.pending.delete(parseCancel(message).id);
+				const cancellation = parseCancel(message);
+				const pending = this.pending.get(cancellation.id);
+				this.pending.delete(cancellation.id);
+				if (pending) this.onProgress?.({
+					id: cancellation.id,
+					receivedChunks: pending.nextIndex,
+					totalChunks: pending.total,
+					receivedBytes: pending.byteLength,
+					cancelled: true,
+				});
 				return undefined;
 			}
 			const chunk = parseChunk(message);
@@ -102,6 +123,13 @@ export class DataChannelFrameDecoder {
 			if (pending.byteLength > MAX_DATA_CHANNEL_FRAME_BYTES) throw new Error("DataChannel frame exceeds the reassembly limit");
 			pending.chunks.push(bytes);
 			pending.nextIndex++;
+			this.onProgress?.({
+				id: chunk.id,
+				receivedChunks: pending.nextIndex,
+				totalChunks: pending.total,
+				receivedBytes: pending.byteLength,
+				cancelled: false,
+			});
 			if (pending.nextIndex < pending.total) return undefined;
 
 			this.pending.delete(chunk.id);

@@ -43,6 +43,7 @@ import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFound
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
 import { computeSyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
+import { ACTIVE_SESSION_SYNC_TRANSFER_KEY } from "../shared/data-channel-framing.js";
 import {
 	assertNever,
 	decodeClientCommand,
@@ -92,7 +93,7 @@ type ExtensionStatusPayload = Omit<ExtensionStatusMessage, "protocolVersion">;
 type ProviderUsagePayload = Omit<ProviderUsageMessage, "protocolVersion">;
 
 const DETACHED_SYNC_COALESCE_MS = 75;
-const SESSION_SYNC_TRANSFER_KEY = "active-session-sync";
+const SESSION_SYNC_TRANSFER_KEY = ACTIVE_SESSION_SYNC_TRANSFER_KEY;
 const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 
 async function cloneSessionFile(sourcePath: string, destinationPath: string): Promise<void> {

@@ -1,6 +1,7 @@
 import type { DataChannel } from "node-datachannel";
 import type { RawData, WebSocket } from "ws";
 import {
+	ACTIVE_SESSION_SYNC_TRANSFER_KEY,
 	DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES,
 	DATA_CHANNEL_BUFFER_LOW_WATER_BYTES,
 	DataChannelFrameDecoder,
@@ -60,7 +61,10 @@ class PrioritizedFrameQueue {
 	) {}
 
 	enqueue(frame: string, options: FrameSendOptions = {}): void {
-		const id = `${this.idPrefix}${(++this.nextFrameId).toString(36)}`;
+		const sequence = (++this.nextFrameId).toString(36);
+		const id = options.transferKey === ACTIVE_SESSION_SYNC_TRANSFER_KEY
+			? `${ACTIVE_SESSION_SYNC_TRANSFER_KEY}_${sequence}`
+			: `${this.idPrefix}${sequence}`;
 		const messages = encodeDataChannelFrame(frame, id).map((value) => ({
 			value,
 			byteLength: Buffer.byteLength(value),

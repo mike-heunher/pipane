@@ -27,6 +27,13 @@ export interface PiInstallRequiredInfo {
 	message: string;
 }
 
+export interface ConversationLoadProgress {
+	sessionPath: string;
+	phase: "waiting" | "receiving" | "processing";
+	receivedChunks: number;
+	totalChunks?: number;
+}
+
 /**
  * Carrier-neutral contract consumed by the browser application.
  *
@@ -60,6 +67,8 @@ export interface BackendClient extends BackendApi {
 	readonly workspaceBackends?: readonly WorkspaceBackendState[];
 	/** True only after the active backend advertises uploaded image prompt references. */
 	readonly supportsUploadedImagePrompt?: boolean;
+	/** Active initial conversation transfer, if the browser is awaiting authoritative history. */
+	readonly conversationLoadProgress?: ConversationLoadProgress;
 
 	connect(endpoint: string): Promise<void>;
 	disconnect(): void;
@@ -73,6 +82,7 @@ export interface BackendClient extends BackendApi {
 	onStatusChange(fn: () => void): () => void;
 	onSessionsChanged(fn: (file: string) => void): () => void;
 	onPiInstallRequired(fn: (info: PiInstallRequiredInfo) => void): () => void;
+	onConversationLoadProgress?(fn: () => void): () => void;
 	/** Account-wide backend/session catalog changes. */
 	onWorkspaceChange?(fn: () => void): () => void;
 

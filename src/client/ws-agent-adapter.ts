@@ -17,6 +17,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { applySyncOps, type SyncOp } from "../shared/jsonl-sync.js";
 import { isBackendProtocolFrame } from "../shared/backend-protocol.js";
 import { COMPACT_CLIENT_TIMEOUT_MS, PROMPT_CLIENT_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
+import { ACTIVE_SESSION_SYNC_TRANSFER_KEY } from "../shared/data-channel-framing.js";
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import {
 	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
@@ -48,12 +49,13 @@ import {
 import type {
 	BackendClient,
 	BackendClientState,
+	ConversationLoadProgress,
 	PiInstallRequiredInfo,
 	SessionInfoDTO,
 	SessionStatus,
 } from "./backend-client.js";
 import { HttpBackendApi, type BackendApi } from "./backend-api.js";
-import type { ConnectionDiagnostics, FrameTransport } from "./frame-transport.js";
+import type { ConnectionDiagnostics, FrameTransferProgress, FrameTransport } from "./frame-transport.js";
 import { associatePromptFailureSession } from "./prompt-failure.js";
 import { PIPANE_SLASH_COMMANDS } from "./slash-commands.js";
 import {
@@ -269,6 +271,8 @@ export class WsAgentAdapter implements BackendClient {
 	private _sessionListeners = new Set<() => void>();
 	private _contentListeners = new Set<() => void>();
 	private _statusListeners = new Set<() => void>();
+	private _conversationLoadListeners = new Set<() => void>();
+	private _conversationLoadProgress: ConversationLoadProgress | undefined;
 
 	constructor(options: WsAgentAdapterOptions = {}) {
 		this.transport = options.transport ?? new WebSocketFrameTransport({
@@ -283,6 +287,7 @@ export class WsAgentAdapter implements BackendClient {
 		this.cacheBackendId = options.cacheBackendId;
 		this.transport.onFrame((frame) => this.handleMessage(frame));
 		this.transport.onConnectionChange((event) => this.handleTransportConnectionChange(event.connected, event.reconnected));
+		this.transport.onTransferProgress?.((progress) => this.handleTransferProgress(progress));
 	}
 
 	get state(): BackendClientState { return this._state; }
@@ -293,6 +298,39 @@ export class WsAgentAdapter implements BackendClient {
 	get isConnected(): boolean { return this.transport.isConnected; }
 	get isReconnecting(): boolean { return this.transport.isReconnecting; }
 	get supportsUploadedImagePrompt(): boolean { return this._backendFeatures.has(UPLOADED_IMAGE_PROMPT_FEATURE); }
+	get conversationLoadProgress(): ConversationLoadProgress | undefined { return this._conversationLoadProgress; }
+
+	onConversationLoadProgress(fn: () => void): () => void {
+		this._conversationLoadListeners.add(fn);
+		return () => this._conversationLoadListeners.delete(fn);
+	}
+
+	private setConversationLoadProgress(progress: ConversationLoadProgress | undefined): void {
+		if (progress === this._conversationLoadProgress) return;
+		this._conversationLoadProgress = progress;
+		for (const listener of this._conversationLoadListeners) listener();
+	}
+
+	private handleTransferProgress(progress: FrameTransferProgress): void {
+		const current = this._conversationLoadProgress;
+		if (!current || !progress.id.startsWith(`${ACTIVE_SESSION_SYNC_TRANSFER_KEY}_`)) return;
+		if (current.sessionPath !== this._sessionPath) return;
+		if (progress.cancelled) {
+			this.setConversationLoadProgress({
+				...current,
+				phase: "waiting",
+				receivedChunks: 0,
+				totalChunks: undefined,
+			});
+			return;
+		}
+		this.setConversationLoadProgress({
+			sessionPath: current.sessionPath,
+			phase: progress.receivedChunks === progress.totalChunks ? "processing" : "receiving",
+			receivedChunks: progress.receivedChunks,
+			totalChunks: progress.totalChunks,
+		});
+	}
 
 	onConnectionChange(fn: (connected: boolean) => void): () => void {
 		this._connectionListeners.add(fn);
@@ -949,6 +987,12 @@ export class WsAgentAdapter implements BackendClient {
 		if (syncMessages.some((message) =>
 			message.__sessionPath !== syncSessionPath || message.__sessionNonce !== syncSessionNonce
 		)) return;
+		if (this._conversationLoadProgress?.sessionPath === syncSessionPath) {
+			this.setConversationLoadProgress({
+				...this._conversationLoadProgress,
+				phase: "processing",
+			});
+		}
 
 		let nextRevision = this._syncRevision;
 		for (const message of syncMessages) {
@@ -1015,6 +1059,9 @@ export class WsAgentAdapter implements BackendClient {
 
 		if (syncOps.length === 0) {
 			this._syncRevision = nextRevision;
+			if (this._conversationLoadProgress?.sessionPath === syncSessionPath) {
+				this.setConversationLoadProgress(undefined);
+			}
 			return;
 		}
 
@@ -1080,6 +1127,9 @@ export class WsAgentAdapter implements BackendClient {
 			else this._steeringQueues.delete(syncSessionPath);
 		}
 		this._state.error = state.error || undefined;
+		if (this._conversationLoadProgress?.sessionPath === syncSessionPath) {
+			this.setConversationLoadProgress(undefined);
+		}
 		this.scheduleSessionCacheSave(syncSessionPath, result.data, result.hash,
 			this._cachedStateHash === result.hash ? this._cachedMessageHashes : undefined);
 
@@ -2124,6 +2174,11 @@ export class WsAgentAdapter implements BackendClient {
 		this._pendingControl = undefined;
 		this._lastAuthoritativeControl = undefined;
 		this._sessionPath = sessionPath;
+		this.setConversationLoadProgress({
+			sessionPath,
+			phase: "waiting",
+			receivedChunks: 0,
+		});
 		this._localAssistantMessages = [];
 		this.clearExtensionStatuses();
 		// Extract session ID from filename
@@ -2184,6 +2239,7 @@ export class WsAgentAdapter implements BackendClient {
 		this._pendingNewPrompt = false;
 		this._virtualPromptOperationIds.clear();
 		this._pendingControl = undefined;
+		this.setConversationLoadProgress(undefined);
 		this._sessionId = typeof crypto.randomUUID === "function"
 			? crypto.randomUUID()
 			: Array.from(crypto.getRandomValues(new Uint8Array(16)))

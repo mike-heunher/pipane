@@ -12,6 +12,7 @@ interface FakeEvents {
 	status: Set<() => void>;
 	sessions: Set<(file: string) => void>;
 	install: Set<(info: PiInstallRequiredInfo) => void>;
+	load: Set<() => void>;
 }
 
 function session(id: string, path: string, cwd: string): SessionInfoDTO {
@@ -29,9 +30,10 @@ function session(id: string, path: string, cwd: string): SessionInfoDTO {
 function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 	const events: FakeEvents = {
 		connection: new Set(), extension: new Set(), global: new Set(), steering: new Set(),
-		session: new Set(), content: new Set(), status: new Set(), sessions: new Set(), install: new Set(),
+		session: new Set(), content: new Set(), status: new Set(), sessions: new Set(), install: new Set(), load: new Set(),
 	};
 	let connected = false;
+	let conversationLoadProgress: BackendClient["conversationLoadProgress"];
 	let current: SessionInfoDTO | undefined = sessions[0];
 	const subscribe = <T extends (...args: any[]) => void>(set: Set<T>, callback: T) => {
 		set.add(callback);
@@ -48,6 +50,7 @@ function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 		pendingToolCallIds: new Set<string>(), toolCallTimings: {}, steeringQueue: [], extensionStatuses: new Map(),
 		get cwd() { return current?.cwd; },
 		optimisticSessions: [], virtualSessionInfo: undefined,
+		get conversationLoadProgress() { return conversationLoadProgress; },
 		connect: vi.fn(async () => {
 			if (connectError) throw connectError;
 			connected = true;
@@ -64,6 +67,7 @@ function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 		onStatusChange: (callback: () => void) => subscribe(events.status, callback),
 		onSessionsChanged: (callback: (file: string) => void) => subscribe(events.sessions, callback),
 		onPiInstallRequired: (callback: (info: PiInstallRequiredInfo) => void) => subscribe(events.install, callback),
+		onConversationLoadProgress: (callback: () => void) => subscribe(events.load, callback),
 		listSessions: vi.fn(async () => sessions),
 		getSessionStatus: vi.fn((path: string) => path === sessions[0]?.path ? "running" : undefined),
 		fetchAvailableModels: vi.fn(async () => []),
@@ -82,7 +86,14 @@ function fakeClient(sessions: SessionInfoDTO[], connectError?: Error) {
 		})),
 		reportError: vi.fn(),
 	} as unknown as BackendClient;
-	return { client, events };
+	return {
+		client,
+		events,
+		setConversationLoadProgress: (progress: BackendClient["conversationLoadProgress"]) => {
+			conversationLoadProgress = progress;
+			for (const listener of events.load) listener();
+		},
+	};
 }
 
 beforeEach(() => window.history.replaceState(null, "", "/"));
@@ -107,6 +118,26 @@ describe("WorkspaceBackendClient", () => {
 		]);
 		expect(workspace.getSessionStatus("/sessions/same.jsonl", "b_two")).toBe("running");
 		expect(workspace.workspaceBackends.every((backend) => backend.connected)).toBe(true);
+	});
+
+	it("forwards active backend conversation transfer progress", async () => {
+		const backend = fakeClient([session("slow", "/sessions/slow.jsonl", "/work")]);
+		const workspace = new WorkspaceBackendClient([
+			{ backendId: "b_slow", name: "Slow", online: true, protocolVersions: [1, 2] },
+		], { getClient: () => backend.client, revokeBackend: vi.fn() });
+		const changed = vi.fn();
+		workspace.onConversationLoadProgress(changed);
+		await workspace.connect("webrtc");
+
+		backend.setConversationLoadProgress({
+			sessionPath: "/sessions/slow.jsonl",
+			phase: "receiving",
+			receivedChunks: 3,
+			totalChunks: 10,
+		});
+
+		expect(workspace.conversationLoadProgress).toMatchObject({ phase: "receiving", receivedChunks: 3 });
+		expect(changed).toHaveBeenCalledOnce();
 	});
 
 	it("switches the active conversation in place without navigating or conflating equal paths", async () => {

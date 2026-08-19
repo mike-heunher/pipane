@@ -245,6 +245,36 @@ describe("WsAgentAdapter transport injection", () => {
 		});
 		expect(adapter.state.error).toBeUndefined();
 	});
+
+	it("reports active conversation transfer progress until history is applied", async () => {
+		const { adapter } = createTestAdapter({ sessionCache: false });
+		const changed = vi.fn();
+		adapter.onConversationLoadProgress(changed);
+		await adapter.switchSession("/tmp/sessions/slow.jsonl", "/tmp");
+		expect(adapter.conversationLoadProgress).toMatchObject({ phase: "waiting", receivedChunks: 0 });
+
+		(adapter as any).handleTransferProgress({
+			id: "active-session-sync_1",
+			receivedChunks: 2,
+			totalChunks: 8,
+			receivedBytes: 24_000,
+			cancelled: false,
+		});
+		expect(adapter.conversationLoadProgress).toMatchObject({ phase: "receiving", receivedChunks: 2, totalChunks: 8 });
+
+		(adapter as any).handleTransferProgress({
+			id: "active-session-sync_1",
+			receivedChunks: 8,
+			totalChunks: 8,
+			receivedBytes: 90_000,
+			cancelled: false,
+		});
+		expect(adapter.conversationLoadProgress?.phase).toBe("processing");
+
+		await pushSessionState(adapter, { messages: [{ role: "user", content: "loaded" }] });
+		expect(adapter.conversationLoadProgress).toBeUndefined();
+		expect(changed).toHaveBeenCalled();
+	});
 });
 
 describe("WsAgentAdapter prompt routing", () => {

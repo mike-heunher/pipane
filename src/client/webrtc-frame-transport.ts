@@ -4,6 +4,7 @@ import type {
 	ConnectionDisconnectDiagnostics,
 	ConnectionFailureCode,
 	ConnectionFailureDetails,
+	FrameTransferProgress,
 	FrameTransport,
 	FrameTransportConnectionEvent,
 	IceCandidateDiagnostics,
@@ -67,7 +68,10 @@ export class WebRtcFrameTransport implements FrameTransport {
 	private readonly cancelSchedule: (timer: ReturnType<typeof setTimeout>) => void;
 	private readonly frameListeners = new Set<(frame: string) => void>();
 	private readonly connectionListeners = new Set<(event: FrameTransportConnectionEvent) => void>();
-	private readonly decoder = new DataChannelFrameDecoder();
+	private readonly transferProgressListeners = new Set<(progress: FrameTransferProgress) => void>();
+	private readonly decoder = new DataChannelFrameDecoder((progress) => {
+		for (const listener of this.transferProgressListeners) listener(progress);
+	});
 	private readonly outgoing: Array<{ message: string; byteLength: number }> = [];
 	private peer: RTCPeerConnection | undefined;
 	private channel: RTCDataChannel | undefined;
@@ -122,6 +126,11 @@ export class WebRtcFrameTransport implements FrameTransport {
 	onConnectionChange(listener: (event: FrameTransportConnectionEvent) => void): () => void {
 		this.connectionListeners.add(listener);
 		return () => this.connectionListeners.delete(listener);
+	}
+
+	onTransferProgress(listener: (progress: FrameTransferProgress) => void): () => void {
+		this.transferProgressListeners.add(listener);
+		return () => this.transferProgressListeners.delete(listener);
 	}
 
 	connect(endpoint: string): Promise<void> {

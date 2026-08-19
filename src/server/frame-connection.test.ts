@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DataChannel } from "node-datachannel";
 import {
+	ACTIVE_SESSION_SYNC_TRANSFER_KEY,
 	DATA_CHANNEL_BUFFER_HIGH_WATER_BYTES,
 	DataChannelFrameDecoder,
 	MAX_DATA_CHANNEL_MESSAGE_BYTES,
@@ -82,9 +83,10 @@ describe("DataChannelFrameConnection", () => {
 		incoming.on("message", message);
 		const largeFrame = JSON.stringify({ type: "session_sync", content: "🙂 large history ".repeat(20_000) });
 
-		outgoing.send(largeFrame);
+		outgoing.send(largeFrame, { priority: "bulk", transferKey: ACTIVE_SESSION_SYNC_TRANSFER_KEY });
 		const chunks = sender.sendMessage.mock.calls.map(([chunk]) => chunk);
 		expect(chunks.length).toBeGreaterThan(1);
+		expect(JSON.parse(chunks[0]).id).toMatch(/^active-session-sync_/);
 		expect(chunks.every((chunk) => Buffer.byteLength(chunk) <= MAX_DATA_CHANNEL_MESSAGE_BYTES)).toBe(true);
 		for (const chunk of chunks) receiver.message(chunk);
 		expect(message).toHaveBeenCalledTimes(1);

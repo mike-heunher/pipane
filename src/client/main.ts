@@ -3,6 +3,7 @@ import { html, render } from "lit";
 import { live } from "lit/directives/live.js";
 import type { BackendClient, SessionInfoDTO } from "./backend-client.js";
 import { ConversationScrollController } from "./conversation-scroll.js";
+import { renderConversationLoadIndicator } from "./conversation-load-indicator.js";
 import { conversationDraftKey, ConversationDraftStore } from "./conversation-drafts.js";
 import { WsAgentAdapter } from "./ws-agent-adapter.js";
 import { consumeAppRuntime, type AppRuntime } from "./app-runtime.js";
@@ -925,6 +926,7 @@ const renderApp = () => {
 							</div>
 						`
 						: ""}
+					${renderConversationLoadIndicator(agent?.conversationLoadProgress)}
 					${agent?.sessionStatus === "virtual" && agent?.cwd && messages.length === 0
 						? html`
 							<div class="flex items-center gap-2 px-4 py-2 border-b border-border bg-accent/50 text-sm text-muted-foreground">
@@ -1226,6 +1228,10 @@ async function initApp(appRuntime: AppRuntime) {
 	});
 
 	agent.onExtensionStatusChange(() => {
+		renderApp();
+	});
+
+	agent.onConversationLoadProgress?.(() => {
 		renderApp();
 	});
 

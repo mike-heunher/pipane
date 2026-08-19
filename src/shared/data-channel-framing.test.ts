@@ -16,22 +16,32 @@ describe("DataChannel carrier framing", () => {
 		expect(new DataChannelFrameDecoder().accept(frame)).toBe(frame);
 	});
 
-	it("chunks and exactly reassembles large Unicode frames", () => {
+	it("chunks and exactly reassembles large Unicode frames while reporting receive progress", () => {
 		const frame = JSON.stringify({ type: "session_sync", content: "🙂 café 漢字\n".repeat(4_000) });
 		const messages = encodeDataChannelFrame(frame, "large_1");
 		expect(messages.length).toBeGreaterThan(1);
 		expect(messages.every((message) => byteLength(message) <= MAX_DATA_CHANNEL_MESSAGE_BYTES)).toBe(true);
 
-		const decoder = new DataChannelFrameDecoder();
+		const progress: Array<{ receivedChunks: number; totalChunks: number; receivedBytes: number }> = [];
+		const decoder = new DataChannelFrameDecoder((update) => progress.push(update));
 		for (const message of messages.slice(0, -1)) expect(decoder.accept(message)).toBeUndefined();
 		expect(decoder.accept(messages.at(-1)!)).toBe(frame);
+		expect(progress).toHaveLength(messages.length);
+		expect(progress[0]).toMatchObject({ receivedChunks: 1, totalChunks: messages.length, receivedBytes: DATA_CHANNEL_CHUNK_PAYLOAD_BYTES });
+		expect(progress.at(-1)).toMatchObject({
+			receivedChunks: messages.length,
+			totalChunks: messages.length,
+			receivedBytes: byteLength(frame),
+		});
 	});
 
 	it("drops a cancelled partial frame and accepts a later logical frame", () => {
-		const decoder = new DataChannelFrameDecoder();
+		const progress: Array<{ id: string; cancelled: boolean }> = [];
+		const decoder = new DataChannelFrameDecoder((update) => progress.push(update));
 		const abandoned = encodeDataChannelFrame("a".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "abandoned");
 		expect(decoder.accept(abandoned[0])).toBeUndefined();
 		expect(decoder.accept(encodeDataChannelFrameCancellation("abandoned"))).toBeUndefined();
+		expect(progress.at(-1)).toMatchObject({ id: "abandoned", cancelled: true });
 		expect(decoder.accept("control-frame")).toBe("control-frame");
 		const replacement = encodeDataChannelFrame("b".repeat(DATA_CHANNEL_CHUNK_PAYLOAD_BYTES + 1), "replacement");
 		expect(decoder.accept(replacement[0])).toBeUndefined();

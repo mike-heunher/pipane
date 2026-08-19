@@ -79,7 +79,9 @@ describe("WebSocketFrameTransport", () => {
 		const { sockets, createWebSocket } = socketFactory();
 		const transport = new WebSocketFrameTransport({ createWebSocket });
 		const frames: string[] = [];
+		const progress: Array<{ id: string; receivedChunks: number; cancelled: boolean }> = [];
 		transport.onFrame((frame) => frames.push(frame));
+		transport.onTransferProgress((update) => progress.push(update));
 		const connecting = transport.connect("wss://example.test/ws");
 		sockets[0].open();
 		await connecting;
@@ -92,6 +94,8 @@ describe("WebSocketFrameTransport", () => {
 		for (const chunk of encodeDataChannelFrame(replacementText, "replacement")) sockets[0].receive(chunk);
 
 		expect(frames).toEqual(["control", replacementText]);
+		expect(progress).toContainEqual(expect.objectContaining({ id: "stale", receivedChunks: 1, cancelled: true }));
+		expect(progress.at(-1)).toMatchObject({ id: "replacement", receivedChunks: 2, cancelled: false });
 	});
 
 	it("reconnects with backoff and marks the recovered connection", async () => {

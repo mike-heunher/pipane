@@ -198,10 +198,18 @@ describe("WebRtcFrameTransport", () => {
 		expect(peer.channel.sent.at(-1)).toBe("client-frame");
 
 		frame.mockClear();
+		const transferProgress = vi.fn();
+		transport.onTransferProgress(transferProgress);
 		const largeServerFrame = JSON.stringify({ type: "session_sync", content: "remote history 🙂 ".repeat(20_000) });
-		for (const chunk of encodeDataChannelFrame(largeServerFrame, "server_large")) peer.channel.receive(chunk);
+		const serverChunks = encodeDataChannelFrame(largeServerFrame, "server_large");
+		for (const chunk of serverChunks) peer.channel.receive(chunk);
 		expect(frame).toHaveBeenCalledTimes(1);
 		expect(frame).toHaveBeenCalledWith(largeServerFrame);
+		expect(transferProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+			id: "server_large",
+			receivedChunks: serverChunks.length,
+			totalChunks: serverChunks.length,
+		}));
 
 		const sentBeforeLargeFrame = peer.channel.sent.length;
 		const largeClientFrame = JSON.stringify({ v: 2, kind: "request", content: "upload data ".repeat(20_000) });

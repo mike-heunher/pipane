@@ -81,6 +81,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	private readonly statusListeners = new Set<() => void>();
 	private readonly sessionsChangedListeners = new Set<(file: string) => void>();
 	private readonly piInstallRequiredListeners = new Set<(info: PiInstallRequiredInfo) => void>();
+	private readonly conversationLoadListeners = new Set<() => void>();
 	private readonly workspaceListeners = new Set<() => void>();
 
 	constructor(
@@ -116,6 +117,7 @@ export class WorkspaceBackendClient implements BackendClient {
 	get cwd(): string | undefined { return this.activeClient?.cwd; }
 	get activeBackendId(): string { return this.activeId; }
 	get supportsUploadedImagePrompt(): boolean { return this.activeClient?.supportsUploadedImagePrompt === true; }
+	get conversationLoadProgress() { return this.activeClient?.conversationLoadProgress; }
 
 	get workspaceBackends(): readonly WorkspaceBackendState[] {
 		return [...this.contexts.values()].map((context) => ({
@@ -199,6 +201,9 @@ export class WorkspaceBackendClient implements BackendClient {
 	}
 	onPiInstallRequired(fn: (info: PiInstallRequiredInfo) => void): () => void {
 		return addListener(this.piInstallRequiredListeners, fn);
+	}
+	onConversationLoadProgress(fn: () => void): () => void {
+		return addListener(this.conversationLoadListeners, fn);
 	}
 	onWorkspaceChange(fn: () => void): () => void {
 		return addListener(this.workspaceListeners, fn);
@@ -400,6 +405,9 @@ export class WorkspaceBackendClient implements BackendClient {
 			client.onPiInstallRequired((info) => {
 				if (this.activeId === backendId) this.emit(this.piInstallRequiredListeners, info);
 			}),
+			client.onConversationLoadProgress?.(() => {
+				if (this.activeId === backendId) this.emit(this.conversationLoadListeners);
+			}) ?? (() => {}),
 		);
 		return client;
 	}
@@ -551,6 +559,7 @@ export class WorkspaceBackendClient implements BackendClient {
 		this.emit(this.statusListeners);
 		this.emit(this.extensionStatusListeners);
 		this.emit(this.steeringQueueListeners);
+		this.emit(this.conversationLoadListeners);
 		this.emit(this.sessionsChangedListeners, "__local_settings__");
 	}
 
