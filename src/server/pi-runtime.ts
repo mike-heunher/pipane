@@ -1,10 +1,14 @@
 import path from "node:path";
 import { existsSync as fsExistsSync } from "node:fs";
-import { spawnSync as childSpawnSync } from "node:child_process";
+import {
+	execFile as childExecFile,
+	spawnSync as childSpawnSync,
+} from "node:child_process";
 
 type RuntimeDeps = {
 	existsSync?: (file: string) => boolean;
 	spawnSync?: typeof childSpawnSync;
+	execFile?: typeof childExecFile;
 };
 
 function looksLikePath(command: string): boolean {
@@ -41,4 +45,36 @@ export async function installPiGlobal(deps: RuntimeDeps = {}): Promise<boolean> 
 		env: process.env,
 	});
 	return result.status === 0;
+}
+
+/** Force-refresh Pi's persisted remote model catalogs without updating Pi itself. */
+export function refreshPiModelCatalog(
+	launch: { command: string; baseArgs: string[] },
+	cwd: string,
+	deps: RuntimeDeps = {},
+): Promise<void> {
+	const execFile = deps.execFile ?? childExecFile;
+	return new Promise((resolve, reject) => {
+		execFile(
+			launch.command,
+			[...launch.baseArgs, "update", "--models"],
+			{
+				cwd,
+				env: process.env,
+				timeout: 30_000,
+				maxBuffer: 1024 * 1024,
+			},
+			(error, _stdout, stderr) => {
+				if (!error) {
+					resolve();
+					return;
+				}
+				const details = String(stderr || "").trim();
+				reject(new Error(
+					details ? `Pi model catalog refresh failed: ${details}` : `Pi model catalog refresh failed: ${error.message}`,
+					{ cause: error },
+				));
+			},
+		);
+	});
 }

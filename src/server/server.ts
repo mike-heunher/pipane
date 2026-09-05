@@ -26,11 +26,12 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
 import { resolvePiLaunch } from "./pi-launch.js";
-import { checkCommandAvailable, makePiNotFoundMessage } from "./pi-runtime.js";
+import { checkCommandAvailable, makePiNotFoundMessage, refreshPiModelCatalog } from "./pi-runtime.js";
 import { registerRestApi } from "./rest-api.js";
 import { SessionRegistry } from "./session-registry.js";
 import { ProcessPool } from "./process-pool.js";
 import { WsHandler } from "./ws-handler.js";
+import { ModelCatalogCoordinator } from "./model-catalog-refresh.js";
 import { LocalSettingsStore } from "./local-settings.js";
 import { resolveUsageExtensionPath } from "./bundled-extensions.js";
 import { UpdateManager } from "./update-manager.js";
@@ -286,6 +287,17 @@ const pool = new ProcessPool(
 	},
 );
 
+const modelCatalog = new ModelCatalogCoordinator({
+	refresh: () => refreshPiModelCatalog(PI_LAUNCH, PI_CWD),
+	onRefreshed: () => {
+		const recycled = pool.decommissionAll();
+		console.log(`[models] Catalog refreshed; recycling workers (${recycled.killed} idle, ${recycled.draining} active)`);
+	},
+	onError: (error) => {
+		console.warn("[models] Catalog refresh failed; using cached worker snapshot:", error);
+	},
+});
+
 const wsHandler = new WsHandler({
 	registry,
 	pool,
@@ -297,6 +309,7 @@ const wsHandler = new WsHandler({
 			pool.prewarm(PI_CWD);
 		}
 	},
+	prepareAvailableModels: () => modelCatalog.prepare(),
 	isRequestAuthorized: (req) => authGuard.isAuthorizedWebSocketRequest(req),
 	materializeUploadedImage: (uploadedPath, mimeType) => backendApi.materializeUploadedImage(uploadedPath, mimeType),
 });

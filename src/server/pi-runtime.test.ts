@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { checkCommandAvailable, installPiGlobal, isPiInstallable } from "./pi-runtime";
+import {
+	checkCommandAvailable,
+	installPiGlobal,
+	isPiInstallable,
+	refreshPiModelCatalog,
+} from "./pi-runtime";
 
 describe("pi runtime checks", () => {
 	it("treats absolute command paths as available when file exists", () => {
@@ -28,5 +33,36 @@ describe("pi runtime checks", () => {
 			["install", "-g", "@earendil-works/pi-coding-agent"],
 			expect.objectContaining({ stdio: "inherit" }),
 		);
+	});
+
+	it("refreshes only Pi model catalogs through the configured launch command", async () => {
+		const execFile = vi.fn((_command, _args, _options, callback) => {
+			callback(null, "Model catalogs refreshed\n", "");
+		}) as any;
+
+		await refreshPiModelCatalog(
+			{ command: "node", baseArgs: ["/opt/pi/cli.js"] },
+			"/work/project",
+			{ execFile },
+		);
+
+		expect(execFile).toHaveBeenCalledWith(
+			"node",
+			["/opt/pi/cli.js", "update", "--models"],
+			expect.objectContaining({ cwd: "/work/project", timeout: 30_000 }),
+			expect.any(Function),
+		);
+	});
+
+	it("reports model catalog refresh failures", async () => {
+		const execFile = vi.fn((_command, _args, _options, callback) => {
+			callback(new Error("exit 1"), "", "catalog endpoint unavailable\n");
+		}) as any;
+
+		await expect(refreshPiModelCatalog(
+			{ command: "pi", baseArgs: [] },
+			"/tmp",
+			{ execFile },
+		)).rejects.toThrow("Pi model catalog refresh failed: catalog endpoint unavailable");
 	});
 });

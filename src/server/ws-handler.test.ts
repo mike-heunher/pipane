@@ -20,6 +20,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 			createPath: (filename: string) => path.join("/tmp", filename),
 		},
 		materializeUploadedImage,
+		prepareAvailableModels,
 		...poolOverrides
 	} = overrides;
 	const poolEventListeners = new Set<(proc: any, event: any) => void>();
@@ -51,6 +52,7 @@ function makeHandler(overrides: Record<string, any> = {}) {
 		defaultCwd: "/tmp",
 		piLaunch: { command: "pi", baseArgs: [] },
 		ensurePool,
+		prepareAvailableModels,
 		isRequestAuthorized: () => true,
 		materializeUploadedImage,
 	}) as any;
@@ -1104,6 +1106,40 @@ describe("WsHandler session path confinement", () => {
 		} finally {
 			rmSync(fixture.tmpDir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("WsHandler model discovery", () => {
+	it("prepares refreshed catalogs before acquiring a worker snapshot", async () => {
+		const calls: string[] = [];
+		const proc = { id: 49 };
+		const release = vi.fn();
+		const prepareAvailableModels = vi.fn(async () => { calls.push("prepare"); });
+		const acquireAny = vi.fn(() => {
+			calls.push("acquire");
+			return { process: proc, release };
+		});
+		const sendRpcChecked = vi.fn(async () => ({
+			success: true,
+			data: { models: [{ provider: "openai-codex", id: "new-model" }] },
+		}));
+		const { handler } = makeHandler({ prepareAvailableModels, acquireAny, sendRpcChecked });
+		const { ws, sent } = makeWs();
+
+		await handler.handleGetAvailableModels(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "models",
+			type: "get_available_models",
+		});
+
+		expect(calls).toEqual(["prepare", "acquire"]);
+		expect(sendRpcChecked).toHaveBeenCalledWith(proc, { type: "get_available_models" });
+		expect(release).toHaveBeenCalledOnce();
+		expect(sent).toContainEqual(expect.objectContaining({
+			id: "models",
+			success: true,
+			data: { models: [{ provider: "openai-codex", id: "new-model" }] },
+		}));
 	});
 });
 

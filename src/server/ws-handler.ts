@@ -76,6 +76,7 @@ export interface WsHandlerOptions {
 	defaultCwd: string;
 	piLaunch: { command: string; baseArgs: string[] };
 	ensurePool: () => void;
+	prepareAvailableModels?: () => Promise<unknown>;
 	isRequestAuthorized: (req: IncomingMessage) => boolean;
 	materializeUploadedImage?: (uploadedPath: string, mimeType: string) => Promise<InlineWireImage>;
 }
@@ -195,6 +196,7 @@ export class WsHandler {
 	private defaultCwd: string;
 	private piLaunch: { command: string; baseArgs: string[] };
 	private ensurePool: () => void;
+	private prepareAvailableModels: () => Promise<unknown>;
 	private isRequestAuthorized: (req: IncomingMessage) => boolean;
 	private materializeUploadedImage: NonNullable<WsHandlerOptions["materializeUploadedImage"]>;
 
@@ -229,6 +231,7 @@ export class WsHandler {
 		this.defaultCwd = options.defaultCwd;
 		this.piLaunch = options.piLaunch;
 		this.ensurePool = options.ensurePool;
+		this.prepareAvailableModels = options.prepareAvailableModels ?? (async () => {});
 		this.isRequestAuthorized = options.isRequestAuthorized;
 		this.materializeUploadedImage = options.materializeUploadedImage ?? (async () => {
 			throw new Error("Uploaded image references are unavailable");
@@ -1024,6 +1027,9 @@ export class WsHandler {
 	}
 
 	private async handleGetAvailableModels(ws: ServerFrameConnection, command: CommandOf<"get_available_models">): Promise<void> {
+		// Pi RPC exposes an in-memory snapshot only. Give the host a chance to
+		// refresh the persisted catalogs and recycle stale workers before reading it.
+		await this.prepareAvailableModels();
 		const lease = await this.acquireAnyProcess();
 		try {
 			const response = await this.pool.sendRpcChecked(lease.process, { type: "get_available_models" });
