@@ -17,6 +17,7 @@ import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agen
 import {
 	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
 	MAX_UPLOAD_FILE_BYTES,
+	SEGMENTED_SESSION_SYNC_FEATURE,
 	UPLOADED_IMAGE_PROMPT_FEATURE,
 } from "../shared/backend-api.js";
 import { BACKEND_PROTOCOL_VERSION } from "../shared/backend-protocol.js";
@@ -147,6 +148,7 @@ export class LocalBackendApi implements BackendApi {
 				"file-upload",
 				UPLOADED_IMAGE_PROMPT_FEATURE,
 				CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
+				SEGMENTED_SESSION_SYNC_FEATURE,
 				"local-settings",
 				"updates",
 			],

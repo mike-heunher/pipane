@@ -83,17 +83,23 @@ function makeWs() {
 	const sent: any[] = [];
 	const sendOptions: any[] = [];
 	const cancelTransfer = vi.fn();
+	const record = (raw: string, options?: unknown) => {
+		sent.push(JSON.parse(raw));
+		sendOptions.push(options);
+	};
+	const sendSequence = vi.fn((frames: Iterable<string>, options?: unknown) => {
+		for (const frame of frames) record(frame, options);
+	});
 	return {
 		ws: {
 			readyState: WebSocket.OPEN,
-			send: (raw: string, options?: unknown) => {
-				sent.push(JSON.parse(raw));
-				sendOptions.push(options);
-			},
+			send: record,
+			sendSequence,
 			cancelTransfer,
 		} as any,
 		sent,
 		sendOptions,
+		sendSequence,
 		cancelTransfer,
 	};
 }
@@ -245,6 +251,44 @@ describe("WsHandler protocol boundary", () => {
 			messages: [{ hash: computeHashSync(JSON.stringify(second)), message: second }],
 			state: { isStreaming: true, thinkingLevel: "off" },
 		});
+	});
+
+	it("segments an uncached large initial state into bounded content batches", () => {
+		const messages = Array.from({ length: 34 }, (_, index) => ({
+			role: "toolResult",
+			toolCallId: `tool-${index}`,
+			content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024) }],
+			isError: false,
+			timestamp: index,
+		})) as any[];
+		const sessionPath = "/tmp/segmented-content.jsonl";
+		const { handler, registry } = makeHandler();
+		const actor = registry.get(sessionPath);
+		actor.attach({ process: { id: 93 }, release: vi.fn() } as any, new SessionJsonl({
+			messages,
+			model: null,
+			thinkingLevel: "off",
+		}));
+		const { ws, sent, sendSequence } = makeWs();
+		handler.clients.set(ws, { subscribedSession: null, lastVersion: 0, lastJson: "", lastHash: "" });
+
+		handler.handleSubscribeSession(ws, {
+			protocolVersion: WS_PROTOCOL_VERSION,
+			id: "segmented",
+			type: "subscribe_session",
+			sessionPath,
+			knownMessageHashes: [],
+			segmentedContent: true,
+		});
+
+		const syncs = sent.filter((message) => message.type === "session_sync");
+		expect(Buffer.byteLength(actor.session!.json)).toBeGreaterThan(64 * 1024 * 1024);
+		expect(sendSequence).toHaveBeenCalledOnce();
+		expect(syncs[0]).toMatchObject({ op: "content_manifest", batchCount: 12 });
+		expect(syncs.slice(1).every((message) => message.op === "content_batch")).toBe(true);
+		expect(syncs.slice(1).map((message) => message.batchIndex)).toEqual(Array.from({ length: 12 }, (_, index) => index));
+		expect(syncs.flatMap((message) => message.messages ?? [])).toHaveLength(messages.length);
+		expect(syncs.every((message) => Buffer.byteLength(JSON.stringify(message)) < 64 * 1024 * 1024)).toBe(true);
 	});
 
 	it("confirms an unchanged cached state without retransmitting messages", () => {

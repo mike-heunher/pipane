@@ -43,14 +43,20 @@ import { checkCommandAvailable, installPiGlobal, isPiInstallable, makePiNotFound
 import { modelsMatch, toCompactModelRef } from "../shared/thinking-levels.js";
 import { computeSyncOp } from "../shared/jsonl-sync.js";
 import { COMPACT_RPC_TIMEOUT_MS } from "../shared/rpc-timeouts.js";
-import { ACTIVE_SESSION_SYNC_TRANSFER_KEY } from "../shared/data-channel-framing.js";
+import {
+	ACTIVE_SESSION_SYNC_TRANSFER_KEY,
+	MAX_DATA_CHANNEL_FRAME_BYTES,
+} from "../shared/data-channel-framing.js";
 import {
 	assertNever,
 	decodeClientCommand,
 	encodeServerMessage,
+	MAX_SEGMENTED_SESSION_SYNC_BATCHES,
+	MAX_SEGMENTED_SESSION_SYNC_BYTES,
 	type ClientCommand,
 	type ClientCommandType,
 	type CommandResponseData,
+	type ContentAddressedMessage,
 	type ExtensionStatusMessage,
 	type ProviderUsageMessage,
 	type ServerMessagePayload,
@@ -82,6 +88,7 @@ export interface WsHandlerOptions {
 }
 
 type CommandOf<Type extends ClientCommandType> = Extract<ClientCommand, { type: Type }>;
+const SESSION_SYNC_CONTENT_BATCH_TARGET_BYTES = 8 * 1024 * 1024;
 type ControlCommand = CommandOf<"prompt"> | CommandOf<"fork_prompt">;
 type IdempotentControlCommand = ControlCommand | CommandOf<"steer"> | CommandOf<"fork_current">;
 type IdempotentControlType = IdempotentControlCommand["type"];
@@ -692,16 +699,16 @@ export class WsHandler {
 		json: string,
 		hash: string,
 		command: CommandOf<"subscribe_session">,
-	): ServerMessagePayload {
+	): ServerMessagePayload[] {
 		const revision = this.revisionForState(sessionPath, hash);
 		if (command.cachedStateHash === hash) {
-			return { type: "session_sync", sessionPath, revision, op: "not_modified", hash };
+			return [{ type: "session_sync", sessionPath, revision, op: "not_modified", hash }];
 		}
 		if (command.knownMessageHashes !== undefined) {
 			const state = JSON.parse(json) as WireSessionState;
 			const known = new Set(command.knownMessageHashes);
 			const messageHashes: string[] = [];
-			const messages: Array<{ hash: string; message: WireSessionState["messages"][number] }> = [];
+			const messages: ContentAddressedMessage[] = [];
 			const emitted = new Set<string>();
 			for (const message of state.messages) {
 				const messageHash = computeHashSync(JSON.stringify(message));
@@ -712,7 +719,26 @@ export class WsHandler {
 				}
 			}
 			const { messages: _messages, ...metadata } = state;
-			return {
+			if (command.segmentedContent) {
+				const stateBytes = Buffer.byteLength(json);
+				if (stateBytes > MAX_SEGMENTED_SESSION_SYNC_BYTES) {
+					throw new Error(`Session state requires ${stateBytes} bytes; the segmented sync limit is ${MAX_SEGMENTED_SESSION_SYNC_BYTES} bytes`);
+				}
+				const transferId = `${revision.toString(36)}-${hash.slice(0, 16)}`;
+				const batches = this.makeContentBatches(sessionPath, revision, hash, transferId, messages);
+				return [{
+					type: "session_sync",
+					sessionPath,
+					revision,
+					op: "content_manifest",
+					hash,
+					transferId,
+					messageHashes,
+					state: metadata,
+					batchCount: batches.length,
+				}, ...batches];
+			}
+			return [{
 				type: "session_sync",
 				sessionPath,
 				revision,
@@ -721,9 +747,73 @@ export class WsHandler {
 				messageHashes,
 				messages,
 				state: metadata,
-			};
+			}];
 		}
-		return { type: "session_sync", sessionPath, revision, op: "full", data: json, hash };
+		return [{ type: "session_sync", sessionPath, revision, op: "full", data: json, hash }];
+	}
+
+	private makeContentBatches(
+		sessionPath: string,
+		revision: number,
+		hash: string,
+		transferId: string,
+		messages: ContentAddressedMessage[],
+	): ServerMessagePayload[] {
+		const batches: ContentAddressedMessage[][] = [];
+		let current: ContentAddressedMessage[] = [];
+		let currentBytes = 0;
+		const envelopeBytes = Buffer.byteLength(encodeServerMessage({
+			type: "session_sync",
+			sessionPath,
+			revision,
+			op: "content_batch",
+			hash,
+			transferId,
+			batchIndex: 0,
+			messages: [],
+		})) - 2;
+
+		for (const message of messages) {
+			const messageBytes = Buffer.byteLength(JSON.stringify(message));
+			const nextBytes = envelopeBytes + currentBytes + messageBytes + (current.length > 0 ? 1 : 0);
+			if (current.length > 0 && nextBytes > SESSION_SYNC_CONTENT_BATCH_TARGET_BYTES) {
+				batches.push(current);
+				current = [];
+				currentBytes = 0;
+			}
+			const singleFrameBytes = envelopeBytes + messageBytes;
+			if (singleFrameBytes > MAX_DATA_CHANNEL_FRAME_BYTES - 1024) {
+				throw new Error(`One materialized session message requires ${singleFrameBytes} bytes; the per-message sync limit is ${MAX_DATA_CHANNEL_FRAME_BYTES - 1024} bytes`);
+			}
+			current.push(message);
+			currentBytes += messageBytes + (current.length > 1 ? 1 : 0);
+		}
+		if (current.length > 0) batches.push(current);
+		if (batches.length > MAX_SEGMENTED_SESSION_SYNC_BATCHES) {
+			throw new Error(`Session sync requires ${batches.length} batches; the limit is ${MAX_SEGMENTED_SESSION_SYNC_BATCHES}`);
+		}
+
+		return batches.map((batch, batchIndex) => ({
+			type: "session_sync",
+			sessionPath,
+			revision,
+			op: "content_batch",
+			hash,
+			transferId,
+			batchIndex,
+			messages: batch,
+		}));
+	}
+
+	private sendInitialSessionSync(ws: ServerFrameConnection, payloads: ServerMessagePayload[]): void {
+		const options = { priority: "bulk", transferKey: SESSION_SYNC_TRANSFER_KEY } as const;
+		if (payloads.length > 1 && ws.sendSequence) {
+			ws.sendSequence((function* () {
+				for (const payload of payloads) yield encodeServerMessage(payload);
+			})(), options);
+			return;
+		}
+		for (const payload of payloads) this.sendMessage(ws, payload);
 	}
 
 	private handleSubscribeSession(ws: ServerFrameConnection, command: CommandOf<"subscribe_session">): void {
@@ -767,7 +857,7 @@ export class WsHandler {
 			client.lastJson = attached.json;
 			client.lastHash = attached.hash;
 			client.lastVersion = attached.version;
-			this.sendMessage(ws, this.makeInitialSessionSync(
+			this.sendInitialSessionSync(ws, this.makeInitialSessionSync(
 				sessionPath,
 				attached.json,
 				attached.hash,
@@ -781,7 +871,7 @@ export class WsHandler {
 			client.lastVersion = 0;
 			// Track file size for change detection
 			this.subscribedFileSizes.set(sessionPath, getSessionFileSize(sessionPath));
-			this.sendMessage(ws, this.makeInitialSessionSync(sessionPath, json, hash, command));
+			this.sendInitialSessionSync(ws, this.makeInitialSessionSync(sessionPath, json, hash, command));
 		}
 
 		// Extension status is a separate, authoritative snapshot so reconnects

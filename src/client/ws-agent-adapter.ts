@@ -21,6 +21,7 @@ import { ACTIVE_SESSION_SYNC_TRANSFER_KEY } from "../shared/data-channel-framing
 import type { ToolCallTimings } from "../shared/tool-runtime.js";
 import {
 	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
+	SEGMENTED_SESSION_SYNC_FEATURE,
 	UPLOADED_IMAGE_PROMPT_FEATURE,
 } from "../shared/backend-api.js";
 import type { UpdateTarget } from "../shared/updates.js";
@@ -30,8 +31,11 @@ import {
 	decodeSessionStateJson,
 	encodeClientCommand,
 	MAX_KNOWN_SESSION_MESSAGE_HASHES,
+	MAX_SEGMENTED_SESSION_SYNC_BYTES,
+	WS_PROTOCOL_VERSION,
 	type ClientCommandPayload,
 	type ClientCommandType,
+	type ContentAddressedMessage,
 	type CommandResponseData,
 	type ProtocolDecodeError,
 	type SessionStats,
@@ -109,6 +113,20 @@ interface PendingRequest {
 	timer?: ReturnType<typeof setTimeout>;
 	resolve: (data: unknown) => void;
 	reject: (error: Error) => void;
+}
+
+interface PendingSegmentedSessionSync {
+	sessionPath: string;
+	sessionNonce: number;
+	revision: number;
+	hash: string;
+	transferId: string;
+	messageHashes: string[];
+	state: import("../shared/ws-protocol.js").WireSessionStateMetadata;
+	batchCount: number;
+	nextBatchIndex: number;
+	receivedBytes: number;
+	messages: ContentAddressedMessage[];
 }
 
 interface CompactionQueuedPrompt {
@@ -263,6 +281,8 @@ export class WsAgentAdapter implements BackendClient {
 	// ── session_sync frame queue ──────────────────────────────────────────
 	/** Ordered operations waiting to be applied; deltas are hash-dependent. */
 	private _pendingSessionSyncs: ScopedSessionSync[] = [];
+	/** Initial content snapshot currently arriving as bounded semantic batches. */
+	private _pendingSegmentedSessionSync: PendingSegmentedSessionSync | undefined;
 	/** True when a frame callback has been scheduled to flush session_sync. */
 	private _sessionSyncFlushScheduled = false;
 	/** True while applySessionSync is running to prevent concurrent flushes. */
@@ -313,7 +333,8 @@ export class WsAgentAdapter implements BackendClient {
 
 	private handleTransferProgress(progress: FrameTransferProgress): void {
 		const current = this._conversationLoadProgress;
-		if (!current || !progress.id.startsWith(`${ACTIVE_SESSION_SYNC_TRANSFER_KEY}_`)) return;
+		if (!current || this._pendingSegmentedSessionSync
+			|| !progress.id.startsWith(`${ACTIVE_SESSION_SYNC_TRANSFER_KEY}_`)) return;
 		if (current.sessionPath !== this._sessionPath) return;
 		if (progress.cancelled) {
 			this.setConversationLoadProgress({
@@ -722,6 +743,8 @@ export class WsAgentAdapter implements BackendClient {
 		const nonce = this._sessionNonce;
 		try {
 			const knownMessageHashes = [...new Set(this._cachedMessageHashes)];
+			const supportsSegmentedSync = !!sessionPath
+				&& this._backendFeatures.has(SEGMENTED_SESSION_SYNC_FEATURE);
 			const canResume = !forceFull
 				&& !!sessionPath
 				&& this._backendFeatures.has(CONTENT_ADDRESSED_SESSION_SYNC_FEATURE)
@@ -735,7 +758,10 @@ export class WsAgentAdapter implements BackendClient {
 				...(canResume ? {
 					cachedStateHash: this._cachedStateHash,
 					knownMessageHashes,
+				} : supportsSegmentedSync ? {
+					knownMessageHashes: [],
 				} : {}),
+				...(supportsSegmentedSync ? { segmentedContent: true as const } : {}),
 			});
 		} catch (err) {
 			// A delayed subscription can race with navigation or deletion. Its
@@ -777,6 +803,87 @@ export class WsAgentAdapter implements BackendClient {
 		this._state.error = message;
 		this.emitStatusChange();
 		if (error.code === "unsupported_version") this.transport.close(1002, "Unsupported protocol version");
+	}
+
+	private handleSegmentedSessionSync(message: SessionSyncMessage): void {
+		if (message.op === "content_manifest") {
+			if (message.sessionPath !== this._sessionPath) return;
+			this._pendingSegmentedSessionSync = {
+				sessionPath: message.sessionPath,
+				sessionNonce: this._sessionNonce,
+				revision: message.revision,
+				hash: message.hash,
+				transferId: message.transferId,
+				messageHashes: [...message.messageHashes],
+				state: message.state,
+				batchCount: message.batchCount,
+				nextBatchIndex: 0,
+				receivedBytes: 0,
+				messages: [],
+			};
+			this.setConversationLoadProgress({
+				sessionPath: message.sessionPath,
+				phase: message.batchCount === 0 ? "processing" : "receiving",
+				receivedChunks: 0,
+				totalChunks: message.batchCount,
+			});
+			if (message.batchCount === 0) this.completeSegmentedSessionSync();
+			return;
+		}
+		if (message.op !== "content_batch") return;
+		const pending = this._pendingSegmentedSessionSync;
+		if (!pending || message.transferId !== pending.transferId) return;
+		if (message.sessionPath !== pending.sessionPath
+			|| message.revision !== pending.revision
+			|| message.hash !== pending.hash
+			|| message.batchIndex !== pending.nextBatchIndex
+			|| message.batchIndex >= pending.batchCount) {
+			console.error("[ws-adapter] Segmented session sync sequence is inconsistent; re-subscribing");
+			this._pendingSegmentedSessionSync = undefined;
+			this._awaitingFullSync = undefined;
+			void this.requestFullSessionSync(pending.sessionPath, true);
+			return;
+		}
+		pending.receivedBytes += message.messages.reduce(
+			(total, body) => total + new TextEncoder().encode(JSON.stringify(body.message)).byteLength,
+			0,
+		);
+		if (pending.receivedBytes > MAX_SEGMENTED_SESSION_SYNC_BYTES) {
+			console.error("[ws-adapter] Segmented session sync exceeds its aggregate limit; re-subscribing");
+			this._pendingSegmentedSessionSync = undefined;
+			this._awaitingFullSync = undefined;
+			void this.requestFullSessionSync(pending.sessionPath, true);
+			return;
+		}
+		pending.messages.push(...message.messages);
+		pending.nextBatchIndex++;
+		this.setConversationLoadProgress({
+			sessionPath: pending.sessionPath,
+			phase: pending.nextBatchIndex === pending.batchCount ? "processing" : "receiving",
+			receivedChunks: pending.nextBatchIndex,
+			totalChunks: pending.batchCount,
+		});
+		if (pending.nextBatchIndex === pending.batchCount) this.completeSegmentedSessionSync();
+	}
+
+	private completeSegmentedSessionSync(): void {
+		const pending = this._pendingSegmentedSessionSync;
+		if (!pending || pending.sessionPath !== this._sessionPath
+			|| pending.sessionNonce !== this._sessionNonce) return;
+		this._pendingSegmentedSessionSync = undefined;
+		this.enqueueSessionSync({
+			protocolVersion: WS_PROTOCOL_VERSION,
+			type: "session_sync",
+			sessionPath: pending.sessionPath,
+			revision: pending.revision,
+			op: "content",
+			hash: pending.hash,
+			messageHashes: pending.messageHashes,
+			messages: pending.messages,
+			state: pending.state,
+			__sessionPath: pending.sessionPath,
+			__sessionNonce: pending.sessionNonce,
+		});
 	}
 
 	private handleMessage(raw: string): void {
@@ -856,6 +963,10 @@ export class WsAgentAdapter implements BackendClient {
 			}
 			case "session_sync":
 				if (data.sessionPath !== this._sessionPath) return;
+				if (data.op === "content_manifest" || data.op === "content_batch") {
+					this.handleSegmentedSessionSync(data);
+					return;
+				}
 				this.enqueueSessionSync({
 					...data,
 					__sessionPath: data.sessionPath,
@@ -948,6 +1059,7 @@ export class WsAgentAdapter implements BackendClient {
 
 	private clearSessionSyncQueue() {
 		this._pendingSessionSyncs = [];
+		this._pendingSegmentedSessionSync = undefined;
 		this._sessionSyncFlushScheduled = false;
 	}
 
@@ -1036,6 +1148,8 @@ export class WsAgentAdapter implements BackendClient {
 				// and emitting the identical state would needlessly rerender the thread.
 				continue;
 			}
+			// Segmented envelopes are assembled before entering this queue.
+			if (syncMessage.op !== "content") continue;
 
 			const objects = new Map(this._cachedMessageObjects);
 			for (const body of syncMessage.messages) objects.set(body.hash, body.message);

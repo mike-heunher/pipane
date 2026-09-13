@@ -15,7 +15,11 @@ import { WsAgentAdapter, type WsAgentAdapterOptions } from "./ws-agent-adapter.j
 import type { FrameTransport } from "./frame-transport.js";
 import { computeHash, computePatches } from "../shared/jsonl-sync.js";
 import { WS_PROTOCOL_VERSION } from "../shared/ws-protocol.js";
-import { CONTENT_ADDRESSED_SESSION_SYNC_FEATURE, UPLOADED_IMAGE_PROMPT_FEATURE } from "../shared/backend-api.js";
+import {
+	CONTENT_ADDRESSED_SESSION_SYNC_FEATURE,
+	SEGMENTED_SESSION_SYNC_FEATURE,
+	UPLOADED_IMAGE_PROMPT_FEATURE,
+} from "../shared/backend-api.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -1381,6 +1385,52 @@ describe("WsAgentAdapter prompt routing", () => {
 			expect(a._cachedMessageHashes).toEqual([cachedMessageHash, newMessageHash]);
 		});
 
+		it("assembles bounded content batches before verifying and applying the state", async () => {
+			const sessionPath = "/tmp/sessions/segmented.jsonl";
+			const frames: FrameRequestCallback[] = [];
+			const { adapter } = createTestAdapter({
+				requestFrame: (callback) => { frames.push(callback); return frames.length; },
+			});
+			const a = adapter as any;
+			a._sessionPath = sessionPath;
+			const first = { role: "user", content: "first", timestamp: 1 };
+			const second = { role: "assistant", content: [{ type: "text", text: "second" }], timestamp: 2 };
+			const firstHash = await computeHash(JSON.stringify(first));
+			const secondHash = await computeHash(JSON.stringify(second));
+			const state = {
+				messages: [first, second],
+				isStreaming: false,
+				pendingToolCalls: [],
+				toolCallTimings: {},
+				model: null,
+				thinkingLevel: "off",
+				steeringQueue: [],
+			};
+			const hash = await computeHash(JSON.stringify(state));
+			const metadata = { ...state, messages: undefined } as any;
+			delete metadata.messages;
+
+			a.handleSegmentedSessionSync({
+				type: "session_sync", sessionPath, revision: 4, op: "content_manifest", hash,
+				transferId: "transfer-4", messageHashes: [firstHash, secondHash], state: metadata, batchCount: 2,
+			});
+			a.handleSegmentedSessionSync({
+				type: "session_sync", sessionPath, revision: 4, op: "content_batch", hash,
+				transferId: "transfer-4", batchIndex: 0, messages: [{ hash: firstHash, message: first }],
+			});
+			expect(a._pendingSessionSyncs).toHaveLength(0);
+			a.handleSegmentedSessionSync({
+				type: "session_sync", sessionPath, revision: 4, op: "content_batch", hash,
+				transferId: "transfer-4", batchIndex: 1, messages: [{ hash: secondHash, message: second }],
+			});
+			expect(a._pendingSessionSyncs).toHaveLength(1);
+
+			frames.shift()!(0);
+			await vi.waitFor(() => expect(adapter.state.messages).toEqual([first, second]));
+			expect(a._syncHash).toBe(hash);
+			expect(a._pendingSegmentedSessionSync).toBeUndefined();
+		});
+
 		it("accepts not-modified without decoding or rerendering the visible cache", async () => {
 			const sessionPath = "/tmp/sessions/unchanged.jsonl";
 			const { adapter } = setupWithSession(sessionPath);
@@ -1549,6 +1599,21 @@ describe("WsAgentAdapter prompt routing", () => {
 			frames.shift()!(0);
 			expect(adapter.state.messages).toEqual(fullState.messages);
 			expect(content).toHaveBeenCalledOnce();
+		});
+
+		it("requests segmented content even when no cached snapshot exists", async () => {
+			const sessionPath = "/tmp/sessions/uncached-large.jsonl";
+			const { adapter, sent } = setupWithSession(sessionPath);
+			const a = adapter as any;
+			a._backendFeatures.add(SEGMENTED_SESSION_SYNC_FEATURE);
+
+			await a.subscribeToSession(sessionPath);
+
+			expect(sent.at(-1)).toMatchObject({
+				type: "subscribe_session",
+				knownMessageHashes: [],
+				segmentedContent: true,
+			});
 		});
 
 		it("advertises cached hashes only when the backend capability is present", async () => {

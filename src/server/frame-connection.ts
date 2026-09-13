@@ -22,6 +22,8 @@ export interface FrameSendOptions {
 export interface ServerFrameConnection {
 	readonly readyState: number;
 	send(frame: string, options?: FrameSendOptions): unknown;
+	/** Lazily enqueue a logical frame sequence so large transfers remain memory-bounded. */
+	sendSequence?(frames: Iterable<string>, options?: FrameSendOptions): unknown;
 	/** Drop queued physical chunks for a stale logical transfer. */
 	cancelTransfer?(transferKey: string): void;
 	close(code?: number, reason?: string): unknown;
@@ -41,6 +43,12 @@ interface OutgoingFrame {
 	transferKey?: string;
 }
 
+interface OutgoingSequence {
+	iterator: Iterator<string>;
+	current?: OutgoingFrame;
+	transferKey?: string;
+}
+
 /**
  * Bounded two-lane scheduler shared by server WebSocket and DataChannel carriers.
  * Control frames may overtake queued bulk chunks, while each logical frame keeps
@@ -48,7 +56,7 @@ interface OutgoingFrame {
  */
 class PrioritizedFrameQueue {
 	private readonly control: OutgoingFrame[] = [];
-	private readonly bulk: OutgoingFrame[] = [];
+	private readonly bulk: Array<OutgoingFrame | OutgoingSequence> = [];
 	private nextFrameId = 0;
 	private queuedBytes = 0;
 	private flushing = false;
@@ -61,8 +69,28 @@ class PrioritizedFrameQueue {
 	) {}
 
 	enqueue(frame: string, options: FrameSendOptions = {}): void {
+		try {
+			const outgoing = this.createFrame(frame, options.transferKey);
+			(options.priority === "bulk" ? this.bulk : this.control).push(outgoing);
+			this.flush();
+		} catch (error) {
+			this.onFailure();
+			throw error;
+		}
+	}
+
+	enqueueSequence(frames: Iterable<string>, options: FrameSendOptions = {}): void {
+		if (options.priority !== "bulk") throw new Error("Carrier frame sequences must use bulk priority");
+		this.bulk.push({
+			iterator: frames[Symbol.iterator](),
+			...(options.transferKey ? { transferKey: options.transferKey } : {}),
+		});
+		this.flush();
+	}
+
+	private createFrame(frame: string, transferKey?: string): OutgoingFrame {
 		const sequence = (++this.nextFrameId).toString(36);
-		const id = options.transferKey === ACTIVE_SESSION_SYNC_TRANSFER_KEY
+		const id = transferKey === ACTIVE_SESSION_SYNC_TRANSFER_KEY
 			? `${ACTIVE_SESSION_SYNC_TRANSFER_KEY}_${sequence}`
 			: `${this.idPrefix}${sequence}`;
 		const messages = encodeDataChannelFrame(frame, id).map((value) => ({
@@ -71,34 +99,42 @@ class PrioritizedFrameQueue {
 		}));
 		const addedBytes = messages.reduce((total, message) => total + message.byteLength, 0);
 		if (this.queuedBytes + addedBytes > MAX_DATA_CHANNEL_QUEUED_BYTES) {
-			this.onFailure();
 			throw new Error("Carrier outgoing frame queue exceeds its limit");
 		}
-		const outgoing: OutgoingFrame = {
+		this.queuedBytes += addedBytes;
+		return {
 			id,
 			messages,
 			nextIndex: 0,
-			...(options.transferKey ? { transferKey: options.transferKey } : {}),
+			...(transferKey ? { transferKey } : {}),
 		};
-		(options.priority === "bulk" ? this.bulk : this.control).push(outgoing);
-		this.queuedBytes += addedBytes;
-		this.flush();
+	}
+
+	private discardFrame(frame: OutgoingFrame, cancellationIds: string[]): void {
+		for (let messageIndex = frame.nextIndex; messageIndex < frame.messages.length; messageIndex++) {
+			this.queuedBytes -= frame.messages[messageIndex].byteLength;
+		}
+		if (frame.nextIndex > 0 && frame.nextIndex < frame.messages.length) cancellationIds.push(frame.id);
 	}
 
 	cancelTransfer(transferKey: string): void {
 		const cancellationIds: string[] = [];
-		for (const queue of [this.control, this.bulk]) {
-			for (let index = queue.length - 1; index >= 0; index--) {
-				const frame = queue[index];
-				if (frame.transferKey !== transferKey) continue;
-				for (let messageIndex = frame.nextIndex; messageIndex < frame.messages.length; messageIndex++) {
-					this.queuedBytes -= frame.messages[messageIndex].byteLength;
-				}
-				if (frame.nextIndex > 0 && frame.nextIndex < frame.messages.length) {
-					cancellationIds.push(frame.id);
-				}
-				queue.splice(index, 1);
+		for (let index = this.control.length - 1; index >= 0; index--) {
+			const frame = this.control[index];
+			if (frame.transferKey !== transferKey) continue;
+			this.discardFrame(frame, cancellationIds);
+			this.control.splice(index, 1);
+		}
+		for (let index = this.bulk.length - 1; index >= 0; index--) {
+			const item = this.bulk[index];
+			if (item.transferKey !== transferKey) continue;
+			if ("iterator" in item) {
+				if (item.current) this.discardFrame(item.current, cancellationIds);
+				item.iterator.return?.();
+			} else {
+				this.discardFrame(item, cancellationIds);
 			}
+			this.bulk.splice(index, 1);
 		}
 
 		const cancellations = cancellationIds.map((id): OutgoingFrame => {
@@ -116,14 +152,35 @@ class PrioritizedFrameQueue {
 		this.flushing = true;
 		try {
 			while (this.canWrite()) {
-				const queue = this.control.length > 0 ? this.control : this.bulk;
-				const frame = queue[0];
-				if (!frame) break;
+				let frame = this.control[0];
+				let sequence: OutgoingSequence | undefined;
+				if (!frame) {
+					const item = this.bulk[0];
+					if (!item) break;
+					if ("iterator" in item) {
+						sequence = item;
+						if (!sequence.current) {
+							const next = sequence.iterator.next();
+							if (next.done) {
+								this.bulk.shift();
+								continue;
+							}
+							sequence.current = this.createFrame(next.value, sequence.transferKey);
+						}
+						frame = sequence.current;
+					} else {
+						frame = item;
+					}
+				}
 				const message = frame.messages[frame.nextIndex];
 				this.write(message.value);
 				frame.nextIndex++;
 				this.queuedBytes -= message.byteLength;
-				if (frame.nextIndex === frame.messages.length) queue.shift();
+				if (frame.nextIndex === frame.messages.length) {
+					if (sequence) sequence.current = undefined;
+					else if (this.control[0] === frame) this.control.shift();
+					else this.bulk.shift();
+				}
 			}
 		} catch {
 			this.onFailure();
@@ -133,6 +190,7 @@ class PrioritizedFrameQueue {
 	}
 
 	clear(): void {
+		for (const item of this.bulk) if ("iterator" in item) item.iterator.return?.();
 		this.control.length = 0;
 		this.bulk.length = 0;
 		this.queuedBytes = 0;
@@ -184,6 +242,11 @@ export class DataChannelFrameConnection implements ServerFrameConnection {
 	send(frame: string, options?: FrameSendOptions): void {
 		if (this.readyState !== FRAME_CONNECTION_OPEN) throw new Error("DataChannel frame connection is closed");
 		this.outgoing.enqueue(frame, options);
+	}
+
+	sendSequence(frames: Iterable<string>, options?: FrameSendOptions): void {
+		if (this.readyState !== FRAME_CONNECTION_OPEN) throw new Error("DataChannel frame connection is closed");
+		this.outgoing.enqueueSequence(frames, options);
 	}
 
 	cancelTransfer(transferKey: string): void {
@@ -247,6 +310,11 @@ export class WebSocketFrameConnection implements ServerFrameConnection {
 	send(frame: string, options?: FrameSendOptions): void {
 		if (this.readyState !== FRAME_CONNECTION_OPEN) throw new Error("WebSocket frame connection is closed");
 		this.outgoing.enqueue(frame, options);
+	}
+
+	sendSequence(frames: Iterable<string>, options?: FrameSendOptions): void {
+		if (this.readyState !== FRAME_CONNECTION_OPEN) throw new Error("WebSocket frame connection is closed");
+		this.outgoing.enqueueSequence(frames, options);
 	}
 
 	cancelTransfer(transferKey: string): void {

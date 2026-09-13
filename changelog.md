@@ -1,5 +1,8 @@
 # Unreleased
 
+# 0.1.19 - 2026-09-13
+
+- Load image-heavy conversations larger than 64 MiB through bounded, hash-verified session-sync batches.
 - Refresh Pi model catalogs before model discovery and recycle stale RPC workers so newly available models appear promptly.
 - Show live backend-to-browser conversation loading progress, including determinate chunk progress on slow connections.
 - Fork the complete current conversation state into a new branch, in addition to rewinding to an earlier message.

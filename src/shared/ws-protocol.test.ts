@@ -29,7 +29,7 @@ const sessionStats = {
 
 const clientCommands = [
 	{ type: "install_pi" },
-	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl", cachedStateHash, knownMessageHashes: [cachedMessageHash] },
+	{ type: "subscribe_session", sessionPath: "/sessions/a.jsonl", cachedStateHash, knownMessageHashes: [cachedMessageHash], segmentedContent: true },
 	{ type: "prompt", operationId: "operation-prompt", sessionPath: "/sessions/a.jsonl", message: "hello", model, thinkingLevel: "high", controlRevision: 2, images: [{ type: "image", uploadedPath: "/tmp/pipane-upload/photo.png", mimeType: "image/png" }] },
 	{ type: "steer", operationId: "operation-steer", sessionPath: "/sessions/a.jsonl", message: "continue" },
 	{ type: "remove_steering", sessionPath: "/sessions/a.jsonl", index: 0 },
@@ -88,7 +88,28 @@ const serverEvents: ServerMessagePayload[] = [
 		messages: [{ hash: cachedMessageHash, message: { role: "user", content: "hello", timestamp: 1 } as any }],
 		state: { isStreaming: false, pendingToolCalls: [], toolCallTimings: {}, model: null, thinkingLevel: "off", steeringQueue: [] },
 	},
-	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 6, op: "not_modified", hash: "ghi" },
+	{
+		type: "session_sync",
+		sessionPath: "/sessions/a.jsonl",
+		revision: 6,
+		op: "content_manifest",
+		hash: "jkl",
+		transferId: "transfer-1",
+		messageHashes: [cachedMessageHash],
+		state: { isStreaming: false, pendingToolCalls: [], toolCallTimings: {}, model: null, thinkingLevel: "off", steeringQueue: [] },
+		batchCount: 1,
+	},
+	{
+		type: "session_sync",
+		sessionPath: "/sessions/a.jsonl",
+		revision: 6,
+		op: "content_batch",
+		hash: "jkl",
+		transferId: "transfer-1",
+		batchIndex: 0,
+		messages: [{ hash: cachedMessageHash, message: { role: "user", content: "hello", timestamp: 1 } as any }],
+	},
+	{ type: "session_sync", sessionPath: "/sessions/a.jsonl", revision: 7, op: "not_modified", hash: "jkl" },
 	{ type: "control_state", sessionPath: "/sessions/a.jsonl", controlRevision: 2, model: { provider: "anthropic", id: "claude-sonnet" }, thinkingLevel: "high" },
 	{ type: "session_attached", sessionPath: "/sessions/a.jsonl", cwd: "/project", firstMessage: "hello" },
 	{ type: "sessions_changed", file: "/sessions/a.jsonl" },
@@ -132,6 +153,15 @@ describe("WebSocket protocol contract", () => {
 		}))).toMatchObject({
 			ok: false,
 			error: { code: "invalid_message", message: expect.stringContaining("exactly one") },
+		});
+		expect(decodeClientCommand(JSON.stringify({
+			...envelope,
+			type: "subscribe_session",
+			sessionPath: "x",
+			segmentedContent: false,
+		}))).toMatchObject({
+			ok: false,
+			error: { code: "invalid_message", message: expect.stringContaining("segmentedContent") },
 		});
 		expect(decodeClientCommand(JSON.stringify({ ...envelope, protocolVersion: 999, type: "abort", sessionPath: "x" })))
 			.toMatchObject({ ok: false, error: { code: "unsupported_version", requestId: "req-1" } });

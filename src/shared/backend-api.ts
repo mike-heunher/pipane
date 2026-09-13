@@ -7,6 +7,7 @@ export interface SessionRef {
 
 export const UPLOADED_IMAGE_PROMPT_FEATURE = "uploaded-image-prompt";
 export const CONTENT_ADDRESSED_SESSION_SYNC_FEATURE = "content-addressed-session-sync";
+export const SEGMENTED_SESSION_SYNC_FEATURE = "segmented-session-sync";
 
 export interface BackendCapabilities {
 	backendId: string;

@@ -38,7 +38,9 @@ Every `session_sync` message includes a non-negative `revision`. Revisions incre
 
 Backends advertising `content-addressed-session-sync` accept an optional cached state hash and exact materialized-message hash inventory on `subscribe_session`. An equal state hash produces `not_modified`. Otherwise the backend sends an authoritative ordered message-hash manifest, the small non-message state, and only message bodies absent from the browser inventory. The browser reconstructs and verifies the canonical full-state hash before committing it; missing, corrupt, evicted, or incompatible cache entries fall back to a full snapshot. Serialized snapshots are kept in a byte- and count-bounded IndexedDB LRU, scoped by backend and session, while only the active session is parsed into memory. Subsequent live updates retain the existing hash-chained text deltas.
 
-These shapes are additive within application v1: older browsers never request content-addressed initialization and therefore continue receiving full snapshots. Revisions keep ordering and recovery explicit without pre-empting the future semantic-update protocol.
+Backends advertising `segmented-session-sync` also accept `segmentedContent: true` on `subscribe_session`. They send the initial content-addressed snapshot as one `content_manifest` followed by ordered `content_batch` frames, each bounded well below the carrier's 64 MiB logical-frame limit. The browser does not expose partial state: it assembles the batches, reconstructs authoritative message order from cached and received bodies, and verifies the canonical state hash before committing. Server carriers pull these bulk frames lazily under their existing backpressure and cancellation controls, so aggregate histories may exceed both one carrier frame and the outgoing queue without weakening either bound.
+
+These shapes are additive within application v1: older browsers never request content-addressed or segmented initialization and therefore continue receiving full snapshots. Revisions keep ordering and recovery explicit without pre-empting the future semantic-update protocol.
 
 ## Rendezvous, pairing, and connection trust
 

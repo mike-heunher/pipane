@@ -112,6 +112,32 @@ describe("DataChannelFrameConnection", () => {
 		expect(message.mock.calls[0][0].toString()).toBe(largeFrame);
 	});
 
+	it("pulls bulk frame sequences lazily under carrier backpressure", () => {
+		const sender = fakeChannel();
+		const receiver = fakeChannel();
+		const outgoing = new DataChannelFrameConnection(sender.channel);
+		const incoming = new DataChannelFrameConnection(receiver.channel);
+		const received: string[] = [];
+		const produced: number[] = [];
+		incoming.on("message", (frame) => received.push(frame.toString()));
+		const frames = ["first ".repeat(200_000), "second ".repeat(200_000)];
+		function* sequence() {
+			for (let index = 0; index < frames.length; index++) {
+				produced.push(index);
+				yield frames[index];
+			}
+		}
+
+		sender.blockAfterSend();
+		outgoing.sendSequence(sequence(), { priority: "bulk", transferKey: ACTIVE_SESSION_SYNC_TRANSFER_KEY });
+		expect(produced).toEqual([0]);
+		sender.drain();
+		expect(produced).toEqual([0, 1]);
+
+		for (const [message] of sender.sendMessage.mock.calls) receiver.message(message);
+		expect(received).toEqual(frames);
+	});
+
 	it("sends controls ahead of queued bulk chunks", () => {
 		const fake = fakeChannel();
 		const connection = new DataChannelFrameConnection(fake.channel);

@@ -6,6 +6,8 @@ import type { ToolCallTimings } from "./tool-runtime.js";
 /** Increment when a breaking WebSocket wire change is introduced. */
 export const WS_PROTOCOL_VERSION = 1 as const;
 export const MAX_KNOWN_SESSION_MESSAGE_HASHES = 4_096;
+export const MAX_SEGMENTED_SESSION_SYNC_BATCHES = 4_096;
+export const MAX_SEGMENTED_SESSION_SYNC_BYTES = 256 * 1024 * 1024;
 
 export type SessionRuntimeStatus = "running" | "done";
 export type SessionRuntimeStatuses = Record<string, SessionRuntimeStatus>;
@@ -89,6 +91,8 @@ export type ClientCommand = CommandEnvelope & (
 		cachedStateHash?: string;
 		/** Content hashes for cached materialized display messages. */
 		knownMessageHashes?: string[];
+		/** Accept a manifest followed by bounded content batches. */
+		segmentedContent?: true;
 	} & SessionCommand)
 	| ({
 		type: "prompt";
@@ -217,6 +221,22 @@ export type InitialSessionSyncOp =
 		/** Bodies absent from the browser's declared cache. */
 		messages: ContentAddressedMessage[];
 		state: WireSessionStateMetadata;
+	}
+	| {
+		op: "content_manifest";
+		hash: string;
+		transferId: string;
+		/** Authoritative display order; duplicate hashes are allowed. */
+		messageHashes: string[];
+		state: WireSessionStateMetadata;
+		batchCount: number;
+	}
+	| {
+		op: "content_batch";
+		hash: string;
+		transferId: string;
+		batchIndex: number;
+		messages: ContentAddressedMessage[];
 	}
 	| {
 		op: "not_modified";
@@ -538,6 +558,9 @@ export function decodeClientCommand(raw: string): ProtocolDecodeResult<ClientCom
 						fail("$command.knownMessageHashes", `expected at most ${MAX_KNOWN_SESSION_MESSAGE_HASHES} hashes`);
 					}
 				}
+				if (command.segmentedContent !== undefined && command.segmentedContent !== true) {
+					fail("$command.segmentedContent", "expected true");
+				}
 				break;
 			case "abort":
 			case "hard_kill":
@@ -799,18 +822,31 @@ export function decodeServerMessage(raw: string): ProtocolDecodeResult<ServerMes
 				} else if (message.op === "delta") {
 					string(message.baseHash, "$message.baseHash", false);
 					validatePatches(message.patches, "$message.patches");
-				} else if (message.op === "content") {
-					array(message.messageHashes, "$message.messageHashes")
-						.forEach((hash, index) => contentHash(hash, `$message.messageHashes[${index}]`));
+				} else if (message.op === "content" || message.op === "content_batch") {
+					if (message.op === "content") {
+						array(message.messageHashes, "$message.messageHashes")
+							.forEach((hash, index) => contentHash(hash, `$message.messageHashes[${index}]`));
+						validateSessionStateMetadata(message.state, "$message.state");
+					} else {
+						string(message.transferId, "$message.transferId", false);
+						integer(message.batchIndex, "$message.batchIndex");
+					}
 					array(message.messages, "$message.messages").forEach((item, index) => {
 						const body = record(item, `$message.messages[${index}]`);
 						contentHash(body.hash, `$message.messages[${index}].hash`);
 						const materialized = record(body.message, `$message.messages[${index}].message`);
 						string(materialized.role, `$message.messages[${index}].message.role`, false);
 					});
+				} else if (message.op === "content_manifest") {
+					string(message.transferId, "$message.transferId", false);
+					array(message.messageHashes, "$message.messageHashes")
+						.forEach((hash, index) => contentHash(hash, `$message.messageHashes[${index}]`));
 					validateSessionStateMetadata(message.state, "$message.state");
+					if (integer(message.batchCount, "$message.batchCount") > MAX_SEGMENTED_SESSION_SYNC_BATCHES) {
+						fail("$message.batchCount", `expected at most ${MAX_SEGMENTED_SESSION_SYNC_BATCHES} batches`);
+					}
 				} else if (message.op !== "not_modified") {
-					fail("$message.op", "expected full, delta, content, or not_modified");
+					fail("$message.op", "expected full, delta, content, content_manifest, content_batch, or not_modified");
 				}
 				break;
 			case "control_state":

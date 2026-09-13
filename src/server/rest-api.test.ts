@@ -236,7 +236,7 @@ describe("REST session path confinement", () => {
 		expect(response.status).toBe(200);
 		expect(await response.json()).toMatchObject({
 			backendId: "backend-test",
-			features: expect.arrayContaining(["content-addressed-session-sync"]),
+			features: expect.arrayContaining(["content-addressed-session-sync", "segmented-session-sync"]),
 		});
 	});
 
