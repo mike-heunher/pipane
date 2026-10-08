@@ -495,6 +495,76 @@ describe("owned message and tool rendering", () => {
 		thinking.isStreaming = true;
 		document.body.appendChild(thinking);
 		await thinking.updateComplete;
-		expect(thinking.textContent).toContain("Thinking… (2 tokens)");
+		expect(thinking.textContent).toContain("Thinking… (2 tokens · 0s)");
+	});
+
+	it("ticks elapsed time and previews the tail of streaming thinking", async () => {
+		vi.useFakeTimers();
+		try {
+			const thinking = new ThinkingBlock();
+			thinking.content = `${"early reasoning ".repeat(100)}latest step`;
+			thinking.isStreaming = true;
+			document.body.appendChild(thinking);
+			await thinking.updateComplete;
+			const preview = thinking.querySelector(".thinking-live-preview")!;
+			expect(preview.textContent).toMatch(/latest step$/);
+			expect(preview.textContent!.length).toBeLessThan(thinking.content.length);
+
+			vi.advanceTimersByTime(65_000);
+			await thinking.updateComplete;
+			expect(thinking.querySelector(".thinking-header")!.textContent).toContain("· 1m 05s)");
+
+			thinking.querySelector<HTMLElement>(".thinking-header")!.click();
+			await thinking.updateComplete;
+			expect(thinking.querySelector(".thinking-live-preview")).toBeNull();
+			expect(thinking.querySelector("markdown-block")).not.toBeNull();
+
+			thinking.isStreaming = false;
+			await thinking.updateComplete;
+			expect(thinking.querySelector(".thinking-header")!.textContent).not.toContain("1m 05s");
+			thinking.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows only the part being produced as live, including empty reasoning", async () => {
+		const list = new PiMessageList();
+		list.isStreaming = true;
+		list.messages = [{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "finished" },
+				{ type: "text", text: "Interim" },
+				{ type: "thinking", thinking: "" },
+			],
+		}] as any;
+		document.body.appendChild(list);
+		await list.updateComplete;
+		await settle();
+
+		const parts = Array.from(list.querySelectorAll<ThinkingBlock>("thinking-block"));
+		expect(parts.map((part) => [part.content, part.isStreaming])).toEqual([["finished", false], ["", true]]);
+		expect(parts[1].textContent).toContain("Thinking… (0s)");
+
+		list.messages = [{
+			role: "assistant",
+			content: [
+				{ type: "thinking", thinking: "finished" },
+				{ type: "text", text: "Interim" },
+				{ type: "thinking", thinking: "now summarized" },
+			],
+		}] as any;
+		await list.updateComplete;
+		await settle();
+		const updated = Array.from(list.querySelectorAll<ThinkingBlock>("thinking-block"));
+		expect(updated[1]).toBe(parts[1]);
+		expect(updated[1].querySelector(".thinking-live-preview")?.textContent).toBe("now summarized");
+
+		list.isStreaming = false;
+		list.messages = [{ role: "assistant", content: [{ type: "thinking", thinking: "" }] }] as any;
+		await list.updateComplete;
+		await settle();
+		expect(list.querySelectorAll("thinking-block")).toHaveLength(0);
 	});
 });

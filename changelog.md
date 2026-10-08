@@ -1,5 +1,7 @@
 # Unreleased
 
+- Keep active thinking visibly alive with an elapsed timer and live tail preview, even before reasoning summary text arrives.
+
 # 0.1.19 - 2026-09-13
 
 - Load image-heavy conversations larger than 64 MiB through bounded, hash-verified session-sync batches.

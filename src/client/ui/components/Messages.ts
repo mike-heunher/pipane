@@ -169,17 +169,22 @@ export class AssistantMessage extends LitElement {
 		// Render content in the order it appears
 		const orderedParts: TemplateResult[] = [];
 		let thinkingPartsSeen = 0;
+		const lastPartIndex = this.message.content.length - 1;
 
-		for (const chunk of this.message.content) {
+		for (const [partIndex, chunk] of this.message.content.entries()) {
 			if (chunk.type === "text" && chunk.text.trim() !== "") {
 				orderedParts.push(html`<markdown-block .content=${linkifyPreviewableInlineCode(escapeStrikethrough(chunk.text))}></markdown-block>`);
-			} else if (chunk.type === "thinking" && chunk.thinking.trim() !== "") {
-				if (thinkingPartsSeen >= this.hiddenThinkingParts) {
+			} else if (chunk.type === "thinking") {
+				// The part being produced stays visible even before any reasoning
+				// summary text arrives, so long silent reasoning still shows progress.
+				const active = this.isStreaming && partIndex === lastPartIndex;
+				const hasText = chunk.thinking.trim() !== "";
+				if (hasText ? thinkingPartsSeen >= this.hiddenThinkingParts : active) {
 					orderedParts.push(
-						html`<thinking-block .content=${chunk.thinking} .isStreaming=${this.isStreaming}></thinking-block>`,
+						html`<thinking-block .content=${chunk.thinking} .isStreaming=${active}></thinking-block>`,
 					);
 				}
-				thinkingPartsSeen++;
+				if (hasText) thinkingPartsSeen++;
 			} else if (chunk.type === "toolCall") {
 				const pending = this.pendingToolCalls?.has(chunk.id) ?? false;
 				const result = this.toolResultsById?.get(chunk.id);
