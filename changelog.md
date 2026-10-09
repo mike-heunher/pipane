@@ -1,9 +1,8 @@
 # Unreleased
 
+# 0.1.19 - 2026-10-09
+
 - Keep active thinking visibly alive with an elapsed timer and live tail preview, even before reasoning summary text arrives.
-
-# 0.1.19 - 2026-09-13
-
 - Load image-heavy conversations larger than 64 MiB through bounded, hash-verified session-sync batches.
 - Refresh Pi model catalogs before model discovery and recycle stale RPC workers so newly available models appear promptly.
 - Show live backend-to-browser conversation loading progress, including determinate chunk progress on slow connections.
