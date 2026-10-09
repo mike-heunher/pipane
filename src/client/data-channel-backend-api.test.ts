@@ -46,6 +46,19 @@ describe("DataChannelBackendApi", () => {
 		await expect(pending).resolves.toEqual([expect.objectContaining({ backendId: "b_one", path: "/s1.jsonl" })]);
 	});
 
+	it("carries project and delegation metadata and rejects malformed values", async () => {
+		const transport = new FakeTransport();
+		const api = new DataChannelBackendApi(transport, "b_one");
+		const base = { id: "s1", path: "/s1.jsonl", cwd: "/repo--wt-x", created: "a", modified: "b", messageCount: 1, firstMessage: "hello" };
+		const pending = api.listSessions();
+		transport.reply(0, [{ ...base, projectCwd: "/repo", projectCwdDisplay: "~/repo", parentSessionPath: "/parent.jsonl" }]);
+		await expect(pending).resolves.toEqual([expect.objectContaining({ projectCwd: "/repo", parentSessionPath: "/parent.jsonl" })]);
+
+		const malformed = api.listSessions();
+		transport.reply(1, [{ ...base, parentSessionPath: 42 }]);
+		await expect(malformed).rejects.toThrow();
+	});
+
 	it("validates capabilities and surfaces structured failures", async () => {
 		const transport = new FakeTransport();
 		const api = new DataChannelBackendApi(transport, "b_one");

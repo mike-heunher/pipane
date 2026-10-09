@@ -261,13 +261,17 @@ function isSessionInfo(value: unknown): value is SessionInfoDTO {
 		&& isString(value.created)
 		&& isString(value.modified)
 		&& Number.isSafeInteger(value.messageCount)
-		&& isString(value.firstMessage);
+		&& isString(value.firstMessage)
+		&& isOptionalString(value.projectCwd)
+		&& isOptionalString(value.projectCwdDisplay)
+		&& isOptionalString(value.parentSessionPath);
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isString(value: unknown): value is string { return typeof value === "string"; }
+function isOptionalString(value: unknown): value is string | undefined { return value === undefined || isString(value); }
 function isStringArray(value: unknown): value is string[] { return Array.isArray(value) && value.every(isString); }
 function isPositiveIntegerArray(value: unknown): value is number[] {
 	return Array.isArray(value) && value.every((item) => Number.isSafeInteger(item) && item > 0);

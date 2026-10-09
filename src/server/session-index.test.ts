@@ -218,7 +218,7 @@ describe("SessionIndex", () => {
 		expect(sessions.find((session) => session.id === "sess-b")?.worktreeName).toBe("project--wt-feature");
 	});
 
-	it("defaults a linked session cwd to root before file-tool activity", async () => {
+	it("files a session launched in a linked worktree under its main checkout project", async () => {
 		const repo = path.join(agentDir, "checkouts", "project");
 		const worktreeName = "project--wt-feature";
 		const worktree = path.join(agentDir, "checkouts", worktreeName);
@@ -233,8 +233,57 @@ describe("SessionIndex", () => {
 			{ type: "session", id: "sess-new", cwd: worktree, timestamp: "2026-01-01T10:00:00.000Z" },
 		]);
 
-		const index = new SessionIndex({ agentDir, extractorVersion: "worktree-default-v1" });
-		expect((await index.listSessions())[0].worktreeName).toBe("root");
+		const index = new SessionIndex({
+			agentDir,
+			extractorVersion: "worktree-default-v1",
+			cwdDisplayFormatter: (cwd) => cwd.replace(agentDir, "~"),
+		});
+		expect((await index.listSessions())[0]).toMatchObject({
+			cwd: worktree,
+			worktreeName,
+			projectCwd: repo,
+			projectCwdDisplay: path.join("~", "checkouts", "project"),
+		});
+	});
+
+	it("keeps lineage-recorded project and parent after the worktree is removed", async () => {
+		const repo = path.join(agentDir, "checkouts", "project");
+		mkdirSync(path.join(repo, ".git"), { recursive: true });
+		const worktree = path.join(agentDir, "checkouts", "project--wt-gone");
+		const parentPath = path.join(agentDir, "sessions", "--project--", "parent.jsonl");
+		const childPath = path.join(agentDir, "sessions", "--project--wt-gone--", "child.jsonl");
+		const orphanPath = path.join(agentDir, "sessions", "--project--wt-gone--", "orphan.jsonl");
+		writeSessionJsonl(parentPath, [
+			{ type: "session", id: "parent", cwd: repo, timestamp: "2026-01-01T10:00:00.000Z" },
+		]);
+		const lineage = (parentSession: string) => ({
+			type: "custom",
+			id: "lineage",
+			parentId: null,
+			timestamp: "2026-01-01T11:00:00.000Z",
+			customType: "pipane-lineage",
+			data: { version: 1, parentSession, projectCwd: repo, worktreeName: "project--wt-gone" },
+		});
+		writeSessionJsonl(childPath, [
+			{ type: "session", id: "child", cwd: worktree, timestamp: "2026-01-01T11:00:00.000Z" },
+			lineage(parentPath),
+		]);
+		writeSessionJsonl(orphanPath, [
+			{ type: "session", id: "orphan", cwd: worktree, timestamp: "2026-01-01T12:00:00.000Z" },
+			lineage(path.join(agentDir, "sessions", "deleted.jsonl")),
+		]);
+
+		const sessions = await new SessionIndex({ agentDir, extractorVersion: "lineage-v1" }).listSessions();
+		expect(sessions.find((session) => session.id === "child")).toMatchObject({
+			projectCwd: repo,
+			worktreeName: "project--wt-gone",
+			parentSessionPath: parentPath,
+		});
+		// Parents that are no longer listed leave the session at the top level.
+		const orphan = sessions.find((session) => session.id === "orphan");
+		expect(orphan?.projectCwd).toBe(repo);
+		expect(orphan?.parentSessionPath).toBeUndefined();
+		expect(sessions.find((session) => session.id === "parent")?.projectCwd).toBeUndefined();
 	});
 
 	it("detects an existing worktree from completed file-tool activity end to end", async () => {

@@ -24,6 +24,11 @@ export interface SessionInfoDTO {
 	cwd: string;
 	cwdDisplay?: string;
 	worktreeName?: string;
+	/** Main-checkout project CWD when the session was launched in a linked worktree. */
+	projectCwd?: string;
+	projectCwdDisplay?: string;
+	/** Path of the listed session on the same backend that delegated this one. */
+	parentSessionPath?: string;
 	name?: string;
 	created: string;
 	modified: string;

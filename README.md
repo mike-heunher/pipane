@@ -79,6 +79,16 @@ journalctl -u pipane -f
 
 Provider usage is supplied by the bundled `@sreetej510/pi-usage` Pi extension and uses Pi's existing authentication. Set `PIPANE_USAGE_EXTENSION=0` when starting pipane to disable it.
 
+### Worktrees and delegated sessions
+
+Sessions started inside a linked Git worktree are listed under the repository's main-checkout project and labeled with the worktree name. To keep that grouping after a worktree is removed, and to nest subagent sessions below the conversation that launched them, install the bundled lineage extension for every Pi process:
+
+```bash
+cp "$(npm root -g)/pipane/extensions/session-lineage.ts" ~/.pi/agent/extensions/pipane-session-lineage.ts
+```
+
+A launcher opts a new session into nesting by naming its parent session file. Pi's bash tool exports `PI_SESSION_FILE`, so a delegating agent can run `PIPANE_PARENT_SESSION="$PI_SESSION_FILE" pi -p …` (pass the variable explicitly through `systemd-run -E`, `tmux`, or similar wrappers that do not inherit the environment).
+
 ---
 
 ## Browser UI ownership

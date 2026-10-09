@@ -47,13 +47,55 @@ describe("resolveWorktreeName", () => {
 		expect(resolveWorktreeName(nested)).toBe("root");
 	});
 
-	it("defaults to root until a linked worktree file is accessed", () => {
-		const { worktree } = makeRepoWithWorktree();
+	it("labels a session launched inside a linked worktree with that worktree", () => {
+		const { repo, worktree } = makeRepoWithWorktree();
 		const cwd = path.join(worktree, "src");
 
-		expect(resolveWorktreeName(cwd)).toBe("root");
+		expect(resolveWorktreeName(cwd)).toBe("project--wt-fix-login");
 		expect(resolveWorktreeName(cwd, [path.join(cwd, "feature.ts")]))
 			.toBe("project--wt-fix-login");
+		// Newer same-repository activity in the main checkout still wins.
+		expect(resolveWorktreeName(cwd, [path.join(repo, "src", "main.ts")])).toBe("root");
+	});
+
+	it("maps a linked worktree cwd to the same location in its main checkout project", () => {
+		const { repo, worktree } = makeRepoWithWorktree();
+		const resolveCheckout = createSessionCheckoutResolver();
+
+		expect(resolveCheckout(worktree).projectCwd).toBe(repo);
+		expect(resolveCheckout(path.join(worktree, "src")).projectCwd).toBe(path.join(repo, "src"));
+		expect(resolveCheckout(repo).projectCwd).toBeUndefined();
+		// The checkout used for file resolution remains activity-derived.
+		expect(resolveCheckout(worktree)).toMatchObject({ activeRoot: undefined, activeWorktreeRoot: undefined });
+	});
+
+	it("uses the recorded project after a launched-in worktree is removed", () => {
+		const { repo, worktree } = makeRepoWithWorktree("project--wt-finished");
+		const other = makeRepoWithWorktree("project--wt-other");
+		rmSync(worktree, { recursive: true, force: true });
+		const resolveCheckout = createSessionCheckoutResolver();
+		const hints = { projectCwd: repo, worktreeName: "project--wt-finished" };
+
+		expect(resolveCheckout(worktree, [], hints)).toMatchObject({
+			projectCwd: repo,
+			worktreeName: "project--wt-finished",
+		});
+		// The recorded project supplies repository identity for activity filtering.
+		expect(resolveCheckout(worktree, [path.join(other.worktree, "src", "x.ts")], hints).worktreeName)
+			.toBe("project--wt-finished");
+		expect(resolveCheckout(worktree, [path.join(repo, "src", "main.ts")], hints).worktreeName).toBe("root");
+		// Newer activity inside the removed worktree outranks older main-checkout activity.
+		expect(resolveCheckout(worktree, [
+			path.join(repo, "src", "main.ts"),
+			path.join(worktree, "src", "feature.ts"),
+		], hints).worktreeName).toBe("project--wt-finished");
+		// A removed sibling sharing the name prefix is not the recorded worktree.
+		expect(resolveCheckout(worktree, [
+			path.join(repo, "src", "main.ts"),
+			path.join(`${worktree}-sibling`, "x.ts"),
+		], hints).worktreeName).toBe("root");
+		// Hints never override a cwd that still resolves.
+		expect(resolveCheckout(repo, [], hints)).toMatchObject({ projectCwd: undefined, worktreeName: "root" });
 	});
 
 	it("prefers recent same-repository tool activity over the session cwd", () => {
@@ -109,6 +151,8 @@ describe("resolveWorktreeName", () => {
 			activeRoot: repo,
 			activeWorktreeRoot: undefined,
 			knownWorktreeRoots: [worktree],
+			projectCwd: undefined,
+			worktreeName: "root",
 		});
 		expect(resolveCheckout(repo, [path.join(worktree, "docs", "plan.md")]))
 			.toMatchObject({

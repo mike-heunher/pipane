@@ -714,6 +714,121 @@ describe("session-picker", () => {
 		});
 	});
 
+	describe("worktree projects and delegated sessions", () => {
+		it("files linked-worktree sessions under their main checkout project", async () => {
+			const agent = new MockAgent();
+			const newSession = vi.spyOn(agent, "newSession");
+			agent.setSessions([
+				createSession({ name: "Main work", cwd: "/home/user/project", cwdDisplay: "~/project" }),
+				createSession({
+					name: "Worktree work",
+					cwd: "/home/user/project--wt-feature",
+					cwdDisplay: "~/project--wt-feature",
+					projectCwd: "/home/user/project",
+					projectCwdDisplay: "~/project",
+					worktreeName: "project--wt-feature",
+				}),
+			]);
+
+			const el = await createPicker(agent);
+			const headers = getGroupHeaders(el);
+
+			expect(headers.map(getGroupLabel)).toEqual(["~/project"]);
+			expect(getSessionItems(el).map(getSessionName).sort()).toEqual(["Main work", "Worktree work"]);
+			(headers[0].querySelector(".group-new-btn") as HTMLButtonElement).click();
+			expect(newSession).toHaveBeenCalledWith("/home/user/project");
+		});
+
+		it("nests delegated sessions below their parent and toggles them", async () => {
+			const agent = new MockAgent();
+			const parent = createSession({ name: "Orchestrator", lastUserPromptTime: "2026-02-28T09:00:00.000Z" });
+			const children = [1, 2].map((n) => createSession({
+				name: `Subagent ${n}`,
+				cwd: `/home/user/project--wt-${n}`,
+				projectCwd: "/home/user/project",
+				parentSessionPath: parent.path,
+				lastUserPromptTime: `2026-02-28T10:0${n}:00.000Z`,
+			}));
+			const other = createSession({ name: "Other", lastUserPromptTime: "2026-02-28T08:00:00.000Z" });
+			agent.setSessions([parent, ...children, other]);
+
+			const el = await createPicker(agent);
+			// Collapsed by default: the newer children do not appear as top-level rows.
+			expect(getSessionItems(el).map(getSessionName)).toEqual(["Orchestrator", "Other"]);
+			const toggle = getSessionItems(el)[0].querySelector(".children-toggle") as HTMLElement;
+			expect(toggle.textContent?.trim()).toBe("▸ 2");
+			expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+			const switchSession = vi.spyOn(agent, "switchSession");
+			toggle.click();
+			await el.updateComplete;
+
+			expect(switchSession).not.toHaveBeenCalled();
+			const items = getSessionItems(el);
+			expect(items.map(getSessionName)).toEqual(["Orchestrator", "Subagent 2", "Subagent 1", "Other"]);
+			expect(items[1].classList.contains("child")).toBe(true);
+			expect(items[1].style.getPropertyValue("--session-depth")).toBe("1");
+			expect(items[3].classList.contains("child")).toBe(false);
+
+			(items[0].querySelector(".children-toggle") as HTMLElement).click();
+			await el.updateComplete;
+			expect(getSessionItems(el).map(getSessionName)).toEqual(["Orchestrator", "Other"]);
+		});
+
+		it("expands and promotes a parent while a delegated session runs", async () => {
+			const agent = new MockAgent();
+			const sessions = Array.from({ length: 6 }, (_, i) => createSession({
+				name: `Session ${i}`,
+				lastUserPromptTime: `2026-02-28T1${i}:00:00.000Z`,
+			}));
+			const parent = createSession({ name: "Orchestrator", lastUserPromptTime: "2026-02-27T10:00:00.000Z" });
+			const child = createSession({ name: "Running subagent", parentSessionPath: parent.path });
+			agent.setSessions([...sessions, parent, child]);
+			agent.setSessionStatus(child.path, "running");
+
+			const el = await createPicker(agent);
+			const names = getSessionItems(el).map(getSessionName);
+
+			// The otherwise-oldest parent is promoted instead of truncated, and the
+			// child row does not consume one of the five visible conversations.
+			expect(names.slice(0, 2)).toEqual(["Orchestrator", "Running subagent"]);
+			expect(names).toHaveLength(6);
+			expect(el.shadowRoot!.querySelector(".show-more-btn")?.textContent).toContain("Show 2 more");
+		});
+
+		it("shows children at the top level when their parent is filtered out", async () => {
+			const agent = new MockAgent();
+			const parent = createSession({ name: "Orchestrator" });
+			agent.setSessions([
+				parent,
+				createSession({ name: "Find me", parentSessionPath: parent.path }),
+			]);
+
+			const el = await createPicker(agent);
+			const input = getSearchInput(el)!;
+			input.value = "find me";
+			input.dispatchEvent(new Event("input"));
+			await el.updateComplete;
+
+			const items = getSessionItems(el);
+			expect(items.map(getSessionName)).toEqual(["Find me"]);
+			expect(items[0].classList.contains("child")).toBe(false);
+		});
+
+		it("treats parent cycles as top-level sessions", async () => {
+			const agent = new MockAgent();
+			const a = createSession({ id: "a", name: "A", lastUserPromptTime: "2026-02-28T10:00:00.000Z" });
+			const b = createSession({ id: "b", name: "B", lastUserPromptTime: "2026-02-28T09:00:00.000Z" });
+			a.parentSessionPath = b.path;
+			b.parentSessionPath = a.path;
+			agent.setSessions([a, b]);
+
+			const el = await createPicker(agent);
+			expect(getSessionItems(el).map(getSessionName)).toEqual(["A", "B"]);
+			expect(el.shadowRoot!.querySelector(".children-toggle")).toBeNull();
+		});
+	});
+
 	describe("search filtering", () => {
 		it("filters sessions by name", async () => {
 			const agent = new MockAgent();

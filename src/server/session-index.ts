@@ -11,10 +11,12 @@ import {
 import path from "node:path";
 import { getAgentDir, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
-	createWorktreeNameResolver,
+	createSessionCheckoutResolver,
+	type SessionCheckoutResolver,
 	type WorktreeNameResolver,
 } from "./worktree-name.js";
 import { extractSuccessfulToolPaths } from "./session-tool-paths.js";
+import { readSessionLineage, type SessionLineage } from "./session-lineage.js";
 
 export interface SessionListItem {
 	id: string;
@@ -22,6 +24,11 @@ export interface SessionListItem {
 	cwd: string;
 	cwdDisplay?: string;
 	worktreeName?: string;
+	/** Main-checkout project for a session launched in a linked worktree. */
+	projectCwd?: string;
+	projectCwdDisplay?: string;
+	/** Listed session that delegated this one. */
+	parentSessionPath?: string;
 	name?: string;
 	created: string;
 	modified: string;
@@ -35,11 +42,13 @@ interface CachedSessionEntry {
 	fileSize: number;
 	meta: SessionListItem;
 	recentToolPaths?: string[];
+	lineage?: SessionLineage;
 }
 
 interface ExtractedSessionMeta {
 	meta: SessionListItem;
 	recentToolPaths: string[];
+	lineage?: SessionLineage;
 }
 
 interface SessionIndexCacheFile {
@@ -50,7 +59,7 @@ interface SessionIndexCacheFile {
 }
 
 const CACHE_FORMAT_VERSION = 1 as const;
-const DEFAULT_EXTRACTOR_VERSION = "5";
+const DEFAULT_EXTRACTOR_VERSION = "6";
 const MAX_RECENT_TOOL_PATHS = 16;
 
 export class SessionIndex {
@@ -59,6 +68,7 @@ export class SessionIndex {
 	private readonly cacheFilePath: string;
 	private readonly cwdDisplayFormatter?: (cwd: string) => string;
 	private readonly worktreeNameResolver?: WorktreeNameResolver;
+	private readonly checkoutResolver?: SessionCheckoutResolver;
 	private inMemoryCache: SessionIndexCacheFile | null | undefined;
 
 	constructor(opts?: {
@@ -66,12 +76,14 @@ export class SessionIndex {
 		extractorVersion?: string;
 		cwdDisplayFormatter?: (cwd: string) => string;
 		worktreeNameResolver?: WorktreeNameResolver;
+		checkoutResolver?: SessionCheckoutResolver;
 	}) {
 		this.agentDir = opts?.agentDir ?? getAgentDir();
 		this.extractorVersion = opts?.extractorVersion ?? DEFAULT_EXTRACTOR_VERSION;
 		this.cacheFilePath = path.join(this.agentDir, "cache", "pipane-session-index-v1.json");
 		this.cwdDisplayFormatter = opts?.cwdDisplayFormatter;
 		this.worktreeNameResolver = opts?.worktreeNameResolver;
+		this.checkoutResolver = opts?.checkoutResolver;
 	}
 
 	async listSessions(): Promise<SessionListItem[]> {
@@ -111,6 +123,7 @@ export class SessionIndex {
 				fileSize: stat.size,
 				meta: extracted.meta,
 				recentToolPaths: extracted.recentToolPaths,
+				...(extracted.lineage ? { lineage: extracted.lineage } : {}),
 			};
 			sessions.push(extracted.meta);
 			mutated = true;
@@ -149,18 +162,37 @@ export class SessionIndex {
 		// A default resolver is scoped to one listing: its filesystem lookups are
 		// shared by every session, but discarded before the next request so newly
 		// created or removed worktrees are reflected immediately.
-		const worktreeNameResolver = this.worktreeNameResolver ?? createWorktreeNameResolver();
+		const resolveCheckout = this.checkoutResolver ?? createSessionCheckoutResolver();
+		const listedPaths = new Set(sessions.map((session) => session.path));
 		return sessions.map((session) => {
+			const cached = nextEntries[session.path];
+			const recentToolPaths = cached?.recentToolPaths ?? [];
+			const lineage = cached?.lineage;
 			let worktreeName = "root";
+			let projectCwd: string | undefined;
 			try {
-				worktreeName = worktreeNameResolver(
-					session.cwd,
-					nextEntries[session.path]?.recentToolPaths ?? [],
-				) || "root";
+				const checkout = resolveCheckout(session.cwd, recentToolPaths, lineage);
+				worktreeName = checkout.worktreeName || "root";
+				projectCwd = checkout.projectCwd;
 			} catch {
-				worktreeName = "root";
+				// Labels and project grouping are best-effort decorations.
 			}
-			return { ...session, worktreeName };
+			if (this.worktreeNameResolver) {
+				try {
+					worktreeName = this.worktreeNameResolver(session.cwd, recentToolPaths) || "root";
+				} catch {
+					worktreeName = "root";
+				}
+			}
+
+			const item: SessionListItem = { ...session, worktreeName };
+			if (projectCwd && projectCwd !== session.cwd) {
+				item.projectCwd = projectCwd;
+				item.projectCwdDisplay = this.cwdDisplayFormatter ? this.cwdDisplayFormatter(projectCwd) : projectCwd;
+			}
+			const parent = lineage?.parentSession;
+			if (parent && parent !== session.path && listedPaths.has(parent)) item.parentSessionPath = parent;
+			return item;
 		});
 	}
 
@@ -249,6 +281,7 @@ export class SessionIndex {
 				}
 			}
 
+			const lineage = readSessionLineage(entries);
 			const recentToolPaths = extractSuccessfulToolPaths(entries, cwd)
 				.map((activity) => activity.path)
 				.slice(-MAX_RECENT_TOOL_PATHS);
@@ -275,6 +308,7 @@ export class SessionIndex {
 					firstMessage: firstMessage || "(no messages)",
 				},
 				recentToolPaths,
+				lineage,
 			};
 		} catch {
 			return null;

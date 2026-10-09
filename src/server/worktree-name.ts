@@ -16,11 +16,25 @@ export interface SessionCheckoutResolution {
 	activeWorktreeRoot?: string;
 	/** Every linked worktree evidenced on the active conversation, newest first. */
 	knownWorktreeRoots: string[];
+	/**
+	 * Main-checkout equivalent of a session CWD launched inside a linked
+	 * worktree, so its conversations belong to the repository's project.
+	 */
+	projectCwd?: string;
+	/** Sidebar label for the checkout the conversation is using. */
+	worktreeName: string;
+}
+
+/** Repository facts recorded when a session started, used after its worktree is removed. */
+export interface SessionCheckoutHints {
+	projectCwd?: string;
+	worktreeName?: string;
 }
 
 export type SessionCheckoutResolver = (
 	cwd: string,
 	recentToolPaths?: readonly string[],
+	hints?: SessionCheckoutHints,
 ) => SessionCheckoutResolution;
 
 export type WorktreeNameResolver = (
@@ -108,6 +122,20 @@ class GitCheckoutLookup {
 	}
 }
 
+/** Map a CWD inside a linked worktree to the same relative location in its main checkout. */
+function mainCheckoutCwd(checkout: GitCheckout, cwd: string): string | undefined {
+	if (path.basename(checkout.commonGitDir) !== ".git") return undefined;
+	const mainRoot = path.dirname(checkout.commonGitDir);
+	const relative = path.relative(checkout.root, canonicalPath(cwd));
+	if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+	return relative ? path.join(mainRoot, relative) : mainRoot;
+}
+
+function isWithin(root: string, candidate: string): boolean {
+	const relative = path.relative(root, path.resolve(candidate));
+	return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 function canonicalPath(value: string): string {
 	try {
 		return realpathSync(value);
@@ -123,20 +151,44 @@ function canonicalPath(value: string): string {
  */
 export function createSessionCheckoutResolver(): SessionCheckoutResolver {
 	const lookup = new GitCheckoutLookup();
-	return (cwd, recentToolPaths = []) => {
+	return (cwd, recentToolPaths = [], hints = {}) => {
 		const cwdCheckout = lookup.resolve(cwd);
+		// A removed worktree no longer resolves, so the project recorded at
+		// session start stands in as the repository identity.
+		const recordedProjectCwd = !cwdCheckout && hints.projectCwd ? hints.projectCwd : undefined;
+		const identity = cwdCheckout ?? (recordedProjectCwd ? lookup.resolve(recordedProjectCwd) : null);
+		const removedCwd = recordedProjectCwd ? path.resolve(cwd) : undefined;
 		let activeCheckout: GitCheckout | null = null;
+		let activityLabel: string | undefined;
 		const knownWorktreeRoots: string[] = [];
 
 		for (const activityPath of recentToolPaths) {
 			const activityCheckout = lookup.resolve(activityPath);
-			if (!activityCheckout) continue;
-			if (cwdCheckout && activityCheckout.commonGitDir !== cwdCheckout.commonGitDir) continue;
+			if (!activityCheckout) {
+				// Activity inside the removed worktree itself still counts as using it.
+				if (removedCwd && hints.worktreeName && isWithin(removedCwd, activityPath)) {
+					activityLabel = hints.worktreeName;
+				}
+				continue;
+			}
+			if (identity && activityCheckout.commonGitDir !== identity.commonGitDir) continue;
 			activeCheckout = activityCheckout;
+			activityLabel = activityCheckout.linked ? path.basename(activityCheckout.root) || "root" : "root";
 			if (!activityCheckout.linked) continue;
 			const prior = knownWorktreeRoots.indexOf(activityCheckout.root);
 			if (prior >= 0) knownWorktreeRoots.splice(prior, 1);
 			knownWorktreeRoots.unshift(activityCheckout.root);
+		}
+
+		// Newer same-repository activity decides the label. Without it, a session
+		// launched inside a linked worktree is working in that worktree.
+		let worktreeName = "root";
+		if (activityLabel) {
+			worktreeName = activityLabel;
+		} else if (cwdCheckout?.linked) {
+			worktreeName = path.basename(cwdCheckout.root) || "root";
+		} else if (recordedProjectCwd && hints.worktreeName) {
+			worktreeName = hints.worktreeName;
 		}
 
 		return {
@@ -144,6 +196,8 @@ export function createSessionCheckoutResolver(): SessionCheckoutResolver {
 			activeRoot: activeCheckout?.root,
 			activeWorktreeRoot: activeCheckout?.linked ? activeCheckout.root : undefined,
 			knownWorktreeRoots,
+			projectCwd: cwdCheckout?.linked ? mainCheckoutCwd(cwdCheckout, cwd) : recordedProjectCwd,
+			worktreeName,
 		};
 	};
 }
@@ -155,20 +209,18 @@ export function createSessionCheckoutResolver(): SessionCheckoutResolver {
  */
 export function createWorktreeNameResolver(): WorktreeNameResolver {
 	const resolveCheckout = createSessionCheckoutResolver();
-	return (cwd, recentToolPaths = []) => {
-		const worktreeRoot = resolveCheckout(cwd, recentToolPaths).activeWorktreeRoot;
-		return worktreeRoot ? path.basename(worktreeRoot) || "root" : "root";
-	};
+	return (cwd, recentToolPaths = []) => resolveCheckout(cwd, recentToolPaths).worktreeName;
 }
 
 /**
  * Return a short label for the Git checkout a session is actively using.
  *
- * Pi cannot change its process cwd persistently, so the recorded cwd only
- * identifies the repository. Recent successful read/write/edit paths identify
- * its active checkout; without one, the label defaults to root. Linked
- * worktrees are recognized by their commondir pointer. Removed worktrees
- * naturally stop matching because their .git metadata is no longer present.
+ * Pi cannot change its process cwd persistently, so recent successful
+ * read/write/edit paths in the same repository identify the active checkout.
+ * Without such activity, a cwd inside a linked worktree selects that worktree;
+ * any other cwd is root. Linked worktrees are recognized by their commondir
+ * pointer. Removed worktrees naturally stop matching because their .git
+ * metadata is no longer present.
  */
 export function resolveWorktreeName(
 	cwd: string,

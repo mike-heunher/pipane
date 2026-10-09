@@ -1,5 +1,8 @@
 # Unreleased
 
+- File sessions launched in linked Git worktrees under their repository's project, labeled with the worktree, even after the worktree is removed.
+- Nest delegated subagent sessions below the conversation that launched them, using the bundled `session-lineage` Pi extension.
+
 # 0.1.19 - 2026-10-09
 
 - Keep active thinking visibly alive with an elapsed timer and live tail preview, even before reasoning summary text arrives.

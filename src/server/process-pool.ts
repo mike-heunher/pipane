@@ -148,7 +148,9 @@ export class ProcessPool {
 
 		const procId = ++this.nextProcId;
 		console.log(`[pool] Spawning pi process #${procId} (cwd: ${cwd})...`);
-		const { NODE_ENV: _, ...parentEnv } = process.env;
+		// A pooled process serves many sessions, so a delegation parent inherited
+		// from pipane's own launcher must never be recorded by session lineage.
+		const { NODE_ENV: _, PIPANE_PARENT_SESSION: _parentSession, ...parentEnv } = process.env;
 		const baseArgs = typeof this.spawnConfig.baseArgs === "function"
 			? this.spawnConfig.baseArgs()
 			: this.spawnConfig.baseArgs;

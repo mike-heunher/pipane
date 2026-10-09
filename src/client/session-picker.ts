@@ -41,6 +41,13 @@ interface SessionGroup {
 	sessions: SessionInfoDTO[];
 }
 
+interface SessionRow {
+	session: SessionInfoDTO;
+	depth: number;
+	childCount: number;
+	childrenExpanded: boolean;
+}
+
 interface SessionHost {
 	backendId: string;
 	name: string;
@@ -464,6 +471,32 @@ export class SessionPicker extends LitElement {
 
 		.session-item:hover {
 			background: var(--picker-hover);
+		}
+
+		.session-item.child {
+			padding-left: calc(0.8rem + var(--session-depth, 1) * 0.85rem);
+		}
+
+		.session-item.child.active {
+			padding-left: calc(0.8rem + var(--session-depth, 1) * 0.85rem - 2px);
+		}
+
+		.children-toggle {
+			flex-shrink: 0;
+			padding: 0 0.2rem;
+			border-radius: 3px;
+			color: var(--picker-muted);
+			cursor: pointer;
+			font-variant-numeric: tabular-nums;
+		}
+
+		.children-toggle:hover,
+		.children-toggle.expanded {
+			color: var(--picker-active);
+		}
+
+		.children-toggle:hover {
+			background: var(--picker-active-bg);
 		}
 
 		.session-item.active {
@@ -1035,6 +1068,8 @@ export class SessionPicker extends LitElement {
 	@state() private showSkeleton = false;
 	@state() private searchQuery = "";
 	@state() private expandedGroups = new Set<string>();
+	/** Explicit expand/collapse choices for sessions with delegated children. */
+	@state() private childVisibility = new Map<string, boolean>();
 	@state() private pinnedSessions = loadPinnedSessions();
 	@state() private openHostMenu: string | undefined;
 	@state() private openUpdateMenu: string | undefined;
@@ -1246,6 +1281,74 @@ export class SessionPicker extends LitElement {
 		return backendId ? `${backendId}\u0000${cwd}` : cwd;
 	}
 
+	private projectCwd(session: SessionInfoDTO): string {
+		return session.projectCwd || session.cwd || "(unknown)";
+	}
+
+	/**
+	 * Arrange a sorted group as a forest: delegated sessions follow the
+	 * session that launched them. A parent missing from the group (filtered,
+	 * deleted, or another project) leaves its children at the top level.
+	 */
+	private buildSessionRows(sessions: SessionInfoDTO[], activeId: string): { roots: SessionInfoDTO[]; rows: (root: SessionInfoDTO) => SessionRow[]; subtreeRunning: (root: SessionInfoDTO) => boolean } {
+		const byKey = new Map(sessions.map((s) => [this.sessionKey(s), s]));
+		const parentKey = (s: SessionInfoDTO): string | undefined => {
+			if (!s.parentSessionPath) return undefined;
+			const key = this.sessionKey({ backendId: s.backendId, path: s.parentSessionPath });
+			return byKey.has(key) ? key : undefined;
+		};
+		const hasCycle = (s: SessionInfoDTO): boolean => {
+			const seen = new Set<string>([this.sessionKey(s)]);
+			for (let key = parentKey(s); key; key = parentKey(byKey.get(key)!)) {
+				if (seen.has(key)) return true;
+				seen.add(key);
+			}
+			return false;
+		};
+
+		const children = new Map<string, SessionInfoDTO[]>();
+		const roots: SessionInfoDTO[] = [];
+		for (const s of sessions) {
+			const parent = parentKey(s);
+			if (!parent || hasCycle(s)) {
+				roots.push(s);
+				continue;
+			}
+			if (!children.has(parent)) children.set(parent, []);
+			children.get(parent)!.push(s);
+		}
+
+		const isActive = (s: SessionInfoDTO) => s.id === activeId && (!s.backendId || s.backendId === this.agent.activeBackendId);
+		const subtreeMatches = (s: SessionInfoDTO, predicate: (s: SessionInfoDTO) => boolean): boolean =>
+			predicate(s) || (children.get(this.sessionKey(s)) ?? []).some((child) => subtreeMatches(child, predicate));
+		const isRunning = (s: SessionInfoDTO) => this.agent.getSessionStatus(s.path, s.backendId) === "running";
+
+		const rows = (root: SessionInfoDTO): SessionRow[] => {
+			const out: SessionRow[] = [];
+			const visit = (s: SessionInfoDTO, depth: number) => {
+				const key = this.sessionKey(s);
+				const kids = children.get(key) ?? [];
+				// Children stay folded unless the user opened them or one of them is
+				// running or currently open.
+				const childrenExpanded = kids.length > 0 && (this.childVisibility.get(key)
+					?? kids.some((kid) => subtreeMatches(kid, (d) => isRunning(d) || isActive(d))));
+				out.push({ session: s, depth, childCount: kids.length, childrenExpanded });
+				if (childrenExpanded) for (const kid of kids) visit(kid, depth + 1);
+			};
+			visit(root, 0);
+			return out;
+		};
+
+		return { roots, rows, subtreeRunning: (root) => subtreeMatches(root, isRunning) };
+	}
+
+	private toggleChildren(e: Event, session: SessionInfoDTO, expanded: boolean) {
+		e.stopPropagation();
+		const next = new Map(this.childVisibility);
+		next.set(this.sessionKey(session), !expanded);
+		this.childVisibility = next;
+	}
+
 	private get filteredGroups(): SessionGroup[] {
 		const query = this.searchQuery.toLowerCase().trim();
 		let filtered = this.sessions;
@@ -1263,19 +1366,21 @@ export class SessionPicker extends LitElement {
 			);
 		}
 
+		// Sessions launched in a linked worktree belong to the repository's
+		// main-checkout project rather than to a sibling worktree folder.
 		const groupMap = new Map<string, SessionInfoDTO[]>();
 		for (const s of filtered) {
-			const cwd = s.cwd || "(unknown)";
-			const key = this.groupKey(s.backendId, cwd);
+			const key = this.groupKey(s.backendId, this.projectCwd(s));
 			if (!groupMap.has(key)) groupMap.set(key, []);
 			groupMap.get(key)!.push(s);
 		}
 
 		const groups: SessionGroup[] = [];
 		for (const [key, sessions] of groupMap) {
-			const cwd = sessions[0]?.cwd || "(unknown)";
-			const backendId = sessions[0]?.backendId;
-			const displayCwd = sessions[0]?.cwdDisplay || cwd;
+			const first = sessions[0];
+			const cwd = first ? this.projectCwd(first) : "(unknown)";
+			const backendId = first?.backendId;
+			const displayCwd = (first?.projectCwd ? first.projectCwdDisplay : first?.cwdDisplay) || cwd;
 			const label = backendId ? (displayCwd.split("/").filter(Boolean).pop() || displayCwd) : displayCwd;
 			groups.push({ key, backendId, cwd, displayCwd, label, sessions });
 		}
@@ -1792,20 +1897,22 @@ export class SessionPicker extends LitElement {
 	private renderGroup(group: SessionGroup, activeId: string, showBackendPrefix = false): TemplateResult {
 		const isExpanded = this.expandedGroups.has(group.key);
 		const backendName = showBackendPrefix ? this.backendDisplayName(group.backendId) : undefined;
+		const tree = this.buildSessionRows(group.sessions, activeId);
 
-		// Count running sessions in this group
-		const runningCount = group.sessions.filter(
-			(s) => this.agent.getSessionStatus(s.path, s.backendId) === "running"
-		).length;
+		// A conversation whose delegated sessions are running is as active as a
+		// running session, so it joins them at the top and is never truncated.
+		const runningRoots = tree.roots.filter((root) => tree.subtreeRunning(root));
+		const roots = [...runningRoots, ...tree.roots.filter((root) => !runningRoots.includes(root))];
 
-		// Show at least sessionsPerProject or all running sessions, whichever is more
-		const defaultLimit = Math.max(this.sessionsPerProject, runningCount);
-		const totalCount = group.sessions.length;
+		// Show at least sessionsPerProject or all running conversations, whichever is more
+		const defaultLimit = Math.max(this.sessionsPerProject, runningRoots.length);
+		const totalCount = roots.length;
 		const needsTruncation = totalCount > defaultLimit;
-		const visibleSessions = isExpanded || !needsTruncation
-			? group.sessions
-			: group.sessions.slice(0, defaultLimit);
-		const hiddenCount = totalCount - visibleSessions.length;
+		const visibleRoots = isExpanded || !needsTruncation
+			? roots
+			: roots.slice(0, defaultLimit);
+		const hiddenCount = totalCount - visibleRoots.length;
+		const rows = visibleRoots.flatMap((root) => tree.rows(root));
 
 		return html`
 			<section class="project-group" data-backend-id=${group.backendId ?? nothing}>
@@ -1817,71 +1924,82 @@ export class SessionPicker extends LitElement {
 						title="New session in ${group.cwd}"
 					>+ NEW</button>
 				</div>
-				${repeat(
-				visibleSessions,
-				(s) => this.sessionKey(s),
-				(s) => {
-					const status = this.agent.getSessionStatus(s.path, s.backendId);
-					const effectiveStatus = status ?? "idle";
-					const isPinned = this.pinnedSessions.has(this.sessionKey(s));
-					const worktreeName = s.worktreeName ?? "root";
-					const sessionTitle = [
-						s.cwd,
-						worktreeName ? `Worktree: ${worktreeName}` : "",
-						s.firstMessage,
-					].filter(Boolean).join("\n");
-					return html`
-					<button
-						class="session-item ${s.id === activeId && (!s.backendId || s.backendId === this.agent.activeBackendId) ? "active" : ""}"
-						@pointerenter=${() => this.prefetchSession(s)}
-						@focus=${() => this.prefetchSession(s)}
-						@pointerdown=${() => this.prefetchSession(s)}
-						@click=${() => this.handleSessionClick(s)}
-						title=${sessionTitle}
-					>
-						<div class="session-item-row">
-							<span class="status-badge ${effectiveStatus}">${nothing}</span>
-							<div class="session-item-content">
-								<span class="session-name">${this.getSessionDisplayName(s)}</span>
-								<span class="session-meta">
-									${worktreeName
-										? html`<span class="session-worktree" title="Worktree: ${worktreeName}">${worktreeName}</span>`
-										: nothing}
-									<span class="session-time">${this.formatTime(s.lastUserPromptTime || s.modified)}</span>
-									<span class="msg-count-badge">${s.messageCount}</span>
-									<span
-										class="pin-btn ${isPinned ? "pinned" : ""}"
-										@click=${(e: Event) => this.handleTogglePin(e, s)}
-										title="${isPinned ? "Unpin session" : "Pin to top"}"
-									>
-										<svg width="14" height="14" viewBox="0 0 24 24" fill="${isPinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-											<path d="M12 17v5"></path>
-											<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"></path>
-										</svg>
-									</span>
-									<span
-										class="delete-btn"
-										@click=${(e: Event) => this.handleDeleteSession(e, s)}
-										title="Delete session"
-									>
-										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-											<polyline points="3 6 5 6 21 6"></polyline>
-											<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-										</svg>
-									</span>
-								</span>
-							</div>
-						</div>
-					</button>
-				`;
-				},
-			)}
+				${repeat(rows, (row) => this.sessionKey(row.session), (row) => this.renderSessionItem(row, activeId))}
 				${needsTruncation
 					? isExpanded
 						? html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▴ Show less</button>`
 						: html`<button class="show-more-btn" @click=${() => this.toggleGroupExpansion(group.key)}>▾ Show ${hiddenCount} more…</button>`
 					: nothing}
 			</section>
+		`;
+	}
+
+	private renderSessionItem(row: SessionRow, activeId: string): TemplateResult {
+		const s = row.session;
+		const status = this.agent.getSessionStatus(s.path, s.backendId);
+		const effectiveStatus = status ?? "idle";
+		const isPinned = this.pinnedSessions.has(this.sessionKey(s));
+		const worktreeName = s.worktreeName ?? "root";
+		const sessionTitle = [
+			s.cwd,
+			worktreeName ? `Worktree: ${worktreeName}` : "",
+			s.firstMessage,
+		].filter(Boolean).join("\n");
+		const childLabel = `${row.childCount} delegated session${row.childCount === 1 ? "" : "s"}`;
+		return html`
+			<button
+				class="session-item ${row.depth > 0 ? "child" : ""} ${s.id === activeId && (!s.backendId || s.backendId === this.agent.activeBackendId) ? "active" : ""}"
+				style=${row.depth > 0 ? `--session-depth: ${row.depth}` : nothing}
+				@pointerenter=${() => this.prefetchSession(s)}
+				@focus=${() => this.prefetchSession(s)}
+				@pointerdown=${() => this.prefetchSession(s)}
+				@click=${() => this.handleSessionClick(s)}
+				title=${sessionTitle}
+			>
+				<div class="session-item-row">
+					<span class="status-badge ${effectiveStatus}">${nothing}</span>
+					<div class="session-item-content">
+						<span class="session-name">${this.getSessionDisplayName(s)}</span>
+						<span class="session-meta">
+							${row.childCount > 0
+								? html`<span
+									class="children-toggle ${row.childrenExpanded ? "expanded" : ""}"
+									role="button"
+									aria-expanded=${row.childrenExpanded ? "true" : "false"}
+									aria-label=${`${row.childrenExpanded ? "Hide" : "Show"} ${childLabel}`}
+									title=${`${row.childrenExpanded ? "Hide" : "Show"} ${childLabel}`}
+									@click=${(e: Event) => this.toggleChildren(e, s, row.childrenExpanded)}
+								>${row.childrenExpanded ? "▾" : "▸"} ${row.childCount}</span>`
+								: nothing}
+							${worktreeName
+								? html`<span class="session-worktree" title="Worktree: ${worktreeName}">${worktreeName}</span>`
+								: nothing}
+							<span class="session-time">${this.formatTime(s.lastUserPromptTime || s.modified)}</span>
+							<span class="msg-count-badge">${s.messageCount}</span>
+							<span
+								class="pin-btn ${isPinned ? "pinned" : ""}"
+								@click=${(e: Event) => this.handleTogglePin(e, s)}
+								title="${isPinned ? "Unpin session" : "Pin to top"}"
+							>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="${isPinned ? "currentColor" : "none"}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M12 17v5"></path>
+									<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a2 2 0 0 0-2-2h-6a2 2 0 0 0-2 2v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z"></path>
+								</svg>
+							</span>
+							<span
+								class="delete-btn"
+								@click=${(e: Event) => this.handleDeleteSession(e, s)}
+								title="Delete session"
+							>
+								<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<polyline points="3 6 5 6 21 6"></polyline>
+									<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+								</svg>
+							</span>
+						</span>
+					</div>
+				</div>
+			</button>
 		`;
 	}
 
