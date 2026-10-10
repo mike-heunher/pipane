@@ -1,5 +1,7 @@
 # Unreleased
 
+# 0.1.20 - 2026-10-10
+
 - File sessions launched in linked Git worktrees under their repository's project, labeled with the worktree, even after the worktree is removed.
 - Nest delegated subagent sessions below the conversation that launched them, using the bundled `session-lineage` Pi extension.
 
